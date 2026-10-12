@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.6.1
+
+A fix release for 2.6.0, found while filming its release video. Server only: no player changed.
+
+### Fixed
+
+- **E-paper and other embedded panels lost all their telemetry** unless they sent `X-ST-Charging`
+  (#583). `device_telemetry.battery_charging` is `NOT NULL DEFAULT 0`. The embedded routes inserted
+  an explicit NULL when the header was missing, so the insert failed, and a bare `catch {}` hid it. A
+  panel sending only the documented battery, Wi-Fi signal and firmware headers (#570) never got its
+  battery or Wi-Fi cards. Unreported charging is now stored as 0, and a failed write is logged once
+  per device instead of swallowed. The old test passed against a hand-written table whose column
+  was nullable. That table now matches `schema.sql`, and a new test runs against the real database.
+- **E-paper panels can set a power schedule from their display page** (#583). The embedded renderer
+  honours a device power schedule (#569), but the editor lived only in the Controls tab, which
+  needed a volume or brightness control. Embedded panels now get the tab with only the schedule in
+  it.
+- **The Triggers listener settings are no longer offered on Roku** (#583), which does not implement
+  triggers. Launch Player stays, because on Roku it refreshes the app.
+
+### Release tooling
+
+- `scripts/finalize-release.sh` builds the Roku sideload zip from the tagged tree and uploads it as
+  `screentinker-roku.zip` (#582). The release is not complete without it. Until Roku publishes the
+  store app, it is installed in developer mode from that zip.
+
 ## 2.6.0
 
 **@renebohne authored 3 of the 13 commits in this release (#569, #570, #571):** display power schedules

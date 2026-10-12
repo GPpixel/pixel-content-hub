@@ -14,6 +14,15 @@
   ],
   "releases": [
     {
+      "version": "2.6.1",
+      "date": "2026-10-12",
+      "notes": [
+        "E-paper and other battery displays show their battery and Wi-Fi signal again. In 2.6.0 those readings were lost unless the panel also reported whether it was charging.",
+        "E-paper displays can have a power schedule set from their own page, under Controls.",
+        "Roku displays no longer offer Triggers settings, which a Roku does not support."
+      ]
+    },
+    {
       "version": "2.6.0",
       "date": "2026-10-12",
       "notes": [
