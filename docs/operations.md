@@ -86,6 +86,36 @@ scripts/upgrade.sh              # latest stable release
 scripts/upgrade.sh v1.2.3       # or pin one
 ```
 
+Before it changes anything it checks the host can run the target: a Node at least the release's
+`engines` floor and, for a release on `better-sqlite3`, `python3`/`make`/`g++`. When something is
+missing and you are at a terminal it **offers to fix it** (`Upgrade Node to 22.x now? [Y/n]`) and
+carries on: Node from NodeSource's apt repository (a node apt does not own, such as nvm, is left
+alone with instructions), the toolchain with `apt-get`. With no terminal it stops instead;
+`ST_AUTO_INSTALL_PREREQS=1` answers yes in advance, `ST_ALLOW_OLD_NODE=1` skips the Node check.
+After `npm ci` it opens a database with the new driver, and if that fails it puts the previous
+release back and stops **without** restarting, so the running server is never replaced by one that
+cannot start.
+
+**Every run is recorded** in `backups/upgrade-history.jsonl` (beside the database backups), one
+JSON line whatever the outcome: when and by whom, the release and commit it came **from** and went
+**to**, Node before and after, what it changed on the host, the backup it took, and the result
+(`done`, `refused`, `rolled_back`, `failed`, ...). When it upgrades Node it first saves the old
+NodeSource apt files and version in `backups/node-apt-before-<time>/`, named in that line, so Node
+can be put back exactly. The dashboard updater appends to the same file.
+
+⚠️ **Run the TARGET release's copy of the script.** `upgrade.sh` is tracked, so the copy in your
+checkout is the one from the release you are LEAVING, and checks added in a newer release do not
+protect the upgrade to it. Run the new one against your checkout instead:
+
+```bash
+cd /opt/screentinker && git fetch --tags origin
+git show v1.2.3:scripts/upgrade.sh > /tmp/st-upgrade.sh
+APP_DIR=/opt/screentinker bash /tmp/st-upgrade.sh v1.2.3
+```
+
+The dashboard updater (`st-updater.sh`) is a copy too: re-run `scripts/updater/install-systemd.sh`
+from the new release to pick up its checks.
+
 If you are doing it by hand, the order matters:
 
 ```bash
@@ -288,8 +318,9 @@ you nothing to bisect and no single step to undo.
 **Moving from Node 20: change Node FIRST, on the release you already run, then upgrade the app.**
 Releases up to 2.6.x run on both Node 20 and Node 22, so that order is the two-step path above:
 upgrade Node, confirm the server on it, then run `scripts/upgrade.sh` to the release that needs 22.
-`upgrade.sh` warns before it changes anything if the target release needs a newer Node than the
-host has (`ST_REQUIRE_NODE_FLOOR=1` makes that a refusal).
+`upgrade.sh` refuses, before it changes anything, a target release that needs a newer Node than the
+host has: below the floor the server no longer starts (see the database driver below), so this is
+a refusal rather than the warning it once was. `ST_ALLOW_OLD_NODE=1` proceeds anyway.
 
 **The native database module.** `better-sqlite3` 13 is a Node-API build: one binary serves every
 Node from 22.14 on, so moving between Node versions above that floor no longer invalidates it.
