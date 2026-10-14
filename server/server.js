@@ -2681,6 +2681,9 @@ startAlertService(io);
 // Screen verification (lib/screen-verify): panel checks, occasional verification screenshots and
 // its incident alerts, on its own minute tick. Frames are judged as they arrive via deviceSocket.
 require('./lib/screen-verify').start();
+// 3.0 energy & carbon (lib/energy, docs/energy.md): samples each screen's panel state once a minute
+// into the on-time tables, for this server's own workspaces only (never a scale-out copy).
+require('./lib/energy').start();
 
 // Start universal data sources background poller
 const { startDataSourcesPoller } = require('./lib/data-sources/service');

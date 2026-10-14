@@ -2872,6 +2872,60 @@ const migrations = [
   'CREATE INDEX IF NOT EXISTS idx_request_email_challenges ON request_email_challenges(form_id, email)',
   'ALTER TABLE submissions ADD COLUMN request_id TEXT',
   'CREATE INDEX IF NOT EXISTS idx_submissions_request ON submissions(request_id)',
+  /*
+   * 3.0: energy & carbon (lib/energy, docs/energy.md). ESTIMATES from observed panel on-time.
+   *
+   * energy_hourly / energy_daily are written once a minute by the primary's sampler. Both carry the
+   * workspace the screen was in AT THE TIME, in the key: a screen moved mid-day leaves the morning
+   * with its old workspace, the way play_logs snapshots it, so no workspace ever reports another's
+   * electricity. hour = epoch seconds of the UTC hour; day = the SCREEN'S local date. Retention:
+   * hourly 35 days, daily 400 (config.energy), pruned in chunks by the sampler.
+   * energy_daily.on_watts / standby_watts are the figures in force when the row was last written,
+   * used only for a screen that has since been removed.
+   * energy_settings is per workspace (grid country / gCO2e override / default watts);
+   * energy_device_settings is a per-screen override (watts, country), also written by the group bulk.
+   */
+  `CREATE TABLE IF NOT EXISTS energy_hourly (
+     device_id TEXT NOT NULL,
+     workspace_id TEXT NOT NULL,
+     hour INTEGER NOT NULL,
+     on_sec INTEGER NOT NULL DEFAULT 0,
+     sched_off_sec INTEGER NOT NULL DEFAULT 0,
+     panel_off_sec INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (device_id, workspace_id, hour))`,
+  'CREATE INDEX IF NOT EXISTS idx_energy_hourly_ws ON energy_hourly(workspace_id, hour)',
+  'CREATE INDEX IF NOT EXISTS idx_energy_hourly_hour ON energy_hourly(hour)',
+  `CREATE TABLE IF NOT EXISTS energy_daily (
+     device_id TEXT NOT NULL,
+     workspace_id TEXT NOT NULL,
+     day TEXT NOT NULL,
+     on_sec INTEGER NOT NULL DEFAULT 0,
+     sched_off_sec INTEGER NOT NULL DEFAULT 0,
+     panel_off_sec INTEGER NOT NULL DEFAULT 0,
+     offline_sec INTEGER NOT NULL DEFAULT 0,
+     inferred_sec INTEGER NOT NULL DEFAULT 0,
+     on_watts REAL,
+     standby_watts REAL,
+     PRIMARY KEY (device_id, workspace_id, day))`,
+  'CREATE INDEX IF NOT EXISTS idx_energy_daily_ws ON energy_daily(workspace_id, day)',
+  'CREATE INDEX IF NOT EXISTS idx_energy_daily_day ON energy_daily(day)',
+  `CREATE TABLE IF NOT EXISTS energy_settings (
+     workspace_id TEXT PRIMARY KEY,
+     country TEXT,
+     grid_g_per_kwh REAL,
+     default_on_watts REAL,
+     default_standby_watts REAL,
+     updated_by TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  `CREATE TABLE IF NOT EXISTS energy_device_settings (
+     device_id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL,
+     on_watts REAL,
+     standby_watts REAL,
+     country TEXT,
+     updated_by TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'CREATE INDEX IF NOT EXISTS idx_energy_device_settings_ws ON energy_device_settings(workspace_id)',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

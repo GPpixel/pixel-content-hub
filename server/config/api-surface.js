@@ -206,6 +206,12 @@ const JWT_ONLY_ROUTERS = [
    * is a signed-in person's call. The public side is /api/public/requests, mounted in server.js.
    */
   { path: '/api/content-requests', mod: './routes/content-requests', tenancy: true },
+  /*
+   * 3.0 energy & carbon (lib/energy, docs/energy.md): estimated kWh / CO2e, schedule savings, the
+   * ESG exports and the org rollup. JWT only: it is a dashboard report, and the org rollup is a
+   * signed-in org admin's view across workspaces, which a workspace-bound token must not reach.
+   */
+  { path: '/api/energy',      mod: './routes/energy',       tenancy: true },
 ];
 
 // #73: AGENCY_ROUTERS - capability-restricted ('agency' scope) surface. Mounted with

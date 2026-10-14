@@ -719,12 +719,23 @@ function start() {
 
 function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
+/*
+ * What this module last heard about a screen's panel power, for lib/energy (docs/energy.md): the
+ * panel report and the player's display_on/off, both already reset by noteReconnect. Read-only;
+ * never creates a per-screen entry for a screen this module has not seen.
+ */
+function powerEvidence(deviceId) {
+  const m = mem.get(deviceId);
+  if (!m) return { panel: null, display: null };
+  return { panel: m.panel ? { power: m.panel.power, at: m.panel.at } : null, display: m.display ? { power: m.display.power, at: m.display.at } : null };
+}
+
 function _reset() { mem.clear(); settingsCache.clear(); refCache.clear(); lastPrune = 0; }
 function _setImageOps(x) { imageOpsOverride = x || null; }
 function _mem(deviceId) { return memFor(deviceId); }
 
 module.exports = {
   noteFrame, notePlayStart, noteDisplayEvent, notePanelReport, noteReconnect, noteOffline,
-  settingsFor, invalidateSettings, presentState, requestNow, tick, analyse, record, setRequester, setEmitter, start, stop,
+  settingsFor, invalidateSettings, presentState, requestNow, tick, powerEvidence, analyse, record, setRequester, setEmitter, start, stop,
   PROBLEMS, _reset, _setImageOps, _mem,
 };
