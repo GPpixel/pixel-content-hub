@@ -7145,6 +7145,44 @@ function drawWallComposite(ctx, container, W, H) {
   }
   return out;
 }
+function drawScreenShare(ctx, W, H) {
+  const overlay = document.getElementById("st-share-overlay");
+  if (!overlay || !overlay.isConnected || getComputedStyle(overlay).display === "none") return false;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, W, H);
+  const video = document.getElementById("st-share-video");
+  let drew = false;
+  if (video && video.readyState >= 2 && video.videoWidth > 0) {
+    try {
+      drawMediaFit(ctx, video, video.videoWidth, video.videoHeight, 0, 0, W, H, "contain");
+      drew = true;
+    } catch (e) {
+      drew = false;
+    }
+  }
+  const label = (el) => el && getComputedStyle(el).display !== "none" ? (el.textContent || "").trim() : "";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  if (!drew) {
+    const waiting = label(document.getElementById("st-share-wait"));
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "500 22px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(waiting || "Screen share", W / 2, H / 2);
+    ctx.textAlign = "left";
+  }
+  const badge = label(document.getElementById("st-share-badge"));
+  if (badge) {
+    ctx.font = "500 14px sans-serif";
+    const pad = 8, x = 12, h = 26;
+    const w = Math.min(W * 0.6, ctx.measureText(badge).width + pad * 2);
+    ctx.fillStyle = "rgba(15,23,42,0.72)";
+    ctx.fillRect(x, H - 12 - h, w, h);
+    ctx.fillStyle = "#fff";
+    ctx.fillText(badge, x + pad, H - 12 - 8, w - pad * 2);
+  }
+  return true;
+}
 function renderCaptureCanvas() {
   const container = document.getElementById("playerContainer");
   const cr = container ? container.getBoundingClientRect() : null;
@@ -7158,8 +7196,11 @@ function renderCaptureCanvas() {
   let videoUncapturable = false;
   try {
     const multiZone = !!(layout && Array.isArray(layout.zones) && layout.zones.length > 1 && !wallConfig);
-    const wallShot = wallConfig ? drawWallComposite(ctx, container, W, H) : null;
-    if (wallShot) {
+    const shareShot = drawScreenShare(ctx, W, H);
+    const wallShot = !shareShot && wallConfig ? drawWallComposite(ctx, container, W, H) : null;
+    if (shareShot) {
+      captured = true;
+    } else if (wallShot) {
       captured = wallShot.drawn;
       videoUncapturable = wallShot.uncapturable && !wallShot.drawn;
     } else if (multiZone && container) {

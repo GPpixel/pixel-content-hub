@@ -223,3 +223,68 @@ test('an editor\'s share (API start + the dashboard client) plays; the owner\'s 
   await sharer.close();
   await player.close();
 });
+
+/*
+ * The remote viewer (screenshots and the 1 fps live view) must show the SHARE while one is up: the
+ * share is a fullscreen overlay outside #playerContainer, and the capture used to look only inside
+ * it, so the operator saw the paused playlist (or the status card) instead. Run on a screen opened
+ * through its WEB PLAYER URL (/player?k=…, the display link for players that lose their storage),
+ * in its own browser context, so no stored identity helps it.
+ */
+test('the remote viewer shows the share, on a screen opened through its web player URL', { skip: SKIP, timeout: 150000 }, async () => {
+  const H = { Authorization: `Bearer ${owner.token}`, 'X-Workspace-Id': owner.ws, 'Content-Type': 'application/json' };
+  const made = await (await fetch(`${BASE}/api/devices/web-player`, { method: 'POST', headers: H, body: JSON.stringify({ name: 'Display link TV' }) })).json();
+  const devId = made.device && made.device.id;
+  assert.ok(devId && /[?&]k=/.test(made.player_url), 'a display link: ' + JSON.stringify(made));
+
+  const ctx = await browser.createBrowserContext();
+  const player = await ctx.newPage();
+  await player.setViewport({ width: 1280, height: 720 });
+  await player.goto(made.player_url, { waitUntil: 'domcontentloaded' });
+  await waitFor(async () => {
+    const r = await (await fetch(`${BASE}/api/devices/${devId}`, { headers: H })).json();
+    return r && r.status === 'online' && Array.isArray(r.capabilities) && r.capabilities.includes('remote.screen_share') ? r : null;
+  }, 40000, 'the display-link screen online and offering screen share');
+
+  const start = await fetch(`${BASE}/api/screen-share/devices/${devId}`, { method: 'POST', headers: H, body: '{}' });
+  const body = await start.json();
+  assert.equal(start.status, 201, JSON.stringify(body));
+  const sharer = await browser.newPage();
+  await sharer.goto(BASE + '/share', { waitUntil: 'domcontentloaded' });
+  await sharer.evaluate(async (b) => {
+    const m = await import('/js/lib/screen-share-client.js');
+    const stream = await m.pickScreen({ audio: false });
+    window.__sender = new m.ScreenShareSender({ ticket: b.ticket, wsPath: b.ws_path, iceServers: b.ice_servers, stream, onState: () => {}, onEnded: () => {} });
+    window.__sender.start();
+  }, body);
+  await assertPlaying(player, 'share on the display-link screen');
+
+  // What the remote viewer gets: the dashboard socket asks the screen for a frame
+  // ('dashboard:request-screenshot') and receives it as 'dashboard:screenshot-ready'.
+  const { io } = require('socket.io-client');
+  const dash = io(BASE + '/dashboard', { auth: { token: owner.token }, transports: ['websocket'] });
+  await new Promise((res, rej) => { dash.once('connect', res); dash.once('connect_error', rej); });
+  const frame = new Promise((res) => dash.on('dashboard:screenshot-ready', (m) => { if (m && m.device_id === devId) res(m); }));
+  dash.emit('dashboard:request-screenshot', { device_id: devId });
+  const m = await Promise.race([frame, sleep(20000).then(() => null)]);
+  dash.close();
+  assert.ok(m && /^data:image\/jpeg;base64,/.test(m.image_data), 'a screenshot from the screen');
+  const shot = Buffer.from(m.image_data.split(',')[1], 'base64');
+
+  // The status card is a flat #111827 field; a share is the shared picture letterboxed on black.
+  const { Jimp } = require('jimp');
+  const img = await Jimp.read(shot);
+  let card = 0, colourful = 0, n = 0;
+  img.scan(0, 0, img.bitmap.width, img.bitmap.height, (x, y, i) => {
+    const r = img.bitmap.data[i], g = img.bitmap.data[i + 1], b = img.bitmap.data[i + 2];
+    n++;
+    if (Math.abs(r - 17) < 6 && Math.abs(g - 24) < 6 && Math.abs(b - 39) < 6) card++;
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 40) colourful++;
+  });
+  assert.ok(card / n < 0.2, `not the status card (${Math.round((card / n) * 100)}% card colour)`);
+  assert.ok(colourful / n > 0.05, `the shared picture is in the screenshot (${Math.round((colourful / n) * 100)}% colourful pixels)`);
+
+  await fetch(`${BASE}/api/screen-share/devices/${devId}`, { method: 'DELETE', headers: H });
+  await sharer.close();
+  await ctx.close();
+});
