@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { db } = require('../db/database');
-const { generateToken, generateMfaPendingToken, verifyMfaPendingToken, requireAuth, requireAdmin, requireSuperAdmin, isPlatformRole, isPlatformStaff, PLATFORM_ROLES } = require('../middleware/auth');
+const { generateToken, bumpTokenVersion, generateMfaPendingToken, verifyMfaPendingToken, requireAuth, requireAdmin, requireSuperAdmin, isPlatformRole, isPlatformStaff, PLATFORM_ROLES } = require('../middleware/auth');
 const { resolveTenancy } = require('../lib/tenancy');
 const { logActivity, getClientIp } = require('../services/activity');
 const totp = require('../lib/totp');
@@ -168,8 +168,7 @@ router.post('/register', (req, res) => {
   const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
   const role = userCount === 0 ? 'platform_admin' : 'user';
   const isFirstUser = userCount === 0;
-  const plan = (isFirstUser && config.selfHosted) ? 'enterprise' : 'pro'; // Start on Pro trial
-  const trialStarted = isFirstUser && config.selfHosted ? null : Math.floor(Date.now() / 1000);
+  const { plan, trialStarted } = signupPlan(isFirstUser); // hosted: Pro trial; self-hosted: see signupPlan
 
   // Email verification: require it for a normal local signup only when we can actually send
   // the mail. The bootstrap (first) user is never gated — a fresh install must not lock out
@@ -183,6 +182,7 @@ router.post('/register', (req, res) => {
     INSERT INTO users (id, email, name, password_hash, auth_provider, role, plan_id, trial_started, trial_plan, email_verified)
     VALUES (?, ?, ?, ?, 'local', ?, ?, ?, ?, ?)
   `).run(id, email.toLowerCase(), name || email.split('@')[0], passwordHash, role, plan, trialStarted, trialStarted ? 'pro' : null, emailVerified);
+  require('../lib/conversion-events').record(db, { userId: id, event: 'signup', meta: { method: 'password' } });
 
   const user = db.prepare('SELECT id, email, name, role, auth_provider, avatar_url, plan_id, stripe_customer_id, stripe_subscription_id, subscription_status, subscription_ends, email_verified FROM users WHERE id = ?').get(id);
   // #12: org-on-create. Per-request createOrg overrides the deployment default
@@ -217,6 +217,57 @@ router.post('/register', (req, res) => {
   const token = generateToken(user, workspaceId);
   res.status(201).json({ token, user, current_workspace_id: workspaceId });
 });
+
+/*
+ * 3.0: the account facts the app shell decides on, folded into GET /me.
+ *
+ * - self_hosted: conversion UI never shows when true (nor when hide_billing).
+ * - subscription_status: the past-due banner (app.js) read user.subscription_status, which /me never
+ *   returned, so the banner vanished on the first /me refresh. Now it is here.
+ * - trial / plan: the same numbers /api/subscription/me reports, from the same getUserPlan.
+ * - ui_mode / onboarded_at: per-account, server-side (a new browser keeps both).
+ * Any failure degrades to the 2.x shape rather than failing /me.
+ */
+function accountSummary(userId) {
+  const out = { self_hosted: config.selfHosted, ui_mode: 'advanced', onboarded_at: null };
+  try {
+    const row = db.prepare('SELECT ui_mode, onboarded_at, subscription_status FROM users WHERE id = ?').get(userId);
+    if (!row) return out; // support / recovery identities: full menu, no guide, no billing facts
+    out.ui_mode = row.ui_mode === 'simple' ? 'simple' : 'advanced';
+    out.onboarded_at = row.onboarded_at || null;
+    out.subscription_status = row.subscription_status || null;
+    const plan = require('../middleware/subscription').getUserPlan(userId);
+    if (plan) {
+      out.plan_name = plan.plan_display_name || plan.plan_name || null;
+      out.plan_limits = { max_devices: plan.max_devices, max_storage_mb: plan.max_storage_mb };
+      // Lets the UI mark a paid feature before someone fills in a form the server will refuse.
+      out.plan_features = { remote_url: !!plan.remote_url, remote_control: !!plan.remote_control };
+      out.trial = {
+        active: !!plan.trial_active,
+        days_left: plan.trial_days_left || 0,
+        end: plan.trial_end ? new Date(plan.trial_end * 1000).toISOString() : null,
+        plan: plan.trial_plan || null,
+        expired_at: plan.trial_expired_at ? new Date(plan.trial_expired_at * 1000).toISOString() : null,
+      };
+    }
+  } catch (e) {
+    console.warn('[auth/me] account summary unavailable:', e.message);
+  }
+  return out;
+}
+
+/*
+ * The plan a new account starts on. Hosted: a 14-day Pro trial (services/trialExpiry.js ends it).
+ * Self-hosted: the first account is enterprise, and since 3.0 so is every later one unless the
+ * operator asks for the 2.x trial with SELF_HOSTED_SIGNUP_PLAN=trial — a trial clock that drops a
+ * colleague on the operator's own server to two screens was a nag with nobody to pay.
+ */
+function signupPlan(isFirstUser) {
+  if (config.selfHosted && (isFirstUser || config.selfHostedSignupPlan === 'enterprise')) {
+    return { plan: 'enterprise', trialStarted: null };
+  }
+  return { plan: 'pro', trialStarted: Math.floor(Date.now() / 1000) };
+}
 
 // Login
 /** A user whose every workspace membership is on a COPIED workspace exists here only as a copy. */
@@ -585,6 +636,8 @@ router.post('/reset-password', (req, res) => {
   // Someone who locked themselves out guessing must not stay locked out after proving
   // control of the mailbox and choosing a new password.
   loginLockout.reset(userId);
+  // 3.0: whoever held a session before the reset (the reason people reset) is signed out.
+  bumpTokenVersion(userId);
   const u = db.prepare('SELECT email, auth_provider FROM users WHERE id = ?').get(userId);
   /*
    * Return a stranded federated row to a local account. Without this the reset would "succeed" and
@@ -676,7 +729,9 @@ router.post('/totp/enable', requireAuth, (req, res) => {
   if (!step) return res.status(400).json({ error: 'Invalid code' });
   db.prepare("UPDATE users SET totp_enabled = 1, totp_last_step = ?, updated_at = strftime('%s','now') WHERE id = ?")
     .run(step, req.user.id);
-  res.json({ enabled: true, recovery_codes: resetRecoveryCodes(req.user.id) }); // shown ONCE
+  // 3.0: sessions that never passed the second factor end now; this one carries on with a new token.
+  bumpTokenVersion(req.user.id);
+  res.json({ enabled: true, recovery_codes: resetRecoveryCodes(req.user.id), token: generateToken(req.user, req.jwtWorkspaceId || null) }); // shown ONCE
 });
 
 // Disable: re-auth with a current code (or a recovery code) so a hijacked session
@@ -691,7 +746,8 @@ router.post('/totp/disable', requireAuth, (req, res) => {
     db.prepare("UPDATE users SET totp_enabled = 0, totp_secret_enc = NULL, totp_last_step = 0, updated_at = strftime('%s','now') WHERE id = ?").run(req.user.id);
     db.prepare('DELETE FROM totp_recovery_codes WHERE user_id = ?').run(req.user.id);
   })();
-  res.json({ enabled: false });
+  bumpTokenVersion(req.user.id); // 3.0: see /totp/enable
+  res.json({ enabled: false, token: generateToken(req.user, req.jwtWorkspaceId || null) });
 });
 
 // Regenerate recovery codes: re-auth (current code) + ATOMIC replace (tightening #3).
@@ -839,6 +895,9 @@ router.get('/me', requireAuth, resolveTenancy, (req, res) => {
     // reflects live state after reload. Fail-open to verified if somehow absent.
     email_verified: db.prepare('SELECT email_verified FROM users WHERE id = ?').get(req.user.id)?.email_verified ?? 1,
     hide_billing: config.hideBilling, // #116: client hides the Subscription nav + guards #/billing
+    // 3.0: everything the app shell needs to pick a menu, a first-run route and a trial banner,
+    // without a second request. See accountSummary().
+    ...accountSummary(req.user.id),
     // #329: same idea as hide_billing above — a capability the client cannot infer without asking.
     // `enroll` decides whether the Servers nav appears (the honest "is this node part of a mesh in
     // any way?"); `hub` gates the aggregate reads (/mesh/orgs, /alerts, /uptime, /devices), which
@@ -888,7 +947,15 @@ router.post('/switch-workspace', requireAuth, (req, res) => {
 
 // Update current user
 router.put('/me', requireAuth, (req, res) => {
-  const { name, password, current_password, email_alerts } = req.body;
+  const { name, password, current_password, email_alerts, ui_mode, onboarded } = req.body;
+  // 3.0 preferences. Validated narrowly: anything else is ignored, not stored.
+  if (ui_mode === 'simple' || ui_mode === 'advanced') {
+    db.prepare("UPDATE users SET ui_mode = ?, updated_at = strftime('%s','now') WHERE id = ?").run(ui_mode, req.user.id);
+  }
+  if (onboarded === true) {
+    db.prepare("UPDATE users SET onboarded_at = COALESCE(onboarded_at, strftime('%s','now')) WHERE id = ?").run(req.user.id);
+  }
+  let freshToken = null;
   if (name) {
     db.prepare('UPDATE users SET name = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?')
       .run(name, req.user.id);
@@ -914,9 +981,23 @@ router.put('/me', requireAuth, (req, res) => {
     // the first-login change-password gate.
     db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = strftime(\'%s\',\'now\') WHERE id = ?')
       .run(hash, req.user.id);
+    // 3.0: a new password ends every OTHER session; this one gets a fresh token (the client stores
+    // `token` when present) so changing your password does not sign you out of the tab you did it in.
+    bumpTokenVersion(req.user.id);
+    freshToken = generateToken(req.user, req.jwtWorkspaceId || null);
   }
+  // ui_mode / onboarded_at are read back through GET /me (accountSummary), not here, so this keeps
+  // the 2.x column list and works on any users table that has them.
   const user = db.prepare('SELECT id, email, name, role, auth_provider, avatar_url, plan_id, email_alerts, must_change_password FROM users WHERE id = ?').get(req.user.id);
-  res.json(user);
+  res.json(freshToken ? { ...user, token: freshToken } : user);
+});
+
+// 3.0: "Sign out everywhere else". Ends every session but this one, which gets a fresh token.
+router.post('/sessions/revoke-others', requireAuth, (req, res) => {
+  if (String(req.user.id).includes(':')) return res.status(400).json({ error: 'Not available for this session' });
+  bumpTokenVersion(req.user.id);
+  logActivity(req.user.id, 'auth:sessions_revoked', null, null, getClientIp(req));
+  res.json({ ok: true, token: generateToken(req.user, req.jwtWorkspaceId || null) });
 });
 
 // List users - platform admins see all, admins see team members only
@@ -986,6 +1067,8 @@ router.put('/users/:id/role', requireAuth, requireSuperAdmin, (req, res) => {
   // (would lock themselves out of platform admin actions).
   if (req.params.id === req.user.id && !isPlatformRole(role)) return res.status(400).json({ error: 'Cannot demote yourself' });
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+  // 3.0: a demoted platform admin's open dashboard sockets sit in platform-wide rooms; drop them.
+  try { require('../ws/dashboardSocket').disconnectUserSockets(req.params.id); } catch (_) { /* socket layer not up */ }
   res.json({ success: true });
 });
 
@@ -1029,6 +1112,8 @@ router.put('/users/:id/password', requireAuth, requireAdmin, (req, res) => {
   const hash = bcrypt.hashSync(password, 10);
   db.prepare("UPDATE users SET password_hash = ?, updated_at = strftime('%s','now') WHERE id = ?")
     .run(hash, req.params.id);
+  bumpTokenVersion(req.params.id); // 3.0: the target's existing sessions end with the old password
+  try { require('../ws/dashboardSocket').disconnectUserSockets(req.params.id); } catch (_) { /* socket layer not up */ }
 
   // Explicit audit entry — the generic activity logger captures the route
   // and target id, but a labeled detail string makes the audit log readable.
@@ -1860,13 +1945,13 @@ function upsertFederatedUser({ claims, email, provider, req }) {
     const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
     const isFirst = userCount === 0;
     const role = isFirst ? 'platform_admin' : 'user';
-    const plan = (isFirst && config.selfHosted) ? 'enterprise' : 'pro';
-    const trialStarted = isFirst && config.selfHosted ? null : Math.floor(Date.now() / 1000);
+    const { plan, trialStarted } = signupPlan(isFirst);
     db.prepare(`
       INSERT INTO users (id, email, name, auth_provider, provider_id, avatar_url, role, plan_id, trial_started, trial_plan, email_verified)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     `).run(id, email, claims.name || '', provider.slug, String(claims.sub), claims.picture || '',
       role, plan, trialStarted, trialStarted ? 'pro' : null);
+    require('../lib/conversion-events').record(db, { userId: id, event: 'signup', meta: { method: 'sso' } });
     return { user: db.prepare('SELECT * FROM users WHERE id = ?').get(id), isNew: true };
   }
 

@@ -21,6 +21,44 @@ function parseBillingRateTable(raw) {
 }
 
 const { parseSize } = require('./lib/parse-size');
+
+/*
+ * ⚠️ THE JWT SECRET SIGNS EVERY SESSION AND KEYS THE ENCRYPTION OF SAVED SECRETS.
+ *  - Generated file: written 0600, and an existing one (from 2.x, written with the default umask,
+ *    seen world-readable) is chmod'ed 0600 at boot. Best-effort: a filesystem that refuses chmod
+ *    (some bind mounts / SMB) must not stop the server.
+ *  - From env: the compose examples ship `JWT_SECRET: "set-a-long-random-string"` commented out;
+ *    uncommented verbatim, anyone who has read the example can mint sessions. That is REFUSED in
+ *    production. Anything else short is only warned about — an in-place upgrade must not stop
+ *    booting over a secret that has worked until now, and changing it signs everyone out.
+ */
+const JWT_PLACEHOLDERS = new Set(['set-a-long-random-string', 'changeme', 'change-me', 'secret', 'your-secret-here']);
+function resolveJwtSecret() {
+  const fs = require('fs');
+  const env = process.env.JWT_SECRET;
+  if (env) {
+    if (JWT_PLACEHOLDERS.has(env.trim().toLowerCase())) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('[config] JWT_SECRET is the documentation placeholder. Unset it (one is generated under certs/) or set a long random value.');
+      }
+      console.warn('[config] ⚠️ JWT_SECRET is the documentation placeholder — sessions can be forged by anyone. Unset it or set a long random value. (Refused when NODE_ENV=production.)');
+    } else if (env.length < 32) {
+      console.warn(`[config] ⚠️ JWT_SECRET is only ${env.length} characters; use at least 32 random characters. (Changing it signs everyone out and makes saved secrets unreadable.)`);
+    }
+    return env;
+  }
+  const secretFile = path.join(certsDir, '.jwt_secret');
+  if (fs.existsSync(secretFile)) {
+    try { if ((fs.statSync(secretFile).mode & 0o077) !== 0) fs.chmodSync(secretFile, 0o600); } catch { /* EPERM etc. */ }
+    return fs.readFileSync(secretFile, 'utf8').trim();
+  }
+  const secret = require('crypto').randomBytes(64).toString('hex');
+  try {
+    fs.mkdirSync(path.dirname(secretFile), { recursive: true });
+    fs.writeFileSync(secretFile, secret, { mode: 0o600 });
+  } catch {}
+  return secret;
+}
 const backstop = require('./lib/backstop-limit');
 
 module.exports = {
@@ -167,14 +205,7 @@ module.exports = {
   sslCert: process.env.SSL_CERT || path.join(certsDir, 'cert.pem'),
   sslKey: process.env.SSL_KEY || path.join(certsDir, 'key.pem'),
   // Auth
-  jwtSecret: process.env.JWT_SECRET || (() => {
-    const secretFile = path.join(certsDir, '.jwt_secret');
-    const fs = require('fs');
-    if (fs.existsSync(secretFile)) return fs.readFileSync(secretFile, 'utf8').trim();
-    const secret = require('crypto').randomBytes(64).toString('hex');
-    try { fs.mkdirSync(path.dirname(secretFile), { recursive: true }); fs.writeFileSync(secretFile, secret); } catch {}
-    return secret;
-  })(),
+  jwtSecret: resolveJwtSecret(),
   jwtExpiry: '7d',
   /*
    * Google and Microsoft sign-in are configured through lib/oidc-providers.js, which reads
@@ -215,6 +246,10 @@ module.exports = {
   smtpFrom: process.env.SMTP_FROM || '',
   // Self-hosted mode: if true, first user gets enterprise plan and no billing
   selfHosted: process.env.SELF_HOSTED === 'true',
+  // 3.0: what LATER signups get on a self-hosted instance (the first account is always enterprise).
+  // 'enterprise' (default): no trial clock, no limits - the operator owns the box. 'trial': the 2.x
+  // behaviour (14-day Pro trial, then Free), for an operator who uses plans to ration accounts.
+  selfHostedSignupPlan: String(process.env.SELF_HOSTED_SIGNUP_PLAN || 'enterprise').toLowerCase() === 'trial' ? 'trial' : 'enterprise',
   // #116: opt-in UI gate. When true, hides the Subscription nav item + billing view
   // and bounces #/billing to the dashboard. Default off, so existing deployments are
   // unchanged. UI-only — /api/subscription/* stays in place (internal usage reads).

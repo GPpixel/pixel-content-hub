@@ -86,6 +86,13 @@ export async function render(container) {
         <h4 style="font-size:14px;margin-bottom:8px">${t('settings.2fa_title')}</h4>
         <p style="color:var(--text-muted);font-size:12px">…</p>
       </div>
+
+      <!-- 3.0: every session carries the account's token_version; bumping it ends the others. -->
+      <div style="border-top:1px solid var(--border);margin-top:20px;padding-top:16px">
+        <h4 style="font-size:14px;margin-bottom:8px">${t('settings.sessions_title')}</h4>
+        <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px">${t('settings.sessions_desc')}</p>
+        <button class="btn btn-secondary btn-sm" id="revokeOtherSessionsBtn">${t('settings.sessions_revoke')}</button>
+      </div>
     </div>
 
     <!-- Per-organization SSO. Hidden unless the signed-in user administers an organization: this
@@ -1048,6 +1055,12 @@ export async function render(container) {
   loadTokens();
   load2FA();
   loadSsoLink();
+  document.getElementById('revokeOtherSessionsBtn')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try { await api.revokeOtherSessions(); showToast(t('settings.sessions_revoked'), 'success'); }
+    catch (err) { showToast(err.message, 'error'); }
+    finally { e.target.disabled = false; }
+  });
 
   /*
    * Report the outcome of a link round trip.

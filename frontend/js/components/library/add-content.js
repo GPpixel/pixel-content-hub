@@ -16,6 +16,7 @@
 // Hold is a playlist step, not library media: it is added from the playlist editor.
 
 import { api } from '../../api.js';
+import { plansVisible } from '../plan-nudges.js';
 import { esc } from '../../utils.js';
 import { t } from '../../i18n.js';
 import { showToast } from '../toast.js';
@@ -154,9 +155,22 @@ export function openAddContent(opts) {
     if (again) again.focus(); else if (!a || !dlg.root.contains(a) || !document.contains(a)) dlg.focusFirst();
   }).catch(() => { state.canva = { unavailable: true }; });
 
+  /*
+   * 3.0 soft lock: name the plan on a source this account's plan does not include, BEFORE the form,
+   * instead of only refusing on submit. The tile still opens — a wall in front of the explanation
+   * is the pattern this replaces — and submitting still meets the server's check and, on hosted,
+   * the upgrade prompt. Hosted only (plansVisible); self-hosted shows no pill.
+   */
+  function lockedPlanFor(feature) {
+    let u = null;
+    try { u = JSON.parse(localStorage.getItem('user') || 'null'); } catch { /* none */ }
+    if (!plansVisible(u) || !u.plan_features || u.plan_features[feature] !== false) return null;
+    return 'Pro';
+  }
+
   function sources() {
     const list = [
-      { key: 'url', icon: ICONS.url, title: t('library.add.src_url'), desc: t('library.add.src_url_desc') },
+      { key: 'url', icon: ICONS.url, title: t('library.add.src_url'), desc: t('library.add.src_url_desc'), locked: lockedPlanFor('remote_url') },
       { key: 'youtube', icon: ICONS.youtube, title: t('library.add.src_youtube'), desc: t('library.add.src_youtube_desc') },
       { key: 'doc', icon: ICONS.doc, title: t('library.add.src_doc'), desc: t('library.add.src_doc_desc') },
       { key: 'stream', icon: ICONS.stream, title: t('library.add.src_stream'), desc: t('library.add.src_stream_desc') },
@@ -219,7 +233,7 @@ export function openAddContent(opts) {
         <ul class="lib-tiles">${sources().map((s) => `
           <li><button type="button" class="lib-tile" data-source="${s.key}">
             <span class="lib-tile-icon">${s.icon}</span>
-            <span class="lib-tile-text"><span class="lib-tile-title">${esc(s.title)}</span><span class="lib-tile-desc">${esc(s.desc)}</span></span>
+            <span class="lib-tile-text"><span class="lib-tile-title">${esc(s.title)}${s.locked ? ` <span class="plan-pill" title="${esc(t('upgrade.locked_tip', { plan: s.locked }))}">${esc(t('upgrade.locked_pill', { plan: s.locked }))}</span>` : ''}</span><span class="lib-tile-desc">${esc(s.desc)}</span></span>
             <span class="lib-tile-chev">${ICONS.chevron}</span>
           </button></li>`).join('')}
         </ul>

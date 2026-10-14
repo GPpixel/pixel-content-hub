@@ -43,8 +43,20 @@ export function requestError(status, body) {
       if (needed.every((k) => vars[k])) msg = t(key, vars);
     }
   }
-  return Object.assign(new Error(msg), { status, code, body: b });
+  const err = Object.assign(new Error(msg), { status, code, body: b });
+  /*
+   * 3.0: a plan limit is a moment to explain, not just an error. The upgrade prompt
+   * (components/plan-nudges.js) listens for this and calls preventDefault() when it takes over —
+   * hosted only; on a self-hosted instance nothing listens and the caller's toast stands. Callers
+   * check err.planPromptShown before toasting, so the person never gets both.
+   */
+  if (status === 403 && PLAN_LIMIT_CODES.has(code) && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function'
+      && typeof CustomEvent === 'function') {
+    err.planPromptShown = !window.dispatchEvent(new CustomEvent('st:plan-limit', { cancelable: true, detail: { code, body: b } }));
+  }
+  return err;
 }
+const PLAN_LIMIT_CODES = new Set(['DEVICE_LIMIT', 'STORAGE_LIMIT', 'FEATURE_LOCKED']);
 
 export function getAuthHeaders() {
   const token = localStorage.getItem('token');
@@ -317,6 +329,15 @@ export function meshCapability(which) {
   return u.mesh[which];
 }
 
+// 3.0: a password or 2FA change revokes every session server-side (token_version) and returns a
+// fresh token for this one. Store it, or the tab that made the change would be signed out next.
+function keepSession(r) {
+  if (r && typeof r.token === 'string' && r.token) {
+    try { localStorage.setItem('token', r.token); } catch { /* storage blocked: next request re-auths */ }
+  }
+  return r;
+}
+
 export const api = {
   /*
    * ⚠️ GENERIC VERBS. Everything else here is a named helper, which is the right shape for a
@@ -585,9 +606,12 @@ export const api = {
           try { return resolve(JSON.parse(xhr.responseText)); }
           catch (e) { return reject(new Error('Upload succeeded but the response could not be read')); }
         }
-        let msg = '';
-        try { msg = (JSON.parse(xhr.responseText) || {}).error || ''; } catch (e) { msg = ''; }
-        reject(new Error(msg || `Upload failed (${xhr.status})`));
+        let body = {};
+        try { body = JSON.parse(xhr.responseText) || {}; } catch (e) { body = {}; }
+        const msg = body.error || `Upload failed (${xhr.status})`;
+        // requestError keeps the server's words AND its code, so a storage-limit refusal reaches
+        // the upgrade prompt like any other plan limit (3.0).
+        reject(requestError(xhr.status, { ...body, error: msg }));
       };
       xhr.onerror = () => reject(new Error('Upload failed'));
       xhr.send(formData);
@@ -602,7 +626,8 @@ export const api = {
         // Say what already landed. Silently discarding that is how someone re-uploads 140 photos
         // they already have, or assumes none of them arrived.
         if (out.length) {
-          throw new Error(`${err.message} (${out.length} of ${files.length} file${files.length === 1 ? '' : 's'} were uploaded before this failed)`);
+          throw Object.assign(new Error(`${err.message} (${out.length} of ${files.length} file${files.length === 1 ? '' : 's'} were uploaded before this failed)`),
+            { status: err.status, code: err.code, planPromptShown: err.planPromptShown });
         }
         throw err;
       }
@@ -766,8 +791,10 @@ export const api = {
   // a bearer token and a top-level navigation cannot carry one.
   ssoLinkStart: (slug) => request(`/auth/oidc/${encodeURIComponent(slug)}/link/start`),
   totpSetup: () => request('/auth/totp/setup', { method: 'POST' }),
-  totpEnable: (code) => request('/auth/totp/enable', { method: 'POST', body: JSON.stringify({ code }) }),
-  totpDisable: (code) => request('/auth/totp/disable', { method: 'POST', body: JSON.stringify({ code }) }),
+  // 3.0: these end every other session server-side and hand THIS one a fresh token (keepSession).
+  totpEnable: (code) => request('/auth/totp/enable', { method: 'POST', body: JSON.stringify({ code }) }).then(keepSession),
+  totpDisable: (code) => request('/auth/totp/disable', { method: 'POST', body: JSON.stringify({ code }) }).then(keepSession),
+  revokeOtherSessions: () => request('/auth/sessions/revoke-others', { method: 'POST' }).then(keepSession),
   totpRegenRecovery: (code) => request('/auth/totp/recovery-codes/regenerate', { method: 'POST', body: JSON.stringify({ code }) }),
 
   // Email verification (signup). Resend is generic (never reveals whether the address exists).
@@ -775,7 +802,11 @@ export const api = {
 
   // Current user
   getMe: () => request('/auth/me'),
-  updateMe: (data) => request('/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
+  adminConversionFunnel: (days = 30) => request(`/subscription/funnel?days=${encodeURIComponent(days)}`),
+  // 3.0 trial-to-paid funnel (server: lib/conversion-events.js). Fire-and-forget by design: a
+  // dropped event must never surface as an error, and the server ignores it when self-hosted.
+  trackEvent: (event, meta = {}) => request('/subscription/events', { method: 'POST', body: JSON.stringify({ event, meta }) }).catch(() => null),
+  updateMe: (data) => request('/auth/me', { method: 'PUT', body: JSON.stringify(data) }).then(keepSession),
   switchWorkspace: (workspaceId) => request('/auth/switch-workspace', { method: 'POST', body: JSON.stringify({ workspace_id: workspaceId }) }),
   /*
    * ⚠️ THE ORG IS NOT SENT. The server resolves it from the caller's own membership — a body-supplied

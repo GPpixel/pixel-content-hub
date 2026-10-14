@@ -65,6 +65,7 @@ router.get('/', (req, res) => {
   // the device's active layout, so the dashboard can flag screens that need attention.
   const orphanCounts = orphanCountsByDevice(devices.map(d => d.id));
   const groupIds = groupIdsByDevice(devices.map(d => d.id));
+  const paused = pausedByPlan(devices);
   // The RESOLVED capability set, the same shape GET /:id returns. The raw column shipped here
   // before: a JSON *string* ('[]') or null, which every consumer would have had to parse — and
   // `Array.isArray("[]")` is false, so the dashboard's `can()` helper reads a device that declared
@@ -81,8 +82,43 @@ router.get('/', (req, res) => {
     orphan_count: orphanCounts[d.id] || 0,
     tags: parseTags(d.tags),
     group_ids: groupIds[d.id] || [],
+    // 3.0: { reason: 'trial_expired' | 'device_limit' } when the player is showing a paused card
+    // because of the plan, else null. The owner used to learn this only from the screen itself.
+    plan_paused: paused[d.id] || null,
   })));
 });
+
+/*
+ * 3.0: which listed screens the plan is holding back, using the PLAYER'S OWN check
+ * (ws/deviceSocket.js checkDeviceAccess) so the dashboard can never disagree with the screen.
+ * That check costs a few queries per device, so it only runs for owners who have more screens than
+ * their plan allows - for everyone else (nearly every account) this is one plan read per owner.
+ */
+function pausedByPlan(devices) {
+  const out = {};
+  let check;
+  try { check = require('../ws/deviceSocket').checkDeviceAccess; } catch { return out; }
+  if (typeof check !== 'function') return out; // socket layer not set up (tests, CLI)
+  const { getUserPlan, getUserDeviceCount } = require('../middleware/subscription');
+  const owners = new Map();
+  for (const d of devices) {
+    if (!d.user_id) continue;
+    if (!owners.has(d.user_id)) {
+      let over = false;
+      try {
+        const plan = getUserPlan(d.user_id);
+        over = !!plan && plan.max_devices !== -1 && getUserDeviceCount(d.user_id) > plan.max_devices;
+      } catch { /* unknown: do not mark */ }
+      owners.set(d.user_id, over);
+    }
+    if (!owners.get(d.user_id)) continue;
+    try {
+      const a = check(d.id);
+      if (a && a.allowed === false) out[d.id] = { reason: a.reason || 'device_limit' };
+    } catch { /* never fail the list over a badge */ }
+  }
+  return out;
+}
 
 /*
  * The device groups each screen belongs to, as { deviceId: [groupId, ...] }, ordered by group name.
@@ -626,6 +662,16 @@ router.put('/:id', (req, res) => {
   }
   if (orientation !== undefined && !deviceSettings.ORIENTATIONS.has(orientation)) {
     return res.status(400).json({ error: `Invalid orientation. Allowed: ${[...deviceSettings.ORIENTATIONS].join(', ')}` });
+  }
+  // ⚠️ default_content_id is served to the player, so it must be content this device's workspace
+  // may show — its own, or a platform template (NULL workspace) — the same rule lib/device-move
+  // applies on a move and layout_id applies below. Unchecked, any editor could point a screen at
+  // another tenant's content id and have the player fetch it. null / '' still clear it.
+  if (default_content_id !== undefined && default_content_id !== null && default_content_id !== '') {
+    const c = db.prepare('SELECT workspace_id FROM content WHERE id = ?').get(String(default_content_id));
+    if (!c || (c.workspace_id && c.workspace_id !== device.workspace_id)) {
+      return res.status(400).json({ error: 'default_content_id not found in this workspace' });
+    }
   }
   // Whitelist allowed fields to prevent SQL injection via field names
   const ALLOWED_FIELDS = ['name', 'notes', 'timezone', 'orientation', 'background_color', 'default_content_id'];

@@ -1,4 +1,6 @@
 import { api } from '../api.js';
+import { isSimpleMode } from '../components/ui-mode.js';
+import { plansVisible } from '../components/plan-nudges.js';
 import { on, off, requestScreenshot, startGroupTalk, stopGroupTalk } from '../socket.js';
 import { BroadcastTalkClient } from '../lib/talk-client.js';
 import { showToast } from '../components/toast.js';
@@ -266,6 +268,9 @@ function renderDeviceCard(device) {
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>update
           </span>` : ''}</div>${Array.isArray(device.tags) && device.tags.length ? `
         <div class="device-card-tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px">${device.tags.slice(0, 4).map((tg) => `<span style="font-size:10px;color:var(--text-secondary);background:var(--bg-primary);padding:1px 6px;border-radius:8px">#${esc(tg)}</span>`).join('')}${device.tags.length > 4 ? `<span style="font-size:10px;color:var(--text-muted)">+${device.tags.length - 4}</span>` : ''}</div>` : ''}
+        ${device.plan_paused ? (plansVisible()
+          ? `<a class="device-plan-paused" href="#/billing?from=paused_screen" onclick="event.stopPropagation()">⏸ ${esc(t(device.plan_paused.reason === 'trial_expired' ? 'dashboard.plan_paused.trial_expired' : 'dashboard.plan_paused.device_limit'))}</a>`
+          : `<span class="device-plan-paused">⏸ ${esc(t('dashboard.plan_paused.device_limit'))}</span>`) : ''}
         ${device.owner_name || device.owner_email ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
@@ -571,14 +576,14 @@ export function render(container) {
         <h1>${t('dashboard.title')} <span class="help-tip" data-tip="${t('dashboard.help_tip')}">?</span></h1>
         <div class="subtitle">${t('dashboard.subtitle')}</div>
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <!-- #talk broadcast: PA to every device in the workspace. Hidden until we confirm live video
              is available (see wireTalkScopeButtons). -->
         <button class="btn btn-secondary talk-scope-btn" data-scope-kind="workspace" style="display:none">🎙️ ${t('dashboard.talk_all')}</button>
         <!-- #312 follow-up: move EVERY device in the workspace to a new server address. Shown only to
              a workspace admin (server also enforces it); opens a warning + type-to-commit modal.
              Each panel verifies-then-commits and rolls back an unreachable address. -->
-        ${currentWorkspaceCanAdmin() ? `<button class="btn btn-secondary" id="wsSetServerUrlBtn" title="${t('dashboard.ws_set_server_url_tip')}">🔗 ${t('dashboard.ws_set_server_url')}</button>` : ''}
+        ${currentWorkspaceCanAdmin() ? `<button class="btn btn-secondary" id="wsSetServerUrlBtn" data-advanced-ui title="${t('dashboard.ws_set_server_url_tip')}">🔗 ${t('dashboard.ws_set_server_url')}</button>` : ''}
         <button class="btn btn-primary" id="addDeviceBtn">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -590,7 +595,9 @@ export function render(container) {
     <div id="whatsNew"></div>
     <div id="gettingStarted"></div>
       <div id="dashStats" class="dash-stats-row" style="display:flex;gap:12px;margin-bottom:16px"></div>
-    <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center">
+    <!-- 3.0: .dash-toolbar wraps, and stacks at phone width (main.css); the power-user filters are
+         data-advanced-ui, hidden in the simple menu mode (components/ui-mode.js). -->
+    <div class="dash-toolbar">
       <input type="text" id="deviceSearch" class="input" placeholder="${t('dashboard.search')}" style="max-width:300px">
       <select id="deviceFilter" class="input" style="width:180px;background:var(--bg-input)">
         <option value="">${t('dashboard.all_status')}</option>
@@ -605,7 +612,7 @@ export function render(container) {
         <optgroup id="versionFilterGroup" label="${t('dashboard.filter.by_version')}" hidden></optgroup>
       </select>
       <select id="deviceTagFilter" class="input" style="width:160px;background:var(--bg-input)" hidden title="${esc(t('dashboard.filter.by_tag'))}"></select>
-      <details class="card-fields-menu" id="cardFieldsMenu">
+      <details class="card-fields-menu" id="cardFieldsMenu" data-advanced-ui>
         <summary class="btn btn-secondary btn-sm">${t('dashboard.card_fields')}</summary>
         <div class="card-fields-pop">
           ${['version', 'battery', 'wifi', 'storage'].map((f) => `
@@ -614,7 +621,7 @@ export function render(container) {
       </details>
       <!-- #106 reordering has existed since 2.1, and a customer still asked "is it possible to
            reorder the screens?". A feature nobody can see is a feature nobody has. -->
-      <span style="font-size:12px;color:var(--text-muted);margin-left:auto">${t('dashboard.drag_hint')}</span>
+      <span class="dash-drag-hint" data-advanced-ui>${t('dashboard.drag_hint')}</span>
     </div>
     <div id="groupedDevices"></div>
   `;
@@ -640,6 +647,9 @@ export function render(container) {
 
   const addBtn = container.querySelector('#addDeviceBtn');
   addBtn.addEventListener('click', () => {
+    // 3.0: Simple view adds a screen with the same step-by-step guide as the first one (open the
+    // player, connect, choose what it shows). Advanced view keeps this dialog and its options.
+    if (isSimpleMode()) { window.location.hash = '#/add-screen'; return; }
     document.getElementById('addDeviceModal').style.display = 'flex';
     resetAddDeviceDialog();   // #313: a previous create must not leave the dialog on its result panel
     document.getElementById('pairingCodeInput').value = '';
@@ -745,6 +755,7 @@ export function render(container) {
         showWebPlayerUrl(r.player_url);
         loadDashboard();
       } catch (err) {
+        if (err.planPromptShown) { document.getElementById('addDeviceModal').style.display = 'none'; return; }
         showToast(err.message, 'error');
       }
       return;
@@ -760,7 +771,11 @@ export function render(container) {
       document.getElementById('addDeviceModal').style.display = 'none';
       showToast(t('dashboard.toast.display_paired'), 'success');
       loadDashboard();
+      // 3.0: the first screen is the moment a trial becomes real; plan-nudges says what is next.
+      window.dispatchEvent(new CustomEvent('st:screen-paired'));
     } catch (err) {
+      // A plan limit is answered by the upgrade prompt (plan-nudges.js); the dialog gets out of its way.
+      if (err.planPromptShown) { document.getElementById('addDeviceModal').style.display = 'none'; return; }
       showToast(err.message, 'error');
     }
   };
@@ -1189,7 +1204,9 @@ async function loadDashboard() {
     const wnHost = document.getElementById('whatsNew');
     if (wnHost) {
       wnHost.style.display = 'none';
-      if (whatsNew.shouldFetch()) {
+      // 3.0: "what's new" is news only to someone who used the last version. An account with no
+      // screens yet gets the getting-started checklist below instead, not a changelog.
+      if (devices.length > 0 && whatsNew.shouldFetch()) {
         try {
           const notes = await whatsNew.fetchNotes();
           if (notes) whatsNew.render(wnHost, notes);

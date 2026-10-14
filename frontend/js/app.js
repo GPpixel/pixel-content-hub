@@ -40,6 +40,8 @@ import { applyBranding } from './branding.js';
 import { t } from './i18n.js';
 import { isPlatformAdmin } from './utils.js';
 import { initNavGroups } from './components/nav-groups.js';
+import { applyUiMode } from './components/ui-mode.js';
+import { installPlanNudges, updateTrialBanner } from './components/plan-nudges.js';
 import { renderWorkspaceSwitcher, selectedRemoteOrg, clearRemoteOrg } from './components/workspace-switcher.js';
 import { corporateSettings, renderHqContextBar } from './components/corporate-ui.js';
 
@@ -540,11 +542,12 @@ function route() {
   }
 
   // Onboarding for new users
-  if (hash === '#/onboarding' && isAuthenticated()) {
+  // 3.0: #/add-screen is the same guide, for every later screen (Simple view's Add screen).
+  if ((hash === '#/onboarding' || hash === '#/add-screen') && isAuthenticated()) {
     sidebar.style.display = 'none';
     if (mainWrapper) mainWrapper.style.marginLeft = '0';
     currentView = onboarding;
-    onboarding.render(app);
+    onboarding.render(app, { mode: hash === '#/add-screen' ? 'add' : 'first' });
     return;
   }
 
@@ -778,7 +781,9 @@ function updateSidebarUser() {
   if (!user) return;
   updateVerifyBanner(user);
   updateBillingBanner(user);
+  updateTrialBanner(user);
   updateWidgetSandboxWarningBanner(user);
+  applyUiMode(user);
 
   // The Platform nav group is for platform admins only (legacy 'superadmin' or 'platform_admin').
   // nav-groups.js hides a group whose every link is hidden, so hiding the items hides the group.
@@ -980,10 +985,44 @@ async function refreshReviewsBadge() {
 window.addEventListener('hashchange', () => { if (location.hash === '#/reviews' || location.hash === '#/members') refreshReviewsBadge(); });
 setTimeout(refreshReviewsBadge, 1500);
 
+/*
+ * 3.0: the first-run guide, reached. 2.x only sent someone to #/onboarding when they loaded #/login
+ * while already signed in, and a new signup's login handler goes straight to #/ and reloads — so the
+ * wizard was effectively unreachable and nearly every new account started on an empty dashboard.
+ *
+ * Now /me says whether this ACCOUNT has finished or skipped it (users.onboarded_at). Sent there only
+ * from the dashboard, only once per browser session, never for a viewer (they cannot pair), and
+ * never into a workspace that already has screens — a colleague joining an existing estate is
+ * marked done instead of being walked through pairing a screen someone else already set up.
+ */
+let firstRunChecked = false;
+async function maybeStartFirstRun(user) {
+  if (firstRunChecked || !user || user.onboarded_at !== null) return; // undefined = older server
+  firstRunChecked = true;
+  const hash = window.location.hash || '#/';
+  if (hash !== '#/' && hash !== '#') return;
+  if (localStorage.getItem('rd_onboarded')) { api.updateMe({ onboarded: true }).catch(() => {}); return; }
+  if (!user.current_workspace_id || user.current_workspace_role === 'workspace_viewer') return;
+  try {
+    const devices = await api.getDevices();
+    if (Array.isArray(devices) && devices.length > 0) { api.updateMe({ onboarded: true }).catch(() => {}); return; }
+  } catch { return; }
+  if ((window.location.hash || '#/') === hash) window.location.hash = '#/onboarding';
+}
+
 // Initialize
 renderNavLabels();
 translateStaticDom();
 initNavGroups();
+installPlanNudges();
+window.addEventListener('user-refreshed', (e) => {
+  const fresh = e.detail;
+  applyUiMode(fresh);
+  // The past-due banner used to be drawn once at boot from the cached user; /me now carries
+  // subscription_status (3.0), so keep it in step with every refresh.
+  updateBillingBanner(fresh);
+  maybeStartFirstRun(fresh);
+});
 window.addEventListener('language-changed', () => {
   renderNavLabels();
   translateStaticDom();

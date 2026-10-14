@@ -2585,3 +2585,100 @@ tr[hidden] { display: none; }
 html.nav-pending #sidebar,
 html.nav-pending #mobileMenuBtn { display: none !important; }
 html.nav-pending .main-wrapper { margin-left: 0 !important; }
+
+/* ===================================================================================================
+ * 3.0 — simple menu, trial/upgrade surfaces, Add screen dialog, dashboard toolbar
+ * =================================================================================================== */
+
+/* Simple menu (js/components/ui-mode.js): power-user items are marked, not removed. `html.ui-simple`
+   is set before first paint by nav-prime.js from the cached account. */
+.ui-simple .nav-links li[data-advanced],
+.ui-simple [data-advanced-ui] { display: none !important; }
+
+.ui-mode-switch {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 12px; padding: 3px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.ui-mode-switch[hidden] { display: none; }
+.ui-mode-switch button {
+  background: none; border: 0; border-radius: 6px; padding: 6px 8px; cursor: pointer;
+  font-size: 12px; font-weight: 500; color: var(--text-secondary); font-family: inherit;
+}
+.ui-mode-switch button:hover { color: var(--text-primary); }
+.ui-mode-switch button[aria-checked="true"] { background: var(--accent); color: #fff; }
+.ui-mode-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Trial banner (js/components/plan-nudges.js). Calm by default; warmer near the end. */
+.trial-banner {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px;
+  padding: 9px 44px 9px 16px; font-size: 13px; position: relative;
+  background: var(--bg-card); color: var(--text-primary); border-bottom: 1px solid var(--border);
+}
+.trial-banner--active { border-bottom-color: var(--accent-dim); }
+.trial-banner--ending { background: var(--warning-dim); border-bottom-color: var(--warning); }
+.trial-banner--ended { background: var(--bg-card); border-bottom-color: var(--warning); }
+.trial-banner--celebrate { background: var(--success-dim); border-bottom-color: var(--success); }
+.trial-banner-text { max-width: 760px; }
+.trial-banner-cta { background: var(--accent); color: #fff; padding: 4px 12px; text-decoration: none; }
+.trial-banner-cta:hover { background: var(--accent-hover); }
+.trial-banner-close {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  background: none; border: 0; color: var(--text-secondary); font-size: 18px; line-height: 1;
+  width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+}
+.trial-banner-close:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-primary); }
+
+/* Upgrade prompt */
+.upgrade-prompt .modal { animation: none; }
+.upgrade-prompt-lead { color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5; }
+.upgrade-prompt-list { margin: 0 0 12px; padding-left: 20px; line-height: 1.9; color: var(--text-primary); font-size: 14px; }
+.upgrade-prompt-offer { font-weight: 600; margin-bottom: 8px; }
+.upgrade-prompt-reassure { font-size: 12px; color: var(--text-muted); }
+
+/* Add screen dialog: folded sections below the code */
+.add-display-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+.add-display-section > summary {
+  cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-secondary); list-style: revert;
+}
+.add-display-section > summary:hover { color: var(--text-primary); }
+
+/* Screens toolbar: wraps on narrow screens instead of overflowing */
+.dash-toolbar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+.dash-drag-hint { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+@media (max-width: 768px) {
+  .dash-toolbar > .input, .dash-toolbar > select { max-width: none !important; width: 100% !important; }
+  .dash-drag-hint { display: none; }
+}
+
+/* Plan-paused screen badge (device cards) */
+.device-plan-paused {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-size: 11px; color: var(--warning); text-decoration: none;
+}
+.device-plan-paused:hover { text-decoration: underline; }
+
+/* Subscription page: what the end of a trial keeps and pauses (js/views/billing.js) */
+.billing-keep-lose { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.billing-keep-lose > div { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
+.billing-keep-lose h4 { font-size: 13px; margin-bottom: 6px; }
+.billing-keep-lose ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.8; color: var(--text-secondary); }
+
+/* A feature the current plan does not include, named before the form rather than refused after. */
+.plan-pill {
+  display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px; vertical-align: 1px;
+  font-size: 10px; font-weight: 600; letter-spacing: .02em; line-height: 16px;
+  background: var(--accent-dim); color: #fff;
+}
+
+/* Platform > Overview: trial-to-paid funnel */
+.funnel { display: grid; gap: 6px; }
+.funnel-row { display: grid; grid-template-columns: minmax(140px, 200px) 1fr auto; gap: 10px; align-items: center; font-size: 12px; }
+.funnel-label { color: var(--text-secondary); }
+.funnel-bar { height: 8px; background: var(--bg-input); border-radius: 4px; overflow: hidden; }
+.funnel-bar > span { display: block; height: 100%; background: var(--grad-bar); }
+.funnel-n { color: var(--text-primary); font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+
+/* Phone: the fixed menu button sits top-left over the banner row. */
+@media (max-width: 768px) {
+  .trial-banner { padding-left: 64px; justify-content: flex-start; }
+}

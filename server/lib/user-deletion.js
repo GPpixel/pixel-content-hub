@@ -420,6 +420,8 @@ function deleteUserCascade(db, { targetId, actingAdminId, unlink, revokeCanva })
     if (have.has('canva_connections')) db.prepare('DELETE FROM canva_connections WHERE user_id = ?').run(targetId);
     if (have.has('canva_links')) db.prepare('DELETE FROM canva_links WHERE user_id = ?').run(targetId);
     if (have.has('canva_jobs')) db.prepare('DELETE FROM canva_jobs WHERE user_id = ?').run(targetId);
+    // 3.0 funnel rows (lib/conversion-events.js): no foreign key, so nothing else would remove them.
+    if (have.has('conversion_events')) db.prepare('DELETE FROM conversion_events WHERE user_id = ?').run(targetId);
     if (have.has('cloud_folders')) {
       db.prepare(`UPDATE cloud_folders SET user_id = NULL, enabled = 0, last_status = 'error',
           last_error = 'Paused: the person who set up this folder no longer has an account.',
@@ -445,6 +447,10 @@ function deleteUserCascade(db, { targetId, actingAdminId, unlink, revokeCanva })
 
   run();
   afterCommit(side, revokeCanva);
+  // ⚠️ A deleted user's open dashboards authenticated at their handshake; close them so they stop
+  // receiving live device events at once (writes are re-checked anyway). Lazy: avoids loading the
+  // socket stack from a lib module, and a no-op where no socket server runs (scripts, tests).
+  try { require('../ws/dashboardSocket').disconnectUserSockets(targetId); } catch (_) { /* best-effort */ }
   return removeDeletedFiles(gone, unlink);
 }
 

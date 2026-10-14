@@ -351,6 +351,7 @@ async function loadOverview() {
         ${mini('#/platform/system', formatBytes(o.storage_bytes), t('platform.overview.storage'))}
         ${mini('#/platform/cleanup', o.stale_accounts_180d, t('platform.overview.stale'), t('platform.overview.stale_sub'))}
       </div>
+      <div id="platformFunnel"></div>
       <div class="settings-section">
         <h3>${esc(t('platform.overview.attention'))}</h3>
         ${attention.length ? `<div class="platform-attention">${attention.map(([item, href, text, kind]) => `
@@ -361,6 +362,7 @@ async function loadOverview() {
           : `<p class="platform-empty">${esc(t('platform.overview.all_clear'))}</p>`}
       </div>
       <p class="platform-version">${esc(t('platform.overview.version', { v: o.version }))}</p>`;
+    loadFunnel();
     // Details load the first time an item is opened (GET /admin/overview/attention/:item).
     el.querySelectorAll('details.att').forEach((d) => {
       d.addEventListener('toggle', () => { if (d.open && !d.dataset.loaded) { d.dataset.loaded = '1'; loadAttentionDetail(d); } });
@@ -368,6 +370,35 @@ async function loadOverview() {
   } catch (err) {
     el.innerHTML = `<p style="color:var(--danger)">${esc(err.message)}</p>`;
   }
+}
+
+/*
+ * 3.0: the trial-to-paid funnel (GET /api/subscription/funnel, lib/conversion-events.js). Hidden on
+ * a self-hosted instance, which records nothing. Each step is the share of the last 30 days' signups
+ * who reached it, so a change to onboarding or pricing shows up as a moved number, not an anecdote.
+ */
+async function loadFunnel() {
+  const host = document.getElementById('platformFunnel');
+  if (!host) return;
+  let f;
+  try { f = await api.adminConversionFunnel(30); } catch { return; }
+  if (!f || !f.enabled || !Array.isArray(f.steps)) return;
+  const base = (f.steps[0] && f.steps[0].accounts) || 0;
+  const rows = f.steps.map((st) => {
+    const pct = base ? Math.round((st.accounts / base) * 100) : 0;
+    return `<div class="funnel-row">
+        <span class="funnel-label">${esc(t('platform.funnel.step.' + st.event))}</span>
+        <span class="funnel-bar"><span style="width:${pct}%"></span></span>
+        <span class="funnel-n">${esc(String(st.accounts))}${base ? ` · ${pct}%` : ''}</span>
+      </div>`;
+  }).join('');
+  const hits = (f.limit_hits || []).map((h) => `${esc(String(h.code || '?'))}: ${esc(String(h.n))}`).join(' · ');
+  host.innerHTML = `<div class="settings-section">
+      <h3>${esc(t('platform.funnel.title'))}</h3>
+      <p class="platform-empty" style="margin-bottom:10px">${esc(t('platform.funnel.sub', { days: f.days }))}</p>
+      <div class="funnel">${rows}</div>
+      ${hits ? `<p class="platform-empty" style="margin-top:8px">${esc(t('platform.funnel.limit_hits'))} ${hits}</p>` : ''}
+    </div>`;
 }
 
 // #36: list organizations with owner + resource counts; platform admin can

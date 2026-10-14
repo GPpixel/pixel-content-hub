@@ -1443,9 +1443,16 @@ app.use('/api/content', (req, res, next) => {
   // Operations on an OPEN session (chunk PATCH, offset GET, DELETE, finalize) — never creation,
   // which has no id segment and stays on the general budget.
   const p = (req.originalUrl || req.url || '').split('?')[0].replace(/\/+$/, '');
-  return /^\/api\/content\/uploads\/[^/]+(\/finalize)?$/.test(p)
-    ? uploadSessionLimiter(req, res, next)
-    : contentLimiter(req, res, next);
+  if (/^\/api\/content\/uploads\/[^/]+(\/finalize)?$/.test(p)) return uploadSessionLimiter(req, res, next);
+  /*
+   * 3.0: READS are not "content operations". Listing the library counted against the same 30/min
+   * per-IP budget as uploads, so an office behind one NAT — or one person flicking between
+   * Content, a playlist's picker and Schedule — was refused a list and saw an empty page. Reads
+   * stay bounded by the global backstop (lib/backstop-limiter.js); writes and session creation keep
+   * the tight budget above, which is what it was for.
+   */
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  return contentLimiter(req, res, next);
 });
 
 // Subscription routes (mixed auth)
@@ -1704,14 +1711,22 @@ app.get('/api/content/:id/bundle', async (req, res) => {
 // becomes a clean 404/502. Restricted to image/* responses (modest SSRF hardening; the
 // URL is server-set at ingest, not caller-supplied). Thumbnails are small, so buffering
 // is fine and avoids partial-stream error handling.
+// ⚠️ Through lib/ssrf-guard guardedRequest, not fetch(): a bare fetch with redirect:'follow' would
+// chase a public thumbnail URL's 302 to a LAN / metadata address and serve the answer, publicly.
+// guardedRequest vets and pins every hop and caps the body (thumbnails are small).
 async function proxyRemoteThumbnail(url, res) {
   try {
-    const upstream = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(8000) });
-    if (upstream.status === 404) return res.status(404).json({ error: 'Thumbnail not found' });
-    if (!upstream.ok) return res.status(502).json({ error: 'Thumbnail upstream error' });
-    const ct = upstream.headers.get('content-type') || 'image/jpeg';
+    let upstream;
+    try {
+      upstream = await require('./lib/ssrf-guard').guardedRequest(url, { timeoutMs: 8000, maxBytes: 5 * 1024 * 1024, responseType: 'buffer' });
+    } catch (e) {
+      if (e && e.statusCode === 404) return res.status(404).json({ error: 'Thumbnail not found' });
+      if (e && e.code === 'upstream-status') return res.status(502).json({ error: 'Thumbnail upstream error' });
+      throw e;
+    }
+    const ct = String(upstream.headers['content-type'] || 'image/jpeg');
     if (!/^image\//i.test(ct)) return res.status(502).json({ error: 'Thumbnail upstream is not an image' });
-    const buf = Buffer.from(await upstream.arrayBuffer());
+    const buf = upstream.buffer;
     res.set('Content-Type', ct);
     res.set('Cache-Control', 'public, max-age=86400');
     res.set('Access-Control-Allow-Origin', '*');
@@ -2811,6 +2826,9 @@ const pairLockout = require('./lib/pair-lockout');
  * Same guards as pairing: authenticated, tenanted, and counted against the plan's device limit.
  */
 app.post('/api/devices/web-player', requireAuth, resolveTenancy, checkDeviceLimit, (req, res) => {
+  // ⚠️ A read-only member must not create displays (and mint their enrolment keys) in the
+  // workspace. Required inline: only this handler is touched, not the module-scope import.
+  if (require('./lib/tenancy').denyReadOnly(req, res)) return;
   const { name } = req.body || {};
   if (!req.workspaceId) return res.status(400).json({ error: 'No active workspace' });
 
@@ -2853,6 +2871,8 @@ app.post('/api/devices/web-player', requireAuth, resolveTenancy, checkDeviceLimi
     const { workspaceRoom: wsRoom, emitToWorkspace: emitWs } = require('./lib/socket-rooms');
     emitWs(io.of('/dashboard'), wsRoom(req.workspaceId), 'dashboard:device-added', createdForBroadcast);
   } catch (e) { /* the dashboard refreshes anyway; never fail the create over a notification */ }
+  // 3.0 funnel (hosted only, once per account; lib/conversion-events.js).
+  require('./lib/conversion-events').record(db, { userId: req.user.id, workspaceId: req.workspaceId || null, event: 'first_pair', meta: { via: 'web_player_url' } });
 
   res.status(201).json({
     success: true,
@@ -2863,6 +2883,9 @@ app.post('/api/devices/web-player', requireAuth, resolveTenancy, checkDeviceLimi
 });
 
 app.post('/api/provision/pair', requireAuth, resolveTenancy, checkDeviceLimit, (req, res) => {
+  // ⚠️ A read-only member must not claim screens into the workspace. Checked before the lockout
+  // bookkeeping so a viewer's attempts neither pair nor burn the IP's guess budget.
+  if (require('./lib/tenancy').denyReadOnly(req, res)) return;
   // #87: lock out an IP after repeated failed pairing-code guesses (brute-force defense
   // beyond the 5/min rate-limit on /api/provision).
   const ip = getClientIp(req);
@@ -2977,6 +3000,8 @@ app.post('/api/provision/pair', requireAuth, resolveTenancy, checkDeviceLimit, (
   // Phase 2.3: scope to the workspace the device was just claimed into.
   const { workspaceRoom, emitToWorkspace } = require('./lib/socket-rooms');
   emitToWorkspace(dashboardNs, workspaceRoom(updated.workspace_id), 'dashboard:device-added', updated);
+  // 3.0 funnel (hosted only, once per account; lib/conversion-events.js).
+  require('./lib/conversion-events').record(db, { userId: req.user.id, workspaceId: updated.workspace_id || null, event: 'first_pair', meta: { via: 'code' } });
 
   res.json(updated);
 });

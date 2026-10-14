@@ -2466,6 +2466,37 @@ const migrations = [
      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
      committed_at INTEGER)`,
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_migrations_active ON storage_migrations(org_id) WHERE state IN ('copying','ready_to_commit')",
+  /*
+   * 3.0 — all additive; a code-only rollback to 2.6 leaves dead columns and an unread table.
+   *
+   * token_version: embedded in every session JWT (middleware/auth.js) and compared on each request,
+   * so a password change/reset or TOTP change ends every other session. A 2.x token carries no
+   * claim and counts as version 0, so the upgrade itself logs nobody out.
+   */
+  "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
+  /*
+   * ui_mode: 'simple' shows the essentials (screens, content, playlists, schedule...), 'advanced'
+   * shows everything. The DEFAULT is for NEW rows; the one-time v3_0_existing_users step below puts
+   * every account that existed before 3.0 on 'advanced', so nobody who already knows the product
+   * loses a menu item on upgrade. onboarded_at: the first-run guide is finished or skipped
+   * (server-side, so a new browser does not start the guide again); backfilled for the same accounts.
+   */
+  "ALTER TABLE users ADD COLUMN ui_mode TEXT NOT NULL DEFAULT 'simple'",
+  "ALTER TABLE users ADD COLUMN onboarded_at INTEGER",
+  /*
+   * Trial-to-paid funnel (lib/conversion-events.js). Hosted only: nothing is written when
+   * SELF_HOSTED is set. No foreign keys, like the other log tables; user deletion removes a
+   * user's rows (lib/user-deletion.js).
+   */
+  `CREATE TABLE IF NOT EXISTS conversion_events (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     user_id TEXT,
+     workspace_id TEXT,
+     event TEXT NOT NULL,
+     meta TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  "CREATE INDEX IF NOT EXISTS idx_conversion_events_event ON conversion_events(event, created_at)",
+  "CREATE INDEX IF NOT EXISTS idx_conversion_events_user ON conversion_events(user_id, event)",
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
@@ -4259,6 +4290,28 @@ const PLAY_LOGS_WORKSPACE_BACKFILL_ID = 'play_logs_workspace_backfill';
     // NOT fatal, unlike the playlist-source backfill: an unattributed row degrades a report's
     // tenant filter, it does not break playback. Leaving the marker unset retries next boot.
     console.error(`[play_logs workspace backfill] FAILED (will retry next boot): ${e.message}`);
+  }
+})();
+
+/*
+ * 3.0: accounts that existed before the upgrade keep the full interface and are not sent through
+ * the first-run guide. Runs once (schema_migrations), on the first 3.0 boot; on a fresh install it
+ * runs over an empty users table, so every account created from then on starts in simple mode.
+ */
+const V3_EXISTING_USERS_ID = 'v3_0_existing_users';
+(function v3ExistingUsers() {
+  try {
+    if (db.prepare('SELECT 1 FROM schema_migrations WHERE id = ?').get(V3_EXISTING_USERS_ID)) return;
+    const n = db.transaction(() => {
+      const r = db.prepare(`UPDATE users SET ui_mode = 'advanced',
+                              onboarded_at = COALESCE(onboarded_at, created_at, strftime('%s','now'))`).run();
+      db.prepare('INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)').run(V3_EXISTING_USERS_ID);
+      return r.changes;
+    })();
+    if (n) console.log(`[migrate] 3.0: ${n} existing account(s) kept on the full interface`);
+  } catch (e) {
+    // Not fatal: the worst case is an existing user seeing the simple menu, which has a toggle.
+    console.error(`[migrate] 3.0 existing-users step failed (will retry next boot): ${e.message}`);
   }
 })();
 

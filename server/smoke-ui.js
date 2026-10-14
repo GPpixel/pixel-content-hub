@@ -100,6 +100,23 @@ const check = (name, ok, detail) => {
   });
   check('an account can be created', registered);
 
+  // ---- 3.0 first run: a new signup is GUIDED, and skipping is remembered by the account ----------
+  // 2.x's wizard was unreachable from a signup (the login handler went straight to #/), so nearly
+  // every new account started on an empty dashboard. Everything below this block runs as an account
+  // that has skipped the guide, as it did before.
+  await page.goto(BASE + '/app#/', { waitUntil: 'networkidle2' });
+  await page.reload({ waitUntil: 'networkidle2' });
+  await new Promise(r => setTimeout(r, 1500));
+  check('a new signup is sent to the first-run guide', await page.evaluate(() => location.hash === '#/onboarding'));
+  const skipped = await page.evaluate(() => { const b = document.getElementById('skipBtn'); if (b) b.click(); return !!b; });
+  await new Promise(r => setTimeout(r, 1500));
+  await page.evaluate(() => localStorage.removeItem('rd_onboarded')); // only the server-side record may keep it closed
+  await page.goto(BASE + '/app#/', { waitUntil: 'networkidle2' });
+  await page.reload({ waitUntil: 'networkidle2' });
+  await new Promise(r => setTimeout(r, 1500));
+  check('skipping the guide is remembered by the account, not just this browser',
+    skipped && await page.evaluate(() => location.hash === '#/' || location.hash === ''));
+
   // ---- every view: renders, no raw keys, no uncaught errors ----------------------------------
   const rawKeyOffenders = [];
   for (const hash of VIEWS) {

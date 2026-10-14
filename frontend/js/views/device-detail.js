@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { isSimpleMode } from '../components/ui-mode.js';
 import { on, off, requestScreenshot, startRemote, stopRemote, sendTouch, sendSwipe, sendKey, sendCommand, requestLivePublish, startTalk, stopTalk, ptyOpen, ptyInput, ptyResize, ptyClose } from '../socket.js';
 import { TalkClient } from '../lib/talk-client.js';
 import { showToast } from '../components/toast.js';
@@ -743,14 +744,14 @@ async function loadDevice(deviceId, activeTab = null) {
             ${t('device.screenshot_btn')}
           </button>` : ''}
           ${talkAvailable && can('remote.talk') ? `
-          <button class="btn btn-secondary btn-sm" id="startTalkBtn">🎙️ ${t('device.talk.start')}</button>
-          ${can('remote.talk') ? `<button class="btn btn-secondary btn-sm" id="start2wayBtn">🎙️ ${t('device.talk.two_way')}</button>` : ''}
+          <button data-advanced-ui class="btn btn-secondary btn-sm" id="startTalkBtn">🎙️ ${t('device.talk.start')}</button>
+          ${can('remote.talk') ? `<button data-advanced-ui class="btn btn-secondary btn-sm" id="start2wayBtn">🎙️ ${t('device.talk.two_way')}</button>` : ''}
           <button class="btn btn-danger btn-sm" id="stopTalkBtn" style="display:none">${t('device.talk.stop')}</button>
           <button class="btn btn-secondary btn-sm" id="muteTalkBtn" style="display:none">${t('device.talk.mute')}</button>` : ''}
           ${device.android_version && !device.android_version.startsWith('Web/') && !isNativeDevice(device) && !isRokuDevice(device) ? `
-          <button class="btn btn-secondary btn-sm" id="deviceOwnerBtn" title="${t('device.owner_provision.tip')}">${t('device.owner_provision.btn')}</button>` : ''}
-          <button class="btn btn-secondary btn-sm" id="moveDeviceBtn">${t('move.button')}</button>
-          <button class="btn btn-secondary btn-sm" id="blockDeviceBtn">${device.blocked ? 'Unblock' : 'Block'}</button>
+          <button data-advanced-ui class="btn btn-secondary btn-sm" id="deviceOwnerBtn" title="${t('device.owner_provision.tip')}">${t('device.owner_provision.btn')}</button>` : ''}
+          <button data-advanced-ui class="btn btn-secondary btn-sm" id="moveDeviceBtn">${t('move.button')}</button>
+          <button data-advanced-ui class="btn btn-secondary btn-sm" id="blockDeviceBtn">${device.blocked ? 'Unblock' : 'Block'}</button>
           <button class="btn btn-danger btn-sm" id="deleteDeviceBtn">${t('device.remove')}</button>
         </div>
       </div>
@@ -762,7 +763,7 @@ async function loadDevice(deviceId, activeTab = null) {
            and it is how a Linux player that runs its own kiosk session gets these controls without
            claiming to be an Android device owner. Each button is gated on what it sends. */
         (device.tier === 2 || can('system.device_owner') || can('system.kiosk')) ? `
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0 4px" title="${isNativeDevice(device) ? t('device.tier2.tip_linux') : t('device.tier2.tip')}">
+      <div data-advanced-ui style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0 4px" title="${isNativeDevice(device) ? t('device.tier2.tip_linux') : t('device.tier2.tip')}">
         <span style="font-size:12px;color:var(--text-muted)">${isNativeDevice(device) ? t('device.tier2.label_linux') : t('device.tier2.label')}</span>
         ${(device.tier === 2 || can('system.reboot')) ? `
         <button class="btn btn-secondary btn-sm" id="t2Reboot">${t('device.tier2.reboot')}</button>` : ''}
@@ -781,9 +782,9 @@ async function loadDevice(deviceId, activeTab = null) {
         <div class="tab active" data-tab="nowplaying">${t('device.tab.now_playing')} <span class="help-tip" data-tip="${t('device.tab.now_playing_tip')}">?</span></div>
         <div class="tab" data-tab="playlist">${t('device.tab.playlist')} <span class="help-tip" data-tip="${t('device.tab.playlist_tip')}">?</span></div>
         <div class="tab" data-tab="info">${t('device.tab.info')} <span class="help-tip" data-tip="${t('device.tab.info_tip')}">?</span></div>
-        ${(can('remote.stream') || can('remote.input') || can('remote.screenshot')) ? `<div class="tab" data-tab="remote">${t('device.tab.remote')} <span class="help-tip" data-tip="${t('device.tab.remote_tip')}">?</span></div>` : ''}
-        ${((can('audio.volume') || can('display.brightness') || can('system.brightness') || can('system.screen_timeout')) || isEmbeddedDevice(device)) ? `<div class="tab" data-tab="controls">${t('device.tab.controls')} <span class="help-tip" data-tip="${t('device.tab.controls_tip')}">?</span></div>` : ''}
-        ${(device.tier === 2 || can('system.shell') || can('system.pty')) ? `<div class="tab" data-tab="terminal">${t('device.tab.terminal')} <span class="help-tip" data-tip="${t('device.tab.terminal_tip')}">?</span></div>` : ''}
+        ${(can('remote.stream') || can('remote.input') || can('remote.screenshot')) ? `<div class="tab" data-tab="remote" data-advanced-ui>${t('device.tab.remote')} <span class="help-tip" data-tip="${t('device.tab.remote_tip')}">?</span></div>` : ''}
+        ${((can('audio.volume') || can('display.brightness') || can('system.brightness') || can('system.screen_timeout')) || isEmbeddedDevice(device)) ? `<div class="tab" data-tab="controls" data-advanced-ui>${t('device.tab.controls')} <span class="help-tip" data-tip="${t('device.tab.controls_tip')}">?</span></div>` : ''}
+        ${(device.tier === 2 || can('system.shell') || can('system.pty')) ? `<div class="tab" data-tab="terminal" data-advanced-ui>${t('device.tab.terminal')} <span class="help-tip" data-tip="${t('device.tab.terminal_tip')}">?</span></div>` : ''}
         <!--
           #313 — only for a display that actually HAS an enrolment key, i.e. one created for a
           player that cannot stay paired. Every other display keeps its own credentials and would
@@ -839,8 +840,9 @@ async function loadDevice(deviceId, activeTab = null) {
           </div>
         </div>
         ` : ''}
-        <!-- Layout selector -->
-        <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+        <!-- Layout selector. 3.0: Advanced view only — unless this screen already runs a multi-zone
+             layout, in which case hiding it would hide why its content is split up. -->
+        <div ${device.layout_id ? '' : 'data-advanced-ui'} style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
           </svg>
@@ -862,7 +864,7 @@ async function loadDevice(deviceId, activeTab = null) {
             ${playlistSourceBadge(device)}
           </div>
           <div style="display:flex;gap:6px">
-            <button class="btn btn-secondary btn-sm" id="copyPlaylistBtn">${t('device.playlist.copy_to_btn')}</button>
+            <button class="btn btn-secondary btn-sm" id="copyPlaylistBtn" data-advanced-ui>${t('device.playlist.copy_to_btn')}</button>
             <button class="btn btn-primary btn-sm" id="addContentBtn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -3295,18 +3297,21 @@ async function setupPlaylistActions(device) {
       return { ...base, ...extras };
     };
 
+    // 3.0: the playlist the adds landed in (the first add creates the screen's own one).
+    let addedTo = device.playlist_id || null;
+    const remember = (r) => { if (r && r.playlist_id) addedTo = r.playlist_id; return r; };
     const picker = await openContentPicker({
       title: t('device.assign.modal_title'),
       targetPlaylistId: device.playlist_id || null,
       extraFieldsHtml,
       readExtras,
-      add: (item, extras) => api.addAssignment(device.id, payload(item, extras)),
+      add: (item, extras) => api.addAssignment(device.id, payload(item, extras)).then(remember),
       // In the order shown, one at a time through the display's own route, so each item gets
       // the same zone check and duration rule as a single add. What is refused is named.
       addBulk: async (ids, extras) => {
         const added = []; const skipped = [];
         for (const id of ids) {
-          try { added.push(await api.addAssignment(device.id, payload({ type: 'content', id }, extras))); }
+          try { added.push(remember(await api.addAssignment(device.id, payload({ type: 'content', id }, extras)))); }
           catch (e) { skipped.push({ id, error: e.message }); }
         }
         return { added, skipped };
@@ -3315,12 +3320,39 @@ async function setupPlaylistActions(device) {
         const input = modal.querySelector('#assignDuration');
         if (input && !durationTouched) input.value = item.duration > 0 ? item.duration : 10;
       },
-      onClose: (changed) => { if (changed) loadDevice(device.id, 'playlist'); },
+      onClose: async (changed) => {
+        if (!changed) return;
+        if (isSimpleMode() && addedTo) await publishForSimpleMode(addedTo);
+        loadDevice(device.id, 'playlist');
+      },
     });
     picker.modal.querySelector('#assignDuration')?.addEventListener('input', () => { durationTouched = true; });
   });
 
   attachRemoveHandlers(device);
+}
+
+/*
+ * 3.0, simple menu mode: "add to this screen" means "show it on this screen". The draft/publish
+ * split is a power-user safety net (stage several edits, publish once), and to someone who has not
+ * met it, it looks like the add did nothing — the screen stays as it was behind an amber banner.
+ *
+ * Publishing goes through the ordinary endpoint, so the release policy still decides: with review
+ * turned on for the workspace it refuses (approval_required), and the draft and its Submit banner
+ * are left exactly as the full mode would show them. Full mode is unchanged.
+ */
+async function publishForSimpleMode(playlistId) {
+  try {
+    await api.publishPlaylist(playlistId);
+    showToast(t('device.simple.sent_to_screen'), 'success');
+    api.trackEvent('first_publish', { from: 'device_page' });
+  } catch (err) {
+    if (err && ['approval_required', 'awaiting_review', 'approval_stale', 'changes_requested', 'deps_changed'].includes(err.code)) {
+      showToast(t('device.simple.needs_review'), 'info');
+    } else {
+      showToast(err.message || t('device.simple.publish_failed'), 'error');
+    }
+  }
 }
 
 function attachRemoveHandlers(device) {

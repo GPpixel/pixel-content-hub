@@ -21,6 +21,8 @@ const REQUIRED_COLUMNS = [
   ['users', 'must_change_password', "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"],
   ['users', 'role', null],
   ['users', 'plan_id', "ALTER TABLE users ADD COLUMN plan_id TEXT DEFAULT 'free'"],
+  // 3.0: every session check compares the JWT's tv claim against this (middleware/auth.js).
+  ['users', 'token_version', 'ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0'],
   /*
    * ⚠️ Every column the playlist resolver views name (lib/playlist-resolver-sql.js). The views are
    * recreated at the END of boot and SQLite rejects a CREATE VIEW naming a missing column — so a

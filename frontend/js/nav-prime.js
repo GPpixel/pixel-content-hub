@@ -21,10 +21,12 @@
       !token
       || hash === '#/login' || hash.indexOf('#/login?') === 0
       || hash.indexOf('#/reset-password') === 0
-      || hash === '#/onboarding'
+      || hash === '#/onboarding' || hash === '#/add-screen'
       || hash === '#/change-password' || (user && user.must_change_password)
       || hash === '#/no-workspace'
       || hash.indexOf('#/accept-invite/') === 0;
     if (hidden) document.documentElement.classList.add('nav-pending');
+    // 3.0: the simple menu (components/ui-mode.js), from the cached account, before first paint.
+    if (user && user.ui_mode === 'simple') document.documentElement.classList.add('ui-simple');
   } catch (e) { /* storage blocked: the router decides, as it always did */ }
 })();

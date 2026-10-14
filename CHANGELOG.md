@@ -1,5 +1,92 @@
 # Changelog
 
+## 3.0.0
+
+The ease-of-use release: a guided first run, a simple menu for new accounts, trial-to-paid that
+explains instead of refusing, Node 22 enforced at boot, and the 3.0 security review. Every 2.x
+capability is still here, and existing accounts see no change to their menu. Full design and
+security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
+
+### Upgrade notes
+
+- **Node.js 22.14+ is enforced.** Below it the server prints what it needs and exits 78
+  (`server/lib/node-guard.js`). Shipped units carry `RestartPreventExitStatus=78`.
+  `ST_ALLOW_OLD_NODE=1` downgrades the refusal to a warning.
+- **The first boot of every new version snapshots the database** before migrating
+  (`remote_display.pre-upgrade-*.db`, newest 3 kept; `server/lib/upgrade-snapshot.js`).
+- Additive schema: `users.token_version`, `users.ui_mode`, `users.onboarded_at`, and the
+  `conversion_events` table. A one-time step marks pre-3.0 accounts as onboarded, on the full menu.
+- **Password and 2FA changes now end your other sessions** (`token_version`). Sessions issued by 2.x
+  stay valid until the first change.
+- **Self-hosted:** later signups get enterprise instead of a 14-day trial
+  (`SELF_HOSTED_SIGNUP_PLAN=trial` restores 2.x).
+- Emailed links use `APP_URL`, or the `PUBLIC_HOSTS` allowlist. A placeholder `JWT_SECRET` is refused
+  in production.
+- `scripts/remotedisplay.service` is now a template filled in by `install-service.sh`.
+- `upgrade.sh` checks the Node the service actually runs.
+
+### Added
+
+- **First-run guide reached by default** for new accounts. It offers an in-browser player path, a
+  sample image, and server-side completion (`users.onboarded_at`).
+- **Simple menu** (`users.ui_mode`): about 10 items for new accounts. A **Simple | Advanced** switch at the top of the menu changes it
+  per account. Every page still opens from a link or bookmark.
+- **Add screen in Simple view is the same step-by-step guide** (`#/add-screen`): open the player,
+  connect it, choose what it shows. The last step also offers "show the same as another screen".
+  Advanced view keeps the Add screen dialog.
+- The guide's upload step takes **several photos and videos at once** (pick or drag and drop). They
+  all go on the screen and are published once.
+- Simple view also hides power-user controls inside pages: on a screen's page, Remote, Controls,
+  Terminal, talk, device-owner, move, block, layout and "Copy to".
+- In the simple menu, adding content to a screen publishes it. The release gate still applies, so
+  workspaces that review keep the draft.
+- **Trial banner** (hosted, org owner, dismissible per day); a first-screen moment; a trial-ended
+  banner that says what was kept.
+- **Upgrade prompt** on `DEVICE_LIMIT` / `STORAGE_LIMIT` / `FEATURE_LOCKED`, naming the server's
+  `suggested_plan`.
+- A "Pro" pill on Media URL. Screens paused by the plan are badged on the Screens page
+  (`plan_paused` in `GET /api/devices`).
+- **Subscription page:** recommended plan from usage, or from the prompt that sent you; a "when the
+  trial ends you keep / paused" list using the real Free-plan limits; cancelled-checkout handling.
+- **Trial-to-paid funnel** (hosted only): `lib/conversion-events.js`,
+  `POST /api/subscription/events`, `GET /api/subscription/funnel`, and Platform → Overview →
+  "Trial to paid".
+- `/api/auth/me` now returns `trial`, `plan_name`, `plan_limits`, `plan_features`, `self_hosted`,
+  `subscription_status`, `ui_mode`, `onboarded_at`.
+- `POST /api/auth/sessions/revoke-others` and Settings → "Sign out everywhere else".
+- CI runs the unit suite on Node 22.14.0 as well as on the latest 22. `.nvmrc` added.
+
+### Changed
+
+- "Screen" is the user-facing noun (Screens, Add screen, Connect screen).
+- The Add screen dialog puts the code first and folds the downloads and advanced options.
+- The Screens toolbar wraps on phones.
+- Content library reads no longer count against the 30/min per-IP content-operations budget; the
+  global backstop still bounds them.
+
+### Fixed
+
+- The onboarding wizard was unreachable from signup.
+- The past-due banner disappeared after the first `/me` refresh (`subscription_status` was never
+  returned).
+- Trial copy said "Free plan (1 device)" and "Pro (15 devices)" against seeded limits of 2 and 25.
+
+### Security
+
+21 fixes from the 3.0 review. None were critical. The highest:
+
+- server-side Chromium could render internal URLs from layout zones and widgets;
+- revoked access persisted on open dashboard sockets and PTY sessions;
+- data-source secrets could be redirected to an attacker host;
+- JWTs were not revoked on password change;
+- reset links were built from the Host header;
+- viewers could pair screens;
+- a zip bomb in HTML bundles;
+- unauthenticated import uploads were left on disk;
+- digest-name content poisoning on import.
+
+The full table and the deliberately deferred items are in `docs/v3-review.md` §4.
+
 ## 2.6.1
 
 A fix release for 2.6.0, found while filming its release video. Server only: no player changed.
