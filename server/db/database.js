@@ -2730,6 +2730,65 @@ const migrations = [
      font TEXT,
      updated_by TEXT,
      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  /*
+   * 3.0: screen verification (lib/screen-verify, docs/screen-verification.md). What each screen is
+   * actually SHOWING, judged from its screenshots. No image is stored in any of these tables —
+   * only measurements and states; frames follow the existing latest-only screenshot retention.
+   *
+   *   _settings    per workspace; no row = the defaults in lib/screen-verify/classify.js
+   *   _state       one row per screen: the state the badge shows, since when, the open incident
+   *   _incidents   history; a row is kept only once confirmed (an unconfirmed suspicion is deleted
+   *                when a good frame arrives), pruned after 90 days
+   *   _deliveries  the once-per-incident alert ledger, like alert_deliveries for outages
+   * workspace_id is stamped on state and incidents and every read also requires the DEVICE to
+   * still be in that workspace, so a screen moved to another workspace takes none of it along.
+   */
+  `CREATE TABLE IF NOT EXISTS screen_verification_settings (
+     workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+     enabled INTEGER NOT NULL DEFAULT 1,
+     cadence_minutes INTEGER NOT NULL DEFAULT 30,
+     sensitivity TEXT NOT NULL DEFAULT 'normal',
+     persist_minutes INTEGER NOT NULL DEFAULT 10,
+     alert_checks TEXT NOT NULL DEFAULT '["blank","frozen","panel_off"]',
+     updated_by TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  `CREATE TABLE IF NOT EXISTS screen_verification_state (
+     device_id TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+     workspace_id TEXT,
+     state TEXT NOT NULL DEFAULT 'unknown',
+     state_since INTEGER,
+     detail TEXT,
+     open_incident_id INTEGER,
+     last_check_at INTEGER,
+     last_verdict TEXT,
+     panel_power TEXT,
+     panel_input TEXT,
+     panel_source TEXT,
+     panel_at INTEGER,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  `CREATE TABLE IF NOT EXISTS screen_verification_incidents (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+     workspace_id TEXT,
+     kind TEXT NOT NULL,
+     detail TEXT,
+     opened_at INTEGER NOT NULL,
+     confirmed_at INTEGER,
+     last_seen_at INTEGER,
+     observations INTEGER NOT NULL DEFAULT 1,
+     good_streak INTEGER NOT NULL DEFAULT 0,
+     resolved_at INTEGER,
+     resolved_reason TEXT)`,
+  'CREATE INDEX IF NOT EXISTS idx_sv_incidents_ws ON screen_verification_incidents(workspace_id, opened_at)',
+  'CREATE INDEX IF NOT EXISTS idx_sv_incidents_device ON screen_verification_incidents(device_id, opened_at)',
+  `CREATE TABLE IF NOT EXISTS screen_verification_deliveries (
+     channel_id TEXT NOT NULL,
+     incident_id INTEGER NOT NULL REFERENCES screen_verification_incidents(id) ON DELETE CASCADE,
+     problem_sent_at INTEGER,
+     ok_sent_at INTEGER,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     ok_attempts INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (channel_id, incident_id))`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

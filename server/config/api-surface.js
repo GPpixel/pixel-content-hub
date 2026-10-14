@@ -121,6 +121,12 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/alert-channels', mod: './routes/alert-channels', tenancy: true },
   /*
+   * Screen verification (lib/screen-verify): what each screen is actually showing, its incidents,
+   * and the workspace's settings. JWT only alongside alert channels: the settings decide how often
+   * every screen is asked for a screenshot and who is paged.
+   */
+  { path: '/api/screen-verification', mod: './routes/screen-verification', tenancy: true },
+  /*
    * Canva (lib/canva.js). JWT only: a Canva connection is a person's grant to read their designs,
    * and the org integration holds a client secret. The OAuth callback is mounted on its own in
    * server.js, because the browser comes back from canva.com without a bearer token.

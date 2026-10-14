@@ -140,6 +140,7 @@ async function runInline(job) {
   const core = require('./image-ops-core');
   if (job.op === 'metadata') return core.metadata(job.src);
   if (job.op === 'cutout') return core.cutout(job.src, job.dest, job.opts);
+  if (job.op === 'frameMetrics') return core.frameMetrics(job.src);
   if (job.op === 'measureAndThumbnail') return core.measureAndThumbnail(job.src, job.dest, job.width, job.quality);
   return core.writeThumbnail(job.src, job.dest, job.width, job.quality);
 }
@@ -201,4 +202,18 @@ function cutout(src, dest, opts) {
   return submit({ op: 'cutout', src, dest, opts: opts || {} });
 }
 
-module.exports = { metadata, writeThumbnail, measureAndThumbnail, cutout, shutdown, _setJobTimeoutMs };
+/*
+ * Screen verification metrics for one frame (lib/screen-verify/frame-metrics.js). `src` is a path
+ * or a Buffer of image bytes. Shares the one-job-at-a-time queue: a capture is small next to an
+ * upload, and the caller (lib/screen-verify) bounds how many it ever has waiting here.
+ */
+function frameMetrics(src) {
+  return submit({ op: 'frameMetrics', src });
+}
+
+/* How many jobs are queued or running, so a best-effort caller can back off instead of piling on. */
+function pending() {
+  return queue.length + (inFlight ? 1 : 0);
+}
+
+module.exports = { metadata, writeThumbnail, measureAndThumbnail, cutout, frameMetrics, pending, shutdown, _setJobTimeoutMs };

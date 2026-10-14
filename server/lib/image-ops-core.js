@@ -209,4 +209,31 @@ async function cutout(src, destPath, opts = {}) {
   };
 }
 
-module.exports = { metadata, writeThumbnail, measureAndThumbnail, readImage, cutout, MAX_DECODE_PIXELS };
+/*
+ * Screen verification (lib/screen-verify): the handful of numbers that describe what a captured
+ * frame looks like. `src` is a file path (a content thumbnail used as the reference) or the raw
+ * bytes of a screenshot as the player sent it. ON THE WORKER SIDE for the same reason as cutout:
+ * a 1080p capture is two million pixels of arithmetic, and screenshots arrive continuously while
+ * anyone has the dashboard open.
+ *
+ * ⚠️ The bytes are the PLAYER'S, so they get the same header-size refusal as an upload: the 2MB
+ * cap on a screenshot bounds the compressed size, not what a PNG header claims it decodes to.
+ * Only JPEG and PNG are accepted from a player; every player sends one or the other.
+ */
+const FRAME_MAX_PIXELS = 3840 * 2160;
+async function frameMetrics(src) {
+  let img;
+  if (typeof src === 'string') {
+    img = await readImage(src);
+  } else {
+    const buf = Buffer.from(src);
+    const mime = sniffMime(buf);
+    if (mime !== 'image/jpeg' && mime !== 'image/png') throw new Error(`unsupported frame type ${mime || 'unknown'}`);
+    const dims = require('./image-dims').headerDims(buf, mime);
+    if (dims && dims.width * dims.height > FRAME_MAX_PIXELS) throw new Error('frame is too large to analyse');
+    img = await jimp().Jimp.read(buf);
+  }
+  return require('./screen-verify/frame-metrics').metricsFromBitmap(img.bitmap);
+}
+
+module.exports = { metadata, writeThumbnail, measureAndThumbnail, readImage, cutout, frameMetrics, MAX_DECODE_PIXELS };

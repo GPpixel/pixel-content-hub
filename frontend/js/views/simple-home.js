@@ -33,6 +33,7 @@ import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
 import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
 import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText } from '../components/screen-share.js';
 import { renderSign, renderBrand } from './make-sign.js';
+import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -181,7 +182,7 @@ async function renderHome(container) {
     <${tag} class="simple-screen" ${canChange ? `href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}"` : ''}>
       <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
       <span class="simple-screen-name">${esc(d.name)}</span>
-      <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
+      <span class="simple-screen-status ${online(d) ? 'on' : 'off'}" data-sv-plain="${esc(d.id)}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
     </${tag}>`;
     if (!sharing || !canShareTo(d)) return card;
     return `<div class="simple-screen-wrap">${card}
@@ -191,6 +192,15 @@ async function renderHome(container) {
     const tasks = container.querySelector('.simple-tasks');
     const help = tasks && tasks.querySelector('a[href="#/simple/help"]');
     if (help) help.insertAdjacentHTML('beforebegin', `<a class="simple-task" href="#/simple/share"><span class="simple-task-icon">&#128421;&#65039;</span><span><strong>${esc(t('screen_share.start'))}</strong><small>${esc(t('screen_share.simple.task_desc'))}</small></span></a>`);
+  }
+  // Screen verification, in plain words: a screen that is online but showing a blank or frozen
+  // picture says so here instead of "Playing". Silent when there is nothing to say.
+  const states = await loadVerification();
+  if (!document.contains(host)) return;
+  for (const d of devices) {
+    const words = online(d) && !d.plan_paused ? plainStatus(states.get(d.id)) : null;
+    const el = host.querySelector(`[data-sv-plain="${CSS.escape(d.id)}"]`);
+    if (el && words) { el.textContent = words; el.classList.remove('on'); el.classList.add('warn'); }
   }
 }
 
