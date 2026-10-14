@@ -162,6 +162,12 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/bi-connections', mod: './routes/bi-connections', tenancy: true },
   /*
+   * 3.0 "Your data, provably" (routes/trust.js): the data handling report, the outbound connections
+   * ledger, complete exports and "delete everything". JWT only: an export is everything an
+   * organization has, and no API token should be able to take it or end the organization.
+   */
+  { path: '/api/trust', mod: './routes/trust', tenancy: true },
+  /*
    * Automation (lib/automation): inbound hook URLs are credentials that can take over screens, so
    * minting, rotating and test-firing them is a signed-in admin's act. JWT only.
    */

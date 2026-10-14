@@ -378,6 +378,11 @@ export async function render(container) {
         <input type="file" id="importFileInput" accept=".json,.zip" style="display:none">
       </div>
       <div id="importStatus" style="display:none;margin-top:12px;padding:12px;border-radius:var(--radius);font-size:13px"></div>
+      <!-- 3.0 "Your data, provably": where data lives, what leaves, complete exports (views/privacy.js). -->
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <a class="btn btn-secondary btn-sm" href="#/privacy" id="privacyLink">${t('trust.settings_link')}</a>
+        <span style="font-size:12px;color:var(--text-muted)">${t('trust.settings_link_desc')}</span>
+      </div>
     </div>
 
     <!-- Hosted AI credits (org-scoped). Hidden entirely when the server has no platform image

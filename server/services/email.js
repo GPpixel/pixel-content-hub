@@ -191,6 +191,9 @@ function buildSmtpMessage(to, subject, text, html, fromName, headers) {
 }
 
 async function smtpSend(to, subject, text, html, fromName, headers) {
+  // SMTP is not HTTP, so the outbound ledger's diagnostics channels never see it: count it here
+  // (host and port only — lib/outbound-ledger.js).
+  require('../lib/outbound-ledger').note({ host: `${config.smtpHost}:${Number(config.smtpPort) || 25}`, protocol: 'smtp:', feature: 'email' });
   await getSmtpTransporter().sendMail(buildSmtpMessage(to, subject, text, html, fromName, headers));
 }
 

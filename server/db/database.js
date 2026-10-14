@@ -3157,6 +3157,58 @@ const migrations = [
      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
      linked_at INTEGER)`,
   'CREATE INDEX IF NOT EXISTS idx_migration_screens_ws ON migration_screens(workspace_id, device_id)',
+  /*
+   * 3.0 "Your data, provably" (docs/trust.md).
+   *
+   * outbound_ledger: one row per UTC day, external host, feature and workspace (lib/outbound-ledger.js).
+   * HOST ONLY: no path, query string, header or body is ever stored. workspace_id / organization_id
+   * are '' (not NULL) for instance-level traffic so the primary key can deduplicate them.
+   */
+  `CREATE TABLE IF NOT EXISTS outbound_ledger (
+     day TEXT NOT NULL,
+     host TEXT NOT NULL,
+     feature TEXT NOT NULL,
+     category TEXT NOT NULL DEFAULT 'other',
+     scope TEXT NOT NULL DEFAULT 'internet',
+     workspace_id TEXT NOT NULL DEFAULT '',
+     organization_id TEXT NOT NULL DEFAULT '',
+     count INTEGER NOT NULL DEFAULT 0,
+     bytes_in INTEGER NOT NULL DEFAULT 0,
+     bytes_out INTEGER NOT NULL DEFAULT 0,
+     errors INTEGER NOT NULL DEFAULT 0,
+     first_seen INTEGER NOT NULL,
+     last_seen INTEGER NOT NULL,
+     PRIMARY KEY (day, host, feature, workspace_id))`,
+  'CREATE INDEX IF NOT EXISTS idx_outbound_ledger_org ON outbound_ledger(organization_id, day)',
+  'CREATE INDEX IF NOT EXISTS idx_outbound_ledger_day ON outbound_ledger(day)',
+  // Complete exports (lib/trust/export.js): a background job per request; the zip lives in
+  // DATA_DIR/exports until expires_at. Only a hash of the download key is kept.
+  `CREATE TABLE IF NOT EXISTS data_exports (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL CHECK (kind IN ('org','user')),
+     organization_id TEXT,
+     user_id TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','ready','failed','expired')),
+     file_name TEXT,
+     bytes INTEGER,
+     manifest TEXT,
+     error TEXT,
+     download_hash TEXT,
+     downloads INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     started_at INTEGER,
+     finished_at INTEGER,
+     expires_at INTEGER)`,
+  'CREATE INDEX IF NOT EXISTS idx_data_exports_user ON data_exports(user_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_data_exports_org ON data_exports(organization_id, created_at)',
+  // "Delete everything": an org owner's scheduled deletion, executed after the grace period by
+  // lib/trust/org-deletion.js through lib/user-deletion.js deleteOrgCascade. Cancelling removes the row.
+  `CREATE TABLE IF NOT EXISTS org_deletion_requests (
+     organization_id TEXT PRIMARY KEY,
+     org_name TEXT NOT NULL,
+     requested_by TEXT,
+     requested_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     execute_after INTEGER NOT NULL)`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
