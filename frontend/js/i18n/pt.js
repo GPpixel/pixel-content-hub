@@ -1732,4 +1732,10 @@ export default {
   'stats.prompt.share': 'Compartilhar',
   'stats.prompt.no': 'Não, obrigado',
   'stats.prompt.thanks': 'Obrigado: estatísticas de instalação compartilhadas',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'Espaço de trabalho',
+  'simple.menu.more_workspaces': 'Mais {n} na visão avançada',
+  'simple.home.in_workspace': 'Em {name}',
+  'simple.home.title_viewer': 'Suas telas num relance',
+  'simple.home.viewer_note': 'Você pode ver este espaço de trabalho. Para mudar o que as telas mostram, peça acesso de edição a um administrador do espaço.',
 };

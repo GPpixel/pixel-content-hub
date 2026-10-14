@@ -2448,4 +2448,10 @@ export default {
   'stats.prompt.share': '共有する',
   'stats.prompt.no': '共有しない',
   'stats.prompt.thanks': 'ありがとうございます。インストール統計を共有します',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'ワークスペース',
+  'simple.menu.more_workspaces': 'ほか {n} 件は詳細表示で',
+  'simple.home.in_workspace': '{name}',
+  'simple.home.title_viewer': '画面の一覧',
+  'simple.home.viewer_note': 'このワークスペースは閲覧のみ可能です。画面の表示内容を変更するには、ワークスペースの管理者に編集権限を依頼してください。',
 };

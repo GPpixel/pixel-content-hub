@@ -1359,4 +1359,10 @@ export default {
   'stats.prompt.share': '共享',
   'stats.prompt.no': '不用了',
   'stats.prompt.thanks': '谢谢，已开始共享安装统计',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': '工作区',
+  'simple.menu.more_workspaces': '另有 {n} 个，请在高级视图中查看',
+  'simple.home.in_workspace': '当前：{name}',
+  'simple.home.title_viewer': '屏幕一览',
+  'simple.home.viewer_note': '您可以查看此工作区。如需更改屏幕显示的内容，请向工作区管理员申请编辑权限。',
 };

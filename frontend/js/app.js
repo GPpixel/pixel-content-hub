@@ -553,6 +553,8 @@ function route() {
   // Onboarding for new users
   // 3.0: #/add-screen is the same guide, for every later screen (Simple view's Add screen).
   if ((hash === '#/onboarding' || hash === '#/add-screen') && isAuthenticated()) {
+    // A view-only member cannot add a screen; Simple view does not offer it, so a stray link goes home.
+    if (hash === '#/add-screen' && !simpleHome.simpleCanChange(getCurrentUser())) { window.location.hash = '#/'; return; }
     simpleHome.removeBackBar();
     sidebar.style.display = 'none';
     if (mainWrapper) mainWrapper.style.marginLeft = '0';

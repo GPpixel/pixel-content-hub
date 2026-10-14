@@ -5674,4 +5674,10 @@ export default {
   'stats.prompt.share': "Share",
   'stats.prompt.no': "No thanks",
   'stats.prompt.thanks': "Thank you — sharing install statistics",
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'Workspace',
+  'simple.menu.more_workspaces': '{n} more in Advanced view',
+  'simple.home.in_workspace': 'In {name}',
+  'simple.home.title_viewer': 'Your screens at a glance',
+  'simple.home.viewer_note': 'You can view this workspace. To change what screens show, ask a workspace admin for edit access.',
 };

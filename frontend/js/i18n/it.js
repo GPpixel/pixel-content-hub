@@ -1690,4 +1690,10 @@ export default {
   'stats.prompt.share': 'Condividi',
   'stats.prompt.no': 'No, grazie',
   'stats.prompt.thanks': 'Grazie: statistiche di installazione condivise',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'Area di lavoro',
+  'simple.menu.more_workspaces': 'Altre {n} nella vista avanzata',
+  'simple.home.in_workspace': 'In {name}',
+  'simple.home.title_viewer': 'I tuoi schermi a colpo d’occhio',
+  'simple.home.viewer_note': 'Puoi visualizzare quest’area di lavoro. Per cambiare cosa mostrano gli schermi, chiedi a un amministratore dell’area l’accesso in modifica.',
 };

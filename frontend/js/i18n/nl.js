@@ -3413,4 +3413,10 @@ export default {
   'stats.prompt.share': 'Delen',
   'stats.prompt.no': 'Nee, bedankt',
   'stats.prompt.thanks': 'Bedankt, installatiestatistieken worden gedeeld',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'Werkruimte',
+  'simple.menu.more_workspaces': 'Nog {n} in de geavanceerde weergave',
+  'simple.home.in_workspace': 'In {name}',
+  'simple.home.title_viewer': 'Je schermen in één oogopslag',
+  'simple.home.viewer_note': 'Je kunt deze werkruimte bekijken. Vraag een beheerder van de werkruimte om bewerkrechten om te wijzigen wat schermen tonen.',
 };

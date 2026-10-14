@@ -2448,4 +2448,10 @@ export default {
   'stats.prompt.share': 'Partager',
   'stats.prompt.no': 'Non merci',
   'stats.prompt.thanks': 'Merci : les statistiques d’installation sont partagées',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'Espace de travail',
+  'simple.menu.more_workspaces': '{n} de plus dans la vue avancée',
+  'simple.home.in_workspace': 'Dans {name}',
+  'simple.home.title_viewer': 'Vos écrans en un coup d’œil',
+  'simple.home.viewer_note': 'Vous pouvez consulter cet espace de travail. Pour changer ce qu’affichent les écrans, demandez un accès en modification à un administrateur de l’espace.',
 };

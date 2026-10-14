@@ -544,4 +544,10 @@ export default {
   'stats.prompt.share': 'साझा करें',
   'stats.prompt.no': 'नहीं, धन्यवाद',
   'stats.prompt.thanks': 'धन्यवाद — इंस्टॉलेशन आँकड़े साझा किए जा रहे हैं',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'वर्कस्पेस',
+  'simple.menu.more_workspaces': '{n} और, उन्नत व्यू में',
+  'simple.home.in_workspace': '{name} में',
+  'simple.home.title_viewer': 'आपकी स्क्रीन एक नज़र में',
+  'simple.home.viewer_note': 'आप यह वर्कस्पेस देख सकते हैं। स्क्रीन पर दिखने वाली चीज़ें बदलने के लिए, वर्कस्पेस के एडमिन से संपादन की अनुमति माँगें।',
 };

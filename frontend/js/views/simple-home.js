@@ -23,6 +23,7 @@ import { plansVisible } from '../components/plan-nudges.js';
 import { isPlatformAdmin, inManagerApp, openOutsideApp } from '../utils.js';
 import { renderStatsPrompt } from './dashboard.js';
 import { publishOrSubmit } from '../components/release.js';
+import { switchWorkspaceTo } from '../components/corporate-ui.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -54,6 +55,7 @@ function shell(container, inner) {
         <details class="simple-account">
           <summary>${esc(u.name || u.email || '')}</summary>
           <div class="simple-account-menu">
+            ${workspaceMenu(u)}
             ${isPlatformAdmin(u) ? (inManagerApp()
               ? `<button type="button" data-outside="/app#/platform/overview">${esc(t('simple.menu.admin'))} &#8599;</button>`
               : `<a href="#/platform/overview">${esc(t('simple.menu.admin'))}</a>`) : ''}
@@ -72,12 +74,37 @@ function shell(container, inner) {
   container.querySelector('[data-simple-mode="advanced"]').addEventListener('click', () => setUiMode('advanced'));
   container.querySelectorAll('[data-outside]').forEach((b) => b.addEventListener('click', () => openOutsideApp(b.dataset.outside)));
   container.querySelector('[data-change-server]')?.addEventListener('click', () => window.STManager.changeServer());
+  container.querySelectorAll('[data-switch-ws]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { await switchWorkspaceTo(b.dataset.switchWs, '#/'); }
+    catch (err) { b.disabled = false; showToast(err.message, 'error'); }
+  }));
   container.querySelector('[data-simple-signout]').addEventListener('click', () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     window.location.hash = '#/login';
     window.location.reload();
   });
+}
+
+/** "Org · Workspace" — workspaces are often all called "Default", so the organization tells them apart. */
+function workspaceLabel(w) {
+  return w.organization_name && w.organization_name !== w.name ? `${w.organization_name} · ${w.name}` : w.name;
+}
+
+/** The account menu's workspace section: where you are, and the others you can switch to. */
+function workspaceMenu(u) {
+  const others = switchableWorkspaces(u);
+  if (!others.length) return '';
+  const cur = currentWorkspace();
+  const label = workspaceLabel;
+  const shown = others.slice(0, SWITCH_MAX);
+  return `
+    <div class="simple-menu-label">${esc(t('simple.menu.workspace'))}</div>
+    ${cur ? `<div class="simple-menu-current">&#10003; ${esc(label(cur))}</div>` : ''}
+    ${shown.map((w) => `<button type="button" data-switch-ws="${esc(w.id)}">${esc(label(w))}</button>`).join('')}
+    ${others.length > shown.length ? `<div class="simple-menu-note">${esc(t('simple.menu.more_workspaces', { n: others.length - shown.length }))}</div>` : ''}
+    <hr class="simple-menu-sep">`;
 }
 
 /** Guide frame: progress, icon, title, card, footer. Same look as views/onboarding.js. */
@@ -102,13 +129,17 @@ function guideFrame({ step, total, icon, title, body, back = true, next = null, 
 // ---------------------------------------------------------------------------------------------
 
 async function renderHome(container) {
+  const canChange = simpleCanChange();
+  const multiWs = switchableWorkspaces(cachedUser()).length > 0;
   shell(container, `
     <div id="simpleAdminNotices"></div>
-    <h1 class="simple-h1">${esc(t('simple.home.title'))}</h1>
+    <h1 class="simple-h1">${esc(t(canChange ? 'simple.home.title' : 'simple.home.title_viewer'))}</h1>
+    ${multiWs && currentWorkspace() ? `<p class="simple-where">${esc(t('simple.home.in_workspace', { name: workspaceLabel(currentWorkspace()) }))}</p>` : ''}
+    ${canChange ? '' : `<p class="simple-muted simple-viewer-note">${esc(t('simple.home.viewer_note'))}</p>`}
     <div class="simple-tasks">
-      <a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
+      ${canChange ? `<a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
-      <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>
+      <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>` : ''}
       ${canManageTeam() ? `<a class="simple-task" href="#/simple/team"><span class="simple-task-icon">&#128101;</span><span><strong>${esc(t('simple.task.team'))}</strong><small>${esc(t('simple.task.team_desc'))}</small></span></a>` : ''}
       <a class="simple-task" href="#/simple/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
     </div>
@@ -122,15 +153,17 @@ async function renderHome(container) {
   if (!document.contains(host)) return;
   if (!devices.length) {
     host.innerHTML = `<div class="simple-empty"><p>${esc(t('simple.home.no_screens'))}</p>
-      <a class="btn btn-primary" href="#/add-screen">${esc(t('simple.task.add'))}</a></div>`;
+      ${canChange ? `<a class="btn btn-primary" href="#/add-screen">${esc(t('simple.task.add'))}</a>` : ''}</div>`;
     return;
   }
+  // A view-only member gets the same cards, without the link into Change.
+  const tag = canChange ? 'a' : 'div';
   host.innerHTML = devices.map((d) => `
-    <a class="simple-screen" href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}">
+    <${tag} class="simple-screen" ${canChange ? `href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}"` : ''}>
       <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
       <span class="simple-screen-name">${esc(d.name)}</span>
       <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
-    </a>`).join('');
+    </${tag}>`).join('');
 }
 
 /*
@@ -170,6 +203,21 @@ function currentWorkspace() {
   return (u.accessible_workspaces || []).find((w) => w.id === u.current_workspace_id) || null;
 }
 function canManageTeam() { const w = currentWorkspace(); return !!(w && w.can_admin); }
+
+/** A view-only member (workspace_viewer) can look but not change. The server enforces it; this only
+ *  keeps Simple view from offering tasks that would end in an error. Same rule as content-library. */
+export function simpleCanChange(u = cachedUser()) {
+  return !(u && u.current_workspace_role === 'workspace_viewer' && !u.acting_as);
+}
+
+/** Workspaces to offer in the account menu. Platform staff can see every workspace on the server;
+ *  Simple view lists only the ones they belong to (Advanced has the full, searchable switcher). */
+const SWITCH_MAX = 8;
+function switchableWorkspaces(u) {
+  const all = (u && u.accessible_workspaces) || [];
+  const mine = isPlatformAdmin(u) || (u && u.role === 'platform_operator') ? all.filter((w) => w.workspace_role) : all;
+  return mine.filter((w) => w.id !== u.current_workspace_id);
+}
 
 const ROLE_KEYS = {
   workspace_admin: 'simple.team.role_admin', workspace_editor: 'simple.team.role_editor', workspace_viewer: 'simple.team.role_viewer',
@@ -685,7 +733,26 @@ export function render(container, hash = window.location.hash || '#/') {
   removeBackBar();
   container.classList.add('simple-mode-app');
   document.documentElement.classList.add('simple-shell');
+  // These pages draw from the cached account (localStorage). After a workspace switch or a role
+  // change the fresh /me lands a moment later (app.js refreshCurrentUser → 'user-refreshed'): draw
+  // home and team again then, or they would show the previous workspace's name, role and tasks.
+  // Change and Upload are left alone so a half-finished task is not wiped.
+  const accessKey = (u) => (u ? `${u.current_workspace_id}|${u.current_workspace_role}|${(u.accessible_workspaces || []).length}` : '');
+  const drawnFor = accessKey(cachedUser());
+  const onRefreshed = (e) => {
+    const h = window.location.hash || '#/';
+    if (accessKey(e.detail) === drawnFor || !isSimpleRoute(h)) return;
+    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload')) return;
+    render(container, h);
+  };
+  window.addEventListener('user-refreshed', onRefreshed);
+  cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
+  // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
+  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload'))) {
+    window.location.replace('#/');
+    return undefined;
+  }
   if (hash.startsWith('#/simple/change')) return renderChange(container, q.get('device'));
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/help')) return renderHelp(container);

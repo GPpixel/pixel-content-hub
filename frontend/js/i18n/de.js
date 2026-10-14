@@ -1815,4 +1815,10 @@ export default {
   'stats.prompt.share': 'Teilen',
   'stats.prompt.no': 'Nein, danke',
   'stats.prompt.thanks': 'Danke – Installationsstatistik wird geteilt',
+  // 3.0: Simple view, workspaces and view-only members
+  'simple.menu.workspace': 'Arbeitsbereich',
+  'simple.menu.more_workspaces': '{n} weitere in der erweiterten Ansicht',
+  'simple.home.in_workspace': 'In {name}',
+  'simple.home.title_viewer': 'Ihre Bildschirme im Überblick',
+  'simple.home.viewer_note': 'Sie können diesen Arbeitsbereich ansehen. Um zu ändern, was Bildschirme zeigen, bitten Sie einen Admin des Arbeitsbereichs um Bearbeitungsrechte.',
 };
