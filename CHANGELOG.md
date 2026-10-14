@@ -161,6 +161,49 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
   Kiosk with Autoplay Audio), skipping the tap screen; anywhere else it behaves as before (#627).
   See docs/web-player.md.
 
+- **Accessibility checker.** ScreenTinker checks what goes on your screens: text contrast against the
+  real background (WCAG 2.2 AA, including text over photos), text too small for the viewing distance
+  (ISO 9241-303), videos and GIFs that flash more than three times a second (WCAG 2.3.1), and videos with
+  sound but no captions. An Accessibility page lists problems worst first with one-click fixes; publishing
+  warns first ("Publish anyway"), and admins can optionally block publishing with errors. Every built-in
+  sign design meets AA contrast with any brand colours. **Generate captions** transcribes a video's audio
+  with the speech-to-text service you choose (OpenAI or a local Whisper server) into an editable subtitle
+  track; nothing is sent until an admin sets one up. See docs/accessibility.md.
+- **Experiments.** A/B test what's on your screens: show two to four versions of a sign, menu panel or
+  video in place of one playlist item, by location or by time of day, judged on sales imported read-only
+  from Square or Shopify, QR scans, audience looks or your own CSV, with a plain-language verdict and a 95%
+  interval, then roll out the winner in one click. Players need no update; only hourly totals are
+  imported. See docs/experiments.md.
+- **Energy & carbon.** Insights → Energy estimates electricity use and CO2e per screen, group and
+  workspace, what power schedules saved, and where more could be saved, with CSV and an ESG appendix.
+  Wattage from your figures, 52 cited datasheet/EU-label panels, or an EU-label estimate by size; carbon
+  from Ember's country averages or your own figure. Clearly labelled estimates. See docs/energy.md.
+- **Private AI.** Run AI on your own hardware (Ollama, LM Studio, llama.cpp, vLLM, LocalAI or any
+  OpenAI-compatible server) with a "data stays on your network" badge and an optional "Only allow private
+  AI" policy per organization. New on top: **Set up my screens with AI** (describe your place, get 3–6
+  signs in your brand) and **Translate** (signs and decks into other languages, reviewed by a person; each
+  screen shows one language or rotates). See docs/private-ai.md.
+- **Site cache.** A small always-on box at a site (Raspberry Pi, NUC or Docker) downloads media once and
+  serves it to every screen on that network; screens check each file's sha256 and fall back to the
+  server, so a cache can save bandwidth but never blank a screen. Web and Android players. See
+  docs/site-cache.md.
+- **Switch to ScreenTinker.** New accounts are asked in the first-run guide whether they're coming from
+  another app; imports media, playlists, layouts, schedules and screens from Xibo, Yodeck, ScreenCloud,
+  Screenly and Anthias through their official APIs, or a zip of media with optional CSVs from anything
+  else. Background, resumable, never duplicates; old screens arrive as placeholders ready to pair; API
+  keys are deleted when the import ends. See docs/migrate.md.
+- **Your data, provably.** Data & privacy pages (platform and organization) built from the running
+  configuration: where data lives, what is encrypted, every integration and what it sends where,
+  retention, sign-in security, and whether everything stays on this server; an outbound connections log
+  of every external host contacted and why; a complete organization export (and a personal export);
+  organization deletion after a 14-day grace period; an optional public printable `/trust` page.
+  See docs/trust.md.
+- **Slides: edit like PowerPoint.** Resize handles, multi-select and marquee, smart guides and snapping,
+  arrow-key nudge, bring to front / send to back, align and distribute, cut/copy/paste/duplicate,
+  double-click to type on the slide, and undo/redo for every change. See docs/slides-editor.md.
+- **Platform overview: this server.** Disk, CPU and memory of the machine running ScreenTinker, with a
+  warning under "Needs your attention" when the disk or memory runs low.
+
 ### Changed
 
 - "Screen" is the user-facing noun (Screens, Add screen, Connect screen).
@@ -185,6 +228,11 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
 - **ScreenTinker Manager: password sign-in threw in the app** (a 3.0 pre-release regression).
 - **Simple view:** workspace switching, read-only handling for view-only members, and the
   "No TV handy?" card on phones.
+
+- **Slides: dragging an element on a slide with a background photo moved a different element** (or the
+  photo) until you let go; it now moves the one you selected.
+- **Settings: the two-factor, passkey and sign-in cards no longer throw** when you leave the page while
+  they load.
 
 ### Security
 
