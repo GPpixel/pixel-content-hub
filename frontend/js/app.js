@@ -38,6 +38,7 @@ import * as onboarding from './views/onboarding.js';
 import * as help from './views/help.js';
 import * as teams from './views/teams.js';
 import * as admin from './views/admin.js';
+import * as privacy from './views/privacy.js';   // 3.0 "Your data, provably" (#/privacy)
 import * as adminPlayerDebug from './views/admin-player-debug.js';
 import * as designer from './views/designer.js';
 import * as playlists from './views/playlists.js';
@@ -628,7 +629,7 @@ function route() {
     link.classList.remove('active');
     if (hash === '#/' && link.dataset.view === 'dashboard') link.classList.add('active');
     else if (hash.startsWith('#/content') && link.dataset.view === 'content') link.classList.add('active');
-    else if (hash.startsWith('#/settings') && link.dataset.view === 'settings') link.classList.add('active');
+    else if ((hash.startsWith('#/settings') || hash === '#/privacy') && link.dataset.view === 'settings') link.classList.add('active');
     else if (hash.startsWith('#/billing') && link.dataset.view === 'billing') link.classList.add('active');
     else if ((hash.startsWith('#/layout') || hash === '#/layouts') && link.dataset.view === 'layouts') link.classList.add('active');
     else if ((hash === '#/playlists' || hash.startsWith('#/playlists/')) && link.dataset.view === 'playlists') link.classList.add('active');
@@ -804,6 +805,10 @@ function route() {
   } else if (hash.startsWith('#/platform/')) {
     currentView = admin;
     admin.render(app, hash.slice(11).split(/[/?]/)[0]);
+  } else if (hash === '#/privacy') {
+    // 3.0 Settings -> Data & privacy (docs/trust.md).
+    currentView = privacy;
+    privacy.render(app);
   } else if (hash === '#/settings' || hash.startsWith('#/settings?')) {
     // `?` prefix too: a credit-pack Checkout returns to `#/settings?credits=success` (the same trap
     // the #/billing route below documents). Not a bare startsWith, so no future #/settings-x matches.

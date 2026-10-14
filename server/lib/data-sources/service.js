@@ -133,7 +133,12 @@ async function syncDataSource(sourceOrId, force = false) {
   if (!row) {
     throw new Error('Data source not found');
   }
+  // The outbound ledger attributes this refresh's requests to the source's workspace, including the
+  // background poller's, which serves no request (lib/outbound-ledger.js).
+  return require('../outbound-ledger').withContext({ workspaceId: row.workspace_id || null }, () => syncDataSourceRow(row, force));
+}
 
+async function syncDataSourceRow(row, force) {
   if (force && row.workspace_id && !checkForcedSyncBudget(row.workspace_id)) {
     throw Object.assign(new Error('Rate limit exceeded for manual syncs in this workspace'), { code: 'rate-limit' });
   }

@@ -491,7 +491,15 @@ function guardedRequest(urlString, options = {}) {
     }, reject);
   });
 
-  return follow(urlString, maxRedirects);
+  /*
+   * The outbound ledger (lib/outbound-ledger.js) names the feature behind a request from its
+   * caller's stack. The request itself is made in a .then() after DNS vetting, where the caller is
+   * no longer on the stack, so the attribution is read HERE, synchronously, and carried along.
+   * Nothing about the request changes; with the ledger not installed this is a plain call.
+   */
+  const ledger = require('./outbound-ledger');
+  const ctx = ledger.captureContext();
+  return ctx ? ledger.withContext(ctx, () => follow(urlString, maxRedirects)) : follow(urlString, maxRedirects);
 }
 
 module.exports = {

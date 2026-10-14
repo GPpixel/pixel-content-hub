@@ -160,6 +160,15 @@ const DASHBOARD_CSP = {
  */
 app.use(require('./lib/corporate/actor').httpMarker);
 
+/*
+ * 3.0 outbound connections ledger (lib/outbound-ledger.js, docs/trust.md): counts every external
+ * host this process contacts, per day and feature, host only. Listens on Node's diagnostics
+ * channels, so no request is altered; the middleware only lets a fetch made while serving a request
+ * name that request's workspace.
+ */
+require('./lib/outbound-ledger').install({ db: require('./db/database').db });
+app.use(require('./lib/outbound-ledger').middleware);
+
 app.use(helmet({
   // The dashboard policy, on every response; the middleware below strips it from the render paths
   // that need inline script and set their own (stripped rather than never set, so a new route is
@@ -1415,6 +1424,21 @@ app.get(['/r/status', '/r/:code'], rateLimit(60000, 60), (req, res) => {
 });
 app.use('/api/public/requests', rateLimit(60000, 1500), require('./routes/request-public'));
 /*
+ * 3.0 "Your data, provably" (routes/trust.js, docs/trust.md). The public data handling page and its
+ * JSON answer 404 until a platform admin switches the page on. The export download is public because
+ * a browser download cannot send an Authorization header: its short-lived key is the credential, and
+ * the person who asked must still have the access they asked with.
+ */
+{
+  const trustRoutes = require('./routes/trust');
+  app.get('/api/public/trust', rateLimit(60000, 60), trustRoutes.publicJson);
+  app.get('/trust', rateLimit(60000, 60), trustRoutes.publicPage((req, res) => {
+    res.set('X-Robots-Tag', 'noindex');
+    res.sendFile(path.join(config.frontendDir, 'trust.html'));
+  }));
+  app.get('/api/public/trust-export/:id', rateLimit(60000, 20), trustRoutes.download);
+}
+/*
  * View-only display access (lib/view-access.js, routes/view.js): /view/<token> and the network-only
  * /view/screen/<id>, plus the read-only payload they poll. GET only, no session, no device row. The
  * token is the credential, so each IP gets one bucket per route shape (lib/limit-paths.js), not one
@@ -1493,6 +1517,10 @@ app.use('/api/provision', rateLimit(60000, 5));
 // Rate limit expensive operations
 app.use('/api/status/export', rateLimit(60000, 5)); // 5 exports per minute
 app.use('/api/status/import', rateLimit(60000, 3)); // 3 imports per minute
+// 3.0 complete exports and "delete everything" (routes/trust.js). The daily export cap lives in the
+// database (lib/trust/export.js); these only stop a client hammering the endpoints.
+app.use('/api/trust/exports', rateLimit(60000, 20));
+app.use('/api/trust/org-deletion', rateLimit(60000, 10));
 /*
  * ⚠️ A CHUNKED UPLOAD IS MANY REQUESTS BY CONSTRUCTION, so it cannot share the general content
  * budget. At the 1 MiB chunk size (lib/upload-session) a 500 MB file is ~500 PATCHes, and on a
@@ -2811,6 +2839,9 @@ startAgencyDigest();
 // 3.0 content freshness: the weekly "what is going stale" digest. Daily check at 09:00 UTC, once a
 // week per person; does nothing without a mail transport and APP_URL (services/freshness-digest.js).
 try { require('./services/freshness-digest').startFreshnessDigest(); } catch (e) { console.warn(`[freshness] digest not scheduled: ${e && e.message}`); }
+// 3.0 complete exports and scheduled organization deletions (lib/trust): resume queued exports,
+// expire old archives, carry out deletions whose grace period has passed. Hourly or slower.
+try { require('./lib/trust/export').start(); require('./lib/trust/org-deletion').start(); } catch (e) { console.warn(`[trust] background jobs not scheduled: ${e && e.message}`); }
 
 // Off-main-thread WAL checkpointer: disables inline auto-checkpoint on the main connection
 // (the ~60s p99 spike = a synchronous fsync-heavy checkpoint on the loop) and runs PASSIVE
@@ -2829,6 +2860,7 @@ function gracefulShutdown(sig) {
   console.log(`[shutdown] ${sig} — stopping WAL checkpointer + closing DB`);
   Promise.resolve(stopWalCheckpointer()).catch(() => {}).finally(() => {
     try { require('./lib/status-log-writer').flush(); } catch (_) {}
+    try { require('./lib/outbound-ledger').flush(); } catch (_) {}
     try { require('./db/database').db.close(); } catch (_) {}
     process.exit(0);
   });

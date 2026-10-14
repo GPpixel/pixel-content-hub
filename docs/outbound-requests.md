@@ -57,3 +57,6 @@ loopback ports. That is fine for a single-household install and not for a shared
   [templates.md](templates.md)).
 - On a self-hosted instance, the "not allowed" message names these settings, so the next person
   finds this page.
+
+- Every outbound request is also counted, host only, in the outbound connections ledger: see
+  [trust.md](trust.md) (Platform → Data & privacy).

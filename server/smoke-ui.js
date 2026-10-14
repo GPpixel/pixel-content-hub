@@ -36,7 +36,9 @@ const VIEWS = ['#/', '#/content', '#/playlists', '#/layouts', '#/widgets', '#/sc
   '#/walls', '#/reports', '#/kiosk', '#/designer', '#/activity', '#/members', '#/help', '#/settings',
   '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms', '#/energy', '#/experiments', '#/experiments/new',
   // 3.0 Private AI: with no AI set up, both explain instead of failing.
-  '#/ai-setup', '#/translate'];
+  '#/ai-setup', '#/translate',
+  // 3.0 Your data, provably.
+  '#/privacy', '#/platform/privacy'];
 
 function findChrome() {
   if (process.env.CHROME && fs.existsSync(process.env.CHROME)) return process.env.CHROME;

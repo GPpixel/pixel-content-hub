@@ -13,6 +13,16 @@ import { openTypeToConfirmModal } from '../components/type-to-confirm-modal.js';
 // second mapper.
 import { mapMutationError } from './workspace-members.js';
 import { mountInstanceStorage } from '../components/storage-settings.js';
+import { reportHtml, mountOutbound, mountPublicToggle } from '../components/trust-report.js';
+
+async function loadTrustInstance() {
+  const el = document.getElementById('trustInstance');
+  if (!el) return;
+  try { el.innerHTML = reportHtml(await api.get('/trust/report?scope=instance')); }
+  catch (e) { el.innerHTML = `<p style="color:var(--text-muted)">${esc(e.message)}</p>`; }
+  mountOutbound(document.getElementById('trustOutboundInstance'), { instance: true });
+  mountPublicToggle(document.getElementById('trustPublic'));
+}
 
 const headers = () => ({ Authorization: `Bearer ${localStorage.getItem('token')}`, 'Content-Type': 'application/json' });
 // A refused request must reject, not resolve.
@@ -182,6 +192,15 @@ ${section(t('admin.orgs.title'), t('admin.orgs.desc'), `
       <div id="stockKeysSection">${section(esc(t('stock.admin.title')), esc(t('stock.admin.desc')), `<div id="stockKeysForm">${loading()}</div>`)}</div>
       ${section(esc(t('platform.system.player_debug')), esc(t('platform.system.player_debug_desc')), `<a class="btn btn-secondary" href="#/admin/player-debug">${esc(t('platform.system.player_debug_open'))} &rarr;</a>`)}`,
     load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); loadStockKeys(); },
+  },
+  // 3.0 "Your data, provably" (components/trust-report.js, docs/trust.md): the instance's data
+  // handling report, every external host contacted, and the optional public /trust page.
+  privacy: {
+    tab: 'platform.tab.privacy', title: 'trust.platform.title', subtitle: 'trust.platform.subtitle',
+    html: () => `<div id="trustInstance">${loading()}</div>
+      ${section(esc(t('trust.out.title')), esc(t('trust.out.desc_instance')), '<div id="trustOutboundInstance"></div>')}
+      ${section(esc(t('trust.pub.title_admin')), '', '<div id="trustPublic"></div>')}`,
+    load: () => loadTrustInstance(),
   },
   cleanup: {
     tab: 'platform.tab.cleanup', title: 'platform.cleanup.title', subtitle: 'platform.cleanup.subtitle',

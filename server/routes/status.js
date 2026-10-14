@@ -206,43 +206,34 @@ router.get('/backup', (req, res) => {
   res.download(dbPath, `remotedisplay-backup-${new Date().toISOString().split('T')[0]}.db`);
 });
 
-// User data export (own data only)
-router.get('/export', async (req, res) => {
-  const token = req.query.token;
-  if (!token) return res.status(401).json({ error: 'Token required' });
-
-  let userId;
-  let workspaceId;
-  try {
-    const session = resolveSessionUser(token);
-    // For a break-glass identity this is the synthetic recovery id, which has no users
-    // row - the lookup below then 404s exactly as the inline verify did before.
-    userId = session.user.id;
-    // Re-validate the JWT's workspace claim against current membership (stale-access), then fall back.
-    workspaceId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
-    if (!userId) return res.status(401).json({ error: 'Invalid token' });
-  } catch (err) {
-    if (err.code === 'user_not_found') return res.status(404).json({ error: 'User not found' });
-    return denySession(res, err);
-  }
-
+/*
+ * The data of one export in the screentinker-export-v2 format: the person's own resources
+ * (byWorkspace false — GET /export), or every resource of one workspace (byWorkspace true — used by
+ * the complete organization export, which writes one re-importable export.json per workspace).
+ * Returns null when the user row is gone.
+ */
+function collectExportData({ userId, workspaceId, byWorkspace = false }) {
   // Re-read with the export's own column list (it needs created_at, which the session
   // resolver doesn't select).
   const user = db.prepare('SELECT id, email, name, role, auth_provider, plan_id, created_at FROM users WHERE id = ?').get(userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user) return null;
+  // The rows this export covers: the person's own (the original GET /export), or one whole
+  // workspace's (3.0 complete organization export, lib/trust/export.js). Never interpolated from input.
+  const col = byWorkspace ? 'workspace_id' : 'user_id';
+  const key = byWorkspace ? workspaceId : userId;
 
-  const devices = db.prepare('SELECT id, name, status, ip_address, android_version, app_version, screen_width, screen_height, tags, created_at FROM devices WHERE user_id = ?').all(userId);
+  const devices = db.prepare(`SELECT id, name, status, ip_address, android_version, app_version, screen_width, screen_height, tags, created_at FROM devices WHERE ${col} = ?`).all(key);
   const deviceIds = devices.map(d => d.id);
   const devicePlaceholders = deviceIds.map(() => '?').join(',') || "'__none__'";
 
-  const content = db.prepare('SELECT id, filename, mime_type, file_size, duration_sec, remote_url, width, height, created_at FROM content WHERE user_id = ?').all(userId);
-  const widgets = db.prepare('SELECT id, widget_type, name, config, created_at FROM widgets WHERE user_id = ?').all(userId);
-  const layouts = db.prepare('SELECT id, name, width, height, is_template, template_category, created_at FROM layouts WHERE user_id = ? AND is_template = 0').all(userId);
+  const content = db.prepare(`SELECT id, filename, mime_type, file_size, duration_sec, remote_url, width, height, created_at FROM content WHERE ${col} = ?`).all(key);
+  const widgets = db.prepare(`SELECT id, widget_type, name, config, created_at FROM widgets WHERE ${col} = ?`).all(key);
+  const layouts = db.prepare(`SELECT id, name, width, height, is_template, template_category, created_at FROM layouts WHERE ${col} = ? AND is_template = 0`).all(key);
   const layoutIds = layouts.map(l => l.id);
   const layoutPlaceholders = layoutIds.map(() => '?').join(',') || "'__none__'";
   const layoutZones = layoutIds.length ? db.prepare(`SELECT * FROM layout_zones WHERE layout_id IN (${layoutPlaceholders})`).all(...layoutIds) : [];
 
-  const playlists = db.prepare('SELECT id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate FROM playlists WHERE user_id = ?').all(userId)
+  const playlists = db.prepare(`SELECT id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate FROM playlists WHERE ${col} = ?`).all(key)
     .map(({ corporate, ...p }) => (corporate ? { ...p, corporate: 1 } : p));
   const playlistIds = playlists.map(p => p.id);
   const playlistPlaceholders = playlistIds.map(() => '?').join(',') || "'__none__'";
@@ -276,21 +267,21 @@ router.get('/export', async (req, res) => {
     }
   } catch (_) { /* no corporate tables */ }
 
-  const schedules = db.prepare('SELECT id, device_id, group_id, zone_id, content_id, widget_id, layout_id, playlist_id, title, start_time, end_time, timezone, recurrence, recurrence_end, priority, enabled, color, created_at FROM schedules WHERE user_id = ?').all(userId);
-  const videoWalls = db.prepare('SELECT * FROM video_walls WHERE user_id = ?').all(userId);
+  const schedules = db.prepare(`SELECT id, device_id, group_id, zone_id, content_id, widget_id, layout_id, playlist_id, title, start_time, end_time, timezone, recurrence, recurrence_end, priority, enabled, color, created_at FROM schedules WHERE ${col} = ?`).all(key);
+  const videoWalls = db.prepare(`SELECT * FROM video_walls WHERE ${col} = ?`).all(key);
   const wallIds = videoWalls.map(w => w.id);
   const wallPlaceholders = wallIds.map(() => '?').join(',') || "'__none__'";
   const wallDevices = wallIds.length ? db.prepare(`SELECT * FROM video_wall_devices WHERE wall_id IN (${wallPlaceholders})`).all(...wallIds) : [];
 
-  const kioskPages = db.prepare('SELECT id, name, config, created_at FROM kiosk_pages WHERE user_id = ?').all(userId);
-  const deviceGroups = db.prepare('SELECT id, name, color, rules, created_at FROM device_groups WHERE user_id = ?').all(userId);
+  const kioskPages = db.prepare(`SELECT id, name, config, created_at FROM kiosk_pages WHERE ${col} = ?`).all(key);
+  const deviceGroups = db.prepare(`SELECT id, name, color, rules, created_at FROM device_groups WHERE ${col} = ?`).all(key);
   const groupIds = deviceGroups.map(g => g.id);
   const groupPlaceholders = groupIds.map(() => '?').join(',') || "'__none__'";
   const groupMembers = groupIds.length ? db.prepare(`SELECT * FROM device_group_members WHERE group_id IN (${groupPlaceholders})`).all(...groupIds) : [];
-  const alertConfigs = db.prepare('SELECT id, alert_type, enabled, config, created_at FROM alert_configs WHERE user_id = ?').all(userId);
+  const alertConfigs = db.prepare(`SELECT id, alert_type, enabled, config, created_at FROM alert_configs WHERE ${col} = ?`).all(key);
   const whiteLabel = workspaceId ? db.prepare('SELECT * FROM white_labels WHERE workspace_id = ?').get(workspaceId) : null;
 
-  const exportData = {
+  return {
     format: 'screentinker-export-v2',
     exported_at: new Date().toISOString(),
     user,
@@ -320,6 +311,30 @@ router.get('/export', async (req, res) => {
     alert_configs: alertConfigs.map(a => ({ ...a, config: JSON.parse(a.config || '{}') })),
     white_label: whiteLabel || null,
   };
+}
+
+// User data export (own data only)
+router.get('/export', async (req, res) => {
+  const token = req.query.token;
+  if (!token) return res.status(401).json({ error: 'Token required' });
+
+  let userId;
+  let workspaceId;
+  try {
+    const session = resolveSessionUser(token);
+    // For a break-glass identity this is the synthetic recovery id, which has no users
+    // row - the lookup below then 404s exactly as the inline verify did before.
+    userId = session.user.id;
+    // Re-validate the JWT's workspace claim against current membership (stale-access), then fall back.
+    workspaceId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+  } catch (err) {
+    if (err.code === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+    return denySession(res, err);
+  }
+
+  const exportData = collectExportData({ userId, workspaceId });
+  if (!exportData) return res.status(404).json({ error: 'User not found' });
 
   // If include_files requested, bundle as ZIP with content files
   if (req.query.include_files === 'true') {
@@ -1108,3 +1123,5 @@ async function handleImport(req, res) {
 module.exports = router;
 // Scale-out NOC (routes/mesh-enroll.js /noc) reads the same block rather than recomputing it.
 module.exports.scaleOutStatus = scaleOutStatus;
+// 3.0 complete exports (lib/trust/export.js) write this same format for each workspace and person.
+module.exports.collectExportData = collectExportData;

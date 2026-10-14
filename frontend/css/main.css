@@ -3273,3 +3273,24 @@ a.stock-credit:hover { text-decoration: underline; color: var(--text-secondary);
   .translate-table, .translate-table tbody, .translate-table tr, .translate-table td { display: block; width: 100%; }
   .translate-table thead { display: none; }
 }
+
+/* 3.0 "Your data, provably" — Data & privacy (components/trust-report.js) */
+.trust-desc { color: var(--text-secondary); font-size: 13px; margin: 0 0 12px; line-height: 1.5; }
+.trust-muted { color: var(--text-muted); font-size: 12px; }
+.trust-generated { margin: 6px 0 14px; }
+.trust-kv { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+.trust-kv dt { color: var(--text-muted); }
+.trust-kv dd { margin: 0; overflow-wrap: anywhere; }
+.trust-residency { border-left: 4px solid var(--success, #10b981); background: var(--success-dim, rgba(16,185,129,.1)); padding: 12px 14px; border-radius: var(--radius); margin-bottom: 12px; font-size: 13px; line-height: 1.5; }
+.trust-residency.leaves { border-left-color: var(--warning, #f59e0b); background: var(--warning-dim, rgba(245,158,11,.1)); }
+.trust-residency strong { display: block; font-size: 15px; margin-bottom: 4px; }
+.trust-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; background: var(--bg-secondary); border: 1px solid var(--border); white-space: nowrap; }
+.trust-pill.warn { border-color: var(--warning, #f59e0b); color: var(--warning, #f59e0b); }
+.trust-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.trust-details { margin-top: 10px; font-size: 13px; }
+.trust-details summary { cursor: pointer; color: var(--text-secondary); }
+.trust-list { margin: 8px 0 0; padding-left: 18px; columns: 2; font-size: 12px; }
+.trust-pre { max-height: 320px; overflow: auto; font-size: 11px; background: var(--bg-secondary); padding: 10px; border-radius: var(--radius); }
+.trust-switch { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+.trust-section code { font-size: 12px; }
+@media (max-width: 640px) { .trust-kv { grid-template-columns: 1fr; } .trust-kv dt { margin-top: 6px; } .trust-list { columns: 1; } }
