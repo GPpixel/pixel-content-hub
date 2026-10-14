@@ -56,7 +56,8 @@ function parsePlayWhen(v) {
   if (!obj || typeof obj !== 'object') return false;
   const type = obj.type || (obj.slug ? 'ds' : (obj.tag || obj.op === 'has' || obj.op === 'lacks' ? 'tag' : 'ds'));
   // Where the screen is: its local weather, or an area (lib/local-conditions.js, server-evaluated).
-  if (type === 'weather' || type === 'geo') return require('../lib/local-conditions').normalise(obj);
+  // 'screens': an experiment's per-location variant (lib/experiments), also server-evaluated.
+  if (type === 'weather' || type === 'geo' || type === 'screens') return require('../lib/local-conditions').normalise(obj);
   if (type === 'tag') {
     const tag = String(obj.value || obj.tag || '').trim().toLowerCase();
     if (!tag) return false;

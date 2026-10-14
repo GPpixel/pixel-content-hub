@@ -202,7 +202,8 @@ async function graphql(shop, c, ctx, query, variables, state) {
       await sleep(waitMs(throttle, (cost && cost.requestedQueryCost) || 300) || 2000);
       continue;
     }
-    if (errors.some((e) => code(e) === 'ACCESS_DENIED')) throw new UserFacingError('The app is missing the read_products permission.', 'scope');
+    // state.scopeMessage: the orders import (lib/experiments/sales.js) needs read_orders, not read_products.
+    if (errors.some((e) => code(e) === 'ACCESS_DENIED')) throw new UserFacingError(state.scopeMessage || 'The app is missing the read_products permission.', 'scope');
     if (errors.length && !(res && res.data)) throw new UserFacingError('Shopify could not answer the catalogue query. If this keeps happening, tell your ScreenTinker administrator.', 'upstream');
     state.nextWait = waitMs(throttle, (cost && cost.requestedQueryCost) || 0);
     return res.data || {};
@@ -344,4 +345,7 @@ function _clearTokenCache() { tokenCache.clear(); }
 module.exports = {
   API_VERSION, normalizeShopDomain, validateShopifyConfig, resolveShopify, mapProducts, checkScopes,
   shopifyDestination, waitMs, _clearTokenCache, PRODUCTS_QUERY, COLLECTION_QUERY,
+  // For the experiments sales import (lib/experiments/sales.js): the same credentials, host rule and
+  // rate-limit pacing, so a second copy of them can never disagree with this one.
+  graphql, connectMode,
 };

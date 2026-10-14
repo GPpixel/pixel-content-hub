@@ -108,6 +108,11 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/signs',       mod: './routes/signs',        tenancy: true },
   { path: '/api/brand-kit',   mod: './routes/brand-kit',    tenancy: true },
+  /*
+   * 3.0 Experiments (lib/experiments). JWT only: a test switches what screens show and reads a
+   * store's sales through a saved POS credential — a person's decision, made in the dashboard.
+   */
+  { path: '/api/experiments', mod: './routes/experiments',  tenancy: true },
   { path: '/api/workspaces',  mod: './routes/workspaces' },
   // Player rollouts (lib/ota-rollout.js). Before /api/admin: Express walks mounts in order.
   { path: '/api/admin/ota-rollouts', mod: './routes/ota-rollouts' },

@@ -608,7 +608,8 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
       d.trigger_udp_port, d.trigger_multicast_group, d.trigger_clear_all_token,
       d.local_api_enabled, d.local_api_secret,
       d.default_content_id, d.workspace_id, d.latitude, d.longitude,
-      d.capabilities, d.platform, d.android_version, d.client_type
+      d.capabilities, d.platform, d.android_version, d.client_type,
+      d.id -- an experiment's per-screen variant condition (lib/local-conditions 'screens') needs it
       FROM devices d JOIN device_resolved_playlist r ON r.device_id = d.id
       WHERE d.id = ?`).get(deviceId);
   if (device && opts.resolved) {

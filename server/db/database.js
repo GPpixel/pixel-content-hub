@@ -2977,6 +2977,73 @@ const migrations = [
      mode TEXT NOT NULL CHECK (mode IN ('fixed','rotate')),
      langs TEXT NOT NULL DEFAULT '[]',
      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  /*
+   * 3.0: Experiments (lib/experiments, docs/experiments.md). A/B tests of what one playlist slot
+   * shows, judged against sales, QR scans, audience or an uploaded CSV.
+   *
+   *   experiments          the test: variants, mode, outcome choice, the slot row as it was before
+   *                        the test (`original`, so stopping restores it exactly), dates and status
+   *   experiment_units     one row per LOCATION: its screens, the variant it was given (location
+   *                        mode — decided once at start and never recomputed) and its POS locations
+   *   experiment_exposure  what each screen actually played, per variant per hour, copied out of
+   *                        play_logs while the raw rows exist (the hourly rollup has no widget id,
+   *                        and raw rows are pruned) so a finished test keeps its exposure
+   *   experiment_outcomes  AGGREGATES ONLY: (location, hour) -> a number. Imported sales and CSV
+   *                        uploads. No order, line item, customer or finer time is ever stored.
+   * playlist_items.experiment_id marks the rows a running test owns; the snapshot never reads it.
+   */
+  `CREATE TABLE IF NOT EXISTS experiments (
+     id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','running','ended','rolled_out','stopped')),
+     mode TEXT NOT NULL DEFAULT 'location' CHECK (mode IN ('location','time')),
+     playlist_id TEXT,
+     slot_item_id INTEGER,
+     variants TEXT NOT NULL DEFAULT '[]',
+     config TEXT NOT NULL DEFAULT '{}',
+     original TEXT,
+     start_at INTEGER,
+     end_at INTEGER,
+     planned_end_at INTEGER,
+     winner INTEGER,
+     notice TEXT,
+     sales_from INTEGER,
+     sales_synced_to INTEGER,
+     sales_synced_at INTEGER,
+     sales_error TEXT,
+     sales_currency TEXT,
+     created_by TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'CREATE INDEX IF NOT EXISTS idx_experiments_ws ON experiments(workspace_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status)',
+  `CREATE TABLE IF NOT EXISTS experiment_units (
+     experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+     unit_key TEXT NOT NULL,
+     label TEXT NOT NULL,
+     device_ids TEXT NOT NULL DEFAULT '[]',
+     variant INTEGER,
+     square_location_id TEXT,
+     shopify_location_id TEXT,
+     PRIMARY KEY (experiment_id, unit_key))`,
+  `CREATE TABLE IF NOT EXISTS experiment_exposure (
+     experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+     device_id TEXT NOT NULL,
+     hour_utc INTEGER NOT NULL,
+     variant INTEGER NOT NULL,
+     plays INTEGER NOT NULL DEFAULT 0,
+     seconds INTEGER NOT NULL DEFAULT 0,
+     PRIMARY KEY (experiment_id, device_id, hour_utc, variant))`,
+  `CREATE TABLE IF NOT EXISTS experiment_outcomes (
+     experiment_id TEXT NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+     source TEXT NOT NULL,
+     metric TEXT NOT NULL,
+     unit_key TEXT NOT NULL,
+     hour_utc INTEGER NOT NULL,
+     value REAL NOT NULL DEFAULT 0,
+     PRIMARY KEY (experiment_id, source, metric, unit_key, hour_utc))`,
+  'ALTER TABLE playlist_items ADD COLUMN experiment_id TEXT',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
