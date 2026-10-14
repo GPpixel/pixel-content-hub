@@ -175,7 +175,8 @@ a kiosk and it has not been certified on hardware; see [docs/vega-player.md](doc
 
 ### Requirements
 
-- Node.js **20.6+** (the npm scripts use the built-in `--env-file-if-exists` flag, added in 20.6)
+- Node.js **22.14+** — required. Since 3.0 the server refuses to start on an older Node (exit code 78)
+  rather than crash-looping; see [Upgrading to 3.0](docs/upgrading-to-3.0.md). `.nvmrc` pins the major.
 - Linux, macOS, or Windows
 - SQLite (bundled via `better-sqlite3`; no separate install needed — `npm install` handles the native bindings)
 - **ffmpeg** (optional but recommended) — powers video thumbnails and duration extraction
@@ -801,6 +802,8 @@ User=screentinker
 WorkingDirectory=/opt/screentinker/server
 ExecStart=/usr/bin/node server.js
 Restart=always
+# 78 = the server refused to start because Node is older than 22.14 - restarting will not help.
+RestartPreventExitStatus=78
 Environment=PORT=3001
 Environment=NODE_ENV=production
 Environment=SELF_HOSTED=true

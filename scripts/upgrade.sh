@@ -271,6 +271,29 @@ if ! node_ok; then
   fi
 fi
 
+# ⚠️ THE NODE ON PATH IS NOT NECESSARILY THE NODE THE SERVICE RUNS. A unit with an nvm path in
+# ExecStart (the 2.x remotedisplay.service template shipped one for Node 20) passed every check
+# above on a host whose PATH node was 22, then restarted onto Node 20 and stopped at boot. Ask the
+# unit which binary it starts and hold THAT to the floor too. (Since 3.0 the server refuses to start
+# below the floor with exit 78 rather than crash-looping, so this is the friendlier, earlier copy.)
+service_node() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl cat "$SERVICE_NAME" >/dev/null 2>&1 || return 0
+  systemctl show -p ExecStart --value "$SERVICE_NAME" 2>/dev/null | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -1
+}
+SVC_NODE="$(service_node)"
+if [ -n "$SVC_NODE" ] && [ -n "$NODE_FLOOR" ] && [ "$(basename "$SVC_NODE")" = "node" ] && [ "${ST_ALLOW_OLD_NODE:-0}" != "1" ]; then
+  STEP="checking the Node the $SERVICE_NAME service runs"
+  SVC_HAVE="$("$SVC_NODE" -p 'process.versions.node' 2>/dev/null || echo none)"
+  if [ "$(printf '%s\n%s\n' "$NODE_FLOOR" "$SVC_HAVE" | sort -V | head -1)" != "$NODE_FLOOR" ]; then
+    echo "ERROR: the $SERVICE_NAME service starts $SVC_NODE (Node $SVC_HAVE), but $TARGET needs Node >= $NODE_FLOOR." >&2
+    echo "       Point ExecStart at a Node >= $NODE_FLOOR (e.g. $(command -v node 2>/dev/null || echo /usr/bin/node), which is $(node -v 2>/dev/null || echo missing))" >&2
+    echo "       with 'sudo systemctl edit --full $SERVICE_NAME', then run this script again." >&2
+    record refused "service $SERVICE_NAME runs $SVC_NODE (Node $SVC_HAVE), needs >= $NODE_FLOOR"
+    trap - ERR; exit 1
+  fi
+fi
+
 # ⚠️ A BUILD TOOLCHAIN, EVEN WHERE A PREBUILT BINARY EXISTS. npm runs better-sqlite3's `node-gyp
 # rebuild` install step regardless, node-gyp cannot start without python3, make and g++, and npm
 # then drops the module SILENTLY as a failed optional dependency: the install "succeeds" and the

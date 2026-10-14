@@ -1,5 +1,8 @@
+// FIRST of all: 3.0 refuses to start below engines.node (lib/node-guard.js explains why).
+require('./lib/node-guard').guardNode();
+
 /*
- * FIRST, before any dependency is required: make sure they are installed and loadable.
+ * Then, before any dependency is required: make sure they are installed and loadable.
  *
  * A rollback restores an older package.json but not its packages, and a Node upgrade leaves the
  * native database module compiled against the wrong ABI. Both present as a server that will not

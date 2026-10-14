@@ -304,9 +304,17 @@ you nothing to bisect and no single step to undo.
 
 **Check the version floor: Node 22.14 or newer** (`engines` in `server/package.json`).
 
+**Since 3.0 the floor is enforced at boot.** `server/lib/node-guard.js` runs before anything else in
+`server.js`: on an older Node the server prints the version it needs, the binary it is running
+(`process.execPath`, which is how an nvm path left in a unit's `ExecStart` shows up), and exits with
+code **78**. The shipped units carry `RestartPreventExitStatus=78`, so systemd stops instead of
+looping; add the same line to a unit you wrote yourself. `ST_ALLOW_OLD_NODE=1` downgrades the refusal
+to a warning (unsupported). 2.x only warned here.
+
 - `better-sqlite3` 13, the database driver, is a Node-API 10 build and needs **22.14**. On an older
   Node it would crash the process outright, so the server never loads it there: preflight switches
-  to Node's built-in `node:sqlite` where that exists (Node 24), and otherwise refuses to start with
+  to Node's built-in `node:sqlite` where that exists (unflagged since Node 22.13; experimental, so it
+  prints an `ExperimentalWarning`), and otherwise refuses to start with
   a message saying to upgrade Node. A 22.x host older than 22.14 must be upgraded first.
 - `puppeteer-core` 25, which renders widgets and slides for players that cannot (Roku, BrightSign
   frames), needs **22.12**. On an older Node, npm skips it: the server still starts, preflight warns

@@ -10,6 +10,7 @@ const { chunkedDelete, yieldTick, currentBand } = require('../lib/chunked-prune'
 const dbDir = path.dirname(config.dbPath);
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
+const dbExistedBefore = fs.existsSync(config.dbPath) && fs.statSync(config.dbPath).size > 0;
 const db = new Database(config.dbPath);
 
 // Wait through a brief writer lock instead of failing the statement outright. better-sqlite3
@@ -21,6 +22,12 @@ db.pragma('busy_timeout = 5000');
 // Enable WAL mode and foreign keys
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+// 3.0: a restore point on the first boot of every new version, BEFORE schema.sql and the migrations
+// touch anything (lib/upgrade-snapshot.js). Covers a 2.6 -> 3.0 upgrade however the code arrived.
+require('../lib/upgrade-snapshot').snapshotOnVersionChange({
+  db, dbPath: config.dbPath, existedBefore: dbExistedBefore, version: require('../version'), copy: copyFileBytes,
+});
 
 // Run schema
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');

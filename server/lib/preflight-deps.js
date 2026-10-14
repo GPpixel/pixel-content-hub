@@ -81,8 +81,8 @@ function requiredDeps(pkg, builtinDriver) {
 
 /**
  * The `engines.node` floor this host is below, or null. Only the `>=X.Y.Z` form the server uses.
- * A warning, never a refusal: a server on an older Node mostly still works, and refusing to start
- * would turn an upgrade into an outage for someone who cannot change Node today.
+ * Kept for callers and tests; since 3.0 the refusal itself is lib/node-guard.js, which server.js
+ * runs before this file, so preflight() only reaches here below the floor with ST_ALLOW_OLD_NODE=1.
  */
 function nodeBelowFloor(pkg, version = process.versions.node) {
   const m = String((pkg && pkg.engines && pkg.engines.node) || '').match(/^>=\s*v?(\d+)\.(\d+)\.(\d+)\s*$/);
@@ -200,9 +200,9 @@ function nativeModuleBroken() {
 /*
  * Can this host use Node's built-in driver instead?
  *
- * ⚠️ NODE 24 IN PRACTICE. node:sqlite is only usable without a flag from Node 23.4 onwards; on the
- * 22.x line — which is this project's declared floor — it exists ONLY behind --experimental-sqlite,
- * so a 22.x server started normally has no built-in driver at all.
+ * node:sqlite is usable without a flag from Node 22.13 (and 23.4 on the odd line), so on the
+ * declared 22.14 floor it is normally there — experimental, with an ExperimentalWarning — while on
+ * Node 20 and 22.0-22.12 a server started normally has no built-in driver at all.
  *
  * Hence a probe rather than a version comparison: `require` answers what this exact process can do,
  * including the 22.x-with-the-flag case, and cannot be fooled by a floor that says 22.9 while the
@@ -262,14 +262,8 @@ function preflight() {
   // does not silently get a boot that reaches for the registry anyway.
   if (['1', 'true', 'yes'].includes(String(process.env.ST_SKIP_DEP_PREFLIGHT || '').toLowerCase())) return;
 
-  try {
-    const floor = nodeBelowFloor(JSON.parse(fs.readFileSync(path.join(SERVER_DIR, 'package.json'), 'utf8')));
-    if (floor) {
-      console.warn(`[preflight] ⚠️ Node ${process.versions.node} is older than this release needs (>= ${floor}).`);
-      console.warn('[preflight]    The native SQLite driver needs Node 22.14+, so the server starts only where Node\'s built-in node:sqlite can stand in, and Chromium rendering (puppeteer-core) may be missing.');
-      console.warn('[preflight]    Upgrade Node: see "Upgrading Node.js" in docs/operations.md.');
-    }
-  } catch { /* no package.json: missingDeps() reports nothing either */ }
+  // The Node floor is lib/node-guard.js's job (server.js runs it first); it has already refused or,
+  // under ST_ALLOW_OLD_NODE=1, said its piece.
 
   const missing = missingDeps();
   const nodeModulesAbsent = !fs.existsSync(NODE_MODULES);

@@ -293,6 +293,8 @@ WorkingDirectory=${SCREENTINKER_DIR}/server
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5
+# 78 = refused to start: Node below engines.node (server/lib/node-guard.js). Do not loop on it.
+RestartPreventExitStatus=78
 StartLimitBurst=5
 StartLimitIntervalSec=60
 
