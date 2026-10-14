@@ -34,6 +34,7 @@ import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
 import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText } from '../components/screen-share.js';
 import { renderSign, renderBrand } from './make-sign.js';
 import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
+import { upcomingChanges } from '../components/preview-at-time.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -184,10 +185,16 @@ async function renderHome(container) {
       <span class="simple-screen-name">${esc(d.name)}</span>
       <span class="simple-screen-status ${online(d) ? 'on' : 'off'}" data-sv-plain="${esc(d.id)}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
     </${tag}>`;
-    if (!sharing || !canShareTo(d)) return card;
-    return `<div class="simple-screen-wrap">${card}
-      <a class="btn btn-secondary btn-sm simple-screen-share" href="#/simple/share?device=${encodeURIComponent(d.id)}">&#128421;&#65039; ${esc(t('screen_share.start'))}</a></div>`;
+    // Screen share (an editor, on a screen that can show one) and "What's coming up" under each card.
+    const share = sharing && canShareTo(d) ? `
+      <a class="btn btn-secondary btn-sm simple-screen-share" href="#/simple/share?device=${encodeURIComponent(d.id)}">&#128421;&#65039; ${esc(t('screen_share.start'))}</a>` : '';
+    return `<div class="simple-screen-wrap">${card}${share}
+    <details class="simple-coming" data-coming="${esc(d.id)}"><summary>${esc(t('simple.coming.title'))}</summary><div class="simple-coming-body"></div></details>
+    </div>`;
   }).join('');
+  host.querySelectorAll('details[data-coming]').forEach((el) => el.addEventListener('toggle', () => {
+    if (el.open && !el.dataset.loaded) { el.dataset.loaded = '1'; showComing(el.querySelector('.simple-coming-body'), el.dataset.coming); }
+  }));
   if (sharing && devices.some(canShareTo)) {
     const tasks = container.querySelector('.simple-tasks');
     const help = tasks && tasks.querySelector('a[href="#/simple/help"]');
@@ -328,6 +335,39 @@ async function freshnessLine(host) {
     try { localStorage.setItem(FRESH_DISMISS_KEY, String(Date.now() + 7 * 86400000)); } catch { /* fine */ }
     host.innerHTML = '';
   });
+}
+
+/*
+ * "What's coming up" on a screen card: the next few changes today and tomorrow, read-only, in
+ * everyday words (docs/preview-at-time.md). Asked only when someone opens it.
+ */
+async function showComing(body, deviceId) {
+  body.textContent = t('common.loading');
+  let r;
+  try { r = await upcomingChanges(deviceId); } catch { body.textContent = t('simple.coming.failed'); return; }
+  body.textContent = '';
+  if (r.now) {
+    const p = document.createElement('p');
+    p.className = 'simple-coming-now';
+    p.textContent = t('simple.coming.now', { what: r.now });
+    body.appendChild(p);
+  }
+  if (!r.changes.length) {
+    const p = document.createElement('p');
+    p.className = 'simple-muted';
+    p.textContent = t('simple.coming.none');
+    body.appendChild(p);
+    return;
+  }
+  const ul = document.createElement('ul');
+  for (const c of r.changes) {
+    const li = document.createElement('li');
+    const when = document.createElement('strong');
+    when.textContent = c.when;
+    li.append(when, ' ', c.text);
+    ul.appendChild(li);
+  }
+  body.appendChild(ul);
 }
 
 /*

@@ -2998,8 +2998,7 @@ a.stock-credit:hover { text-decoration: underline; color: var(--text-secondary);
 .fresh-settings label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
 .fresh-settings label.fresh-check, .fresh-check { flex-direction: row; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); }
 .simple-fresh { margin-bottom: 18px; border-color: color-mix(in srgb, var(--success) 40%, transparent); }
-/* ===================================================================================================
- * 3.0 Make a sign (js/views/make-sign.js) and the brand kit editor (js/components/brand-kit-editor.js).
+/* ============================================================================================ * 3.0 Make a sign (js/views/make-sign.js) and the brand kit editor (js/components/brand-kit-editor.js).
  * Previews are the player's own render in a sized frame: the frame's aspect-ratio IS the stage, so a
  * portrait sign previews portrait without any script inside the frame.
  * =================================================================================================== */
@@ -3099,3 +3098,71 @@ a.stock-credit:hover { text-decoration: underline; color: var(--text-secondary);
   .sign-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 40px; }
   .simple-guide--wide .simple-card { padding: 14px; }
 }
+=======
+/* ===== 3.0: Preview at time ("what will this screen show at…?", docs/preview-at-time.md) ===== */
+.pat-intro { color: var(--text-secondary); font-size: 13px; margin-bottom: 12px; max-width: 75ch; }
+.pat-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 14px; }
+.pat-field { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.pat-field .input { min-width: 0; }
+.pat-tz { font-size: 12px; color: var(--text-muted); align-self: center; }
+.pat-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.pat-strip-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 6px; font-size: 13px; }
+.pat-range { display: flex; gap: 6px; }
+.pat-strip { position: relative; height: 36px; background: var(--bg-input); border-radius: 6px; overflow: hidden; }
+.pat-seg {
+  position: absolute; top: 0; bottom: 0; border: 0; padding: 0 6px; cursor: pointer;
+  /* a 2px surface gap between neighbouring blocks, so two playlists never read as one */
+  box-shadow: inset -2px 0 0 var(--bg-input); color: #fff; font: inherit; font-size: 11px;
+  text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 4px;
+}
+.pat-seg span { pointer-events: none; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); }
+.pat-seg:hover, .pat-seg:focus-visible { outline: 2px solid var(--text-primary); outline-offset: -2px; z-index: 1; }
+.pat-seg-off { background: repeating-linear-gradient(45deg, #0b0f17 0 6px, #1f2937 6px 12px); color: var(--text-secondary); }
+.pat-seg-empty { background: var(--border); color: var(--text-secondary); }
+.pat-now { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text-primary); pointer-events: none; z-index: 2; }
+.pat-axis { position: relative; height: 18px; font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.pat-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.pat-axis span:first-child { transform: none; }
+.pat-axis span:last-child { transform: translateX(-100%); }
+.pat-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; }
+.pat-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.pat-sw-off { background: repeating-linear-gradient(45deg, #0b0f17 0 3px, #475569 3px 6px); }
+.pat-sw-empty { background: var(--border); }
+.pat-body { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .pat-body { grid-template-columns: 1fr; } }
+.pat-stage-wrap { position: relative; }
+.pat-stage { position: relative; width: 100%; max-height: 60vh; background: #000; border-radius: 6px; overflow: hidden; }
+.pat-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 16px; background: rgba(0, 0, 0, 0.82); color: var(--text-primary); font-size: 15px; border-radius: 6px;
+}
+.pat-overlay[hidden] { display: none; }
+.pat-frame-note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.pat-explain h4 { font-size: 13px; margin: 14px 0 6px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.pat-headline { background: var(--bg-input); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 4px; }
+.pat-at { font-weight: 600; }
+.pat-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; font-size: 13px; }
+.pat-why { padding-left: 10px; border-left: 2px solid var(--border); color: var(--text-secondary); }
+.pat-why.pat-won { border-left-color: var(--accent); color: var(--text-primary); }
+.pat-items li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.pat-mark { width: 14px; text-align: center; }
+.pat-on .pat-mark { color: var(--success); }
+.pat-off .pat-mark { color: var(--text-muted); }
+.pat-off .pat-item-name { color: var(--text-secondary); }
+.pat-item-name { word-break: break-word; }
+.pat-badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border-light); color: var(--text-secondary); }
+.pat-badge-warn { border-color: var(--warning); color: var(--warning); }
+.pat-notes { margin: 14px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-secondary); display: grid; gap: 4px; }
+.pat-muted { color: var(--text-muted); font-size: 12px; }
+.pat-warn { color: var(--warning); font-size: 13px; }
+.pat-group { margin-top: 20px; }
+.pat-group summary { cursor: pointer; font-size: 14px; }
+.pat-group-controls { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+.pat-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pat-table th, .pat-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.pat-table th { color: var(--text-muted); font-weight: 500; }
+.simple-screen-wrap { display: grid; gap: 4px; align-content: start; }
+.simple-coming { font-size: 13px; padding: 0 4px; }
+.simple-coming summary { cursor: pointer; color: var(--text-secondary); padding: 4px 0; }
+.simple-coming ul { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 4px; }
+.simple-coming-now { margin: 4px 0; color: var(--text-primary); }

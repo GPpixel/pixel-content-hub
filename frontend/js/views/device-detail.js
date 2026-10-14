@@ -17,6 +17,7 @@ import * as cui from '../components/corporate-ui.js';
 import { openDeviceMoveDialog } from '../components/device-move-dialog.js';
 import { setupViewAccess } from '../components/view-access-card.js';
 import { mountDeviceSection as mountScreenVerify } from '../components/screen-verify.js';
+import { mountPreviewAtTime, renderGroupAt } from '../components/preview-at-time.js';
 
 // The player distinguishes three cases for the Wi-Fi name, because "--" was hiding a real
 // answer: Android 8.1+ refuses to reveal the SSID to an app without location permission, and a
@@ -797,7 +798,21 @@ async function loadDevice(deviceId, activeTab = null) {
           player that cannot stay paired. Every other display keeps its own credentials and would
           gain nothing from this tab but a durable secret it never needed.
         -->
+        <div class="tab" data-tab="forecast" data-advanced-ui>${t('forecast.tab')} <span class="help-tip" data-tip="${t('forecast.tab_tip')}">?</span></div>
         ${device.enrol_key ? `<div class="tab" data-tab="webplayer">${t('device.tab.webplayer')} <span class="help-tip" data-tip="${t('device.tab.webplayer_tip')}">?</span></div>` : ''}
+      </div>
+
+      <!-- Preview at… (docs/preview-at-time.md): mounted on first open, it asks the server. -->
+      <div class="tab-content" id="tab-forecast">
+        <div id="forecastHost"></div>
+        <details class="pat-group" id="forecastGroup">
+          <summary>${t('forecast.group.title')}</summary>
+          <div class="pat-group-controls">
+            <select class="input" id="forecastGroupSel"><option value="">${t('forecast.group.pick')}</option></select>
+            <button type="button" class="btn btn-secondary btn-sm" id="forecastGroupGo">${t('forecast.group.show')}</button>
+          </div>
+          <div id="forecastGroupOut"></div>
+        </details>
       </div>
 
       <!-- Now Playing Tab -->
@@ -1640,6 +1655,7 @@ async function loadDevice(deviceId, activeTab = null) {
     setupEnrolKey(device);
     setupViewAccess(device);
     mountScreenVerify(document.getElementById('screenVerifyCard'), device);
+    setupForecast(device);
 
     /*
      * The checklist, at the end of its own trail.
@@ -2351,6 +2367,42 @@ function setupInteractiveTerminal(device) {
     // The server answers with dashboard:pty-exit (closed_by_user), which runs ended(); if the socket
     // is gone that never arrives, so tear down locally regardless.
     setTimeout(() => { if (ptyState === st) { teardownPty(false); setConnected(false); setStatus(''); } }, 1500);
+  });
+}
+
+/*
+ * Preview at… tab. Mounted the first time the tab is opened, not on page load: it costs a forecast
+ * and a timeline on the server, and most visits to a screen page never look at it.
+ */
+let forecastCleanup = null;
+function setupForecast(device) {
+  const tab = document.querySelector('.tab[data-tab="forecast"]');
+  const host = document.getElementById('forecastHost');
+  if (!tab || !host) return;
+  if (forecastCleanup) { forecastCleanup(); forecastCleanup = null; }
+  tab.addEventListener('click', () => {
+    if (!forecastCleanup && document.contains(host)) forecastCleanup = mountPreviewAtTime(host, device);
+  });
+  const details = document.getElementById('forecastGroup');
+  const sel = document.getElementById('forecastGroupSel');
+  details?.addEventListener('toggle', async () => {
+    if (!details.open || sel.options.length > 1) return;
+    try {
+      const groups = await api.getGroups();
+      for (const g of (Array.isArray(groups) ? groups : [])) {
+        const o = document.createElement('option');
+        o.value = g.id;
+        o.textContent = g.name;
+        sel.appendChild(o);
+      }
+    } catch { /* the picker simply stays empty */ }
+  });
+  document.getElementById('forecastGroupGo')?.addEventListener('click', () => {
+    if (!sel.value) return;
+    // Same moment as the picker above, so "this screen" and "its group" are compared like for like.
+    const when = host.querySelector('#patWhen');
+    const iso = when && when.dataset.atIso ? when.dataset.atIso : new Date().toISOString();
+    renderGroupAt(document.getElementById('forecastGroupOut'), sel.value, iso);
   });
 }
 
@@ -3799,6 +3851,7 @@ function updateDiagPanel(d) {
 }
 
 export function cleanup() {
+  if (forecastCleanup) { forecastCleanup(); forecastCleanup = null; }
   if (diagPollTimer) { clearInterval(diagPollTimer); diagPollTimer = null; }
   if (statusHandler) off('device-status', statusHandler);
   if (screenshotHandler) off('screenshot-ready', screenshotHandler);
