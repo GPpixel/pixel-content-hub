@@ -16,7 +16,7 @@
  */
 import { api } from '../api.js';
 import { t, tn } from '../i18n.js';
-import { esc, screenshotUrl } from '../utils.js';
+import { esc, screenshotUrl, hydrateAuthImages } from '../utils.js';
 import { showToast } from '../components/toast.js';
 import { setUiMode } from '../components/ui-mode.js';
 import { plansVisible } from '../components/plan-nudges.js';
@@ -166,6 +166,51 @@ async function sampleFile() {
   return new File([blob], 'Welcome screen.jpg', { type: blob.type || 'image/jpeg' });
 }
 
+/*
+ * The workspace's own photos and videos, newest first, as a tap-to-select grid. Capped at
+ * LIBRARY_MAX so a large library stays a quick choice here; everything is still in Advanced view's
+ * Content page. Hidden when the library has nothing playable yet.
+ */
+const LIBRARY_MAX = 60;
+async function loadLibrary(container, onUse) {
+  const block = container.querySelector('[data-library]');
+  const grid = container.querySelector('[data-library-grid]');
+  const useBtn = container.querySelector('[data-library-use]');
+  if (!block || !grid || !useBtn) return;
+  let items = [];
+  try { items = (await api.getAllContent({ maxItems: 500 })).items || []; } catch { return; }
+  items = items
+    .filter((c) => /^(image|video)\//.test(c.mime_type || '') && !c.remote_url)
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+    .slice(0, LIBRARY_MAX);
+  if (!items.length || !document.contains(block)) return;
+  const picked = [];
+  grid.innerHTML = items.map((c) => `
+    <button type="button" class="simple-lib-item" data-lib-id="${esc(c.id)}" aria-pressed="false" title="${esc(c.filename || '')}">
+      ${c.thumbnail_path ? `<img data-auth-src="/api/content/${esc(c.id)}/thumbnail" alt="">` : `<span class="simple-lib-icon">${String(c.mime_type).startsWith('video/') ? '&#127909;' : '&#128444;'}</span>`}
+      <span class="simple-lib-check" aria-hidden="true">&#10003;</span>
+      <span class="simple-lib-name">${esc(c.filename || '')}</span>
+    </button>`).join('');
+  block.hidden = false;
+  hydrateAuthImages(grid, { eager: true });
+  const paint = () => {
+    useBtn.disabled = picked.length === 0;
+    useBtn.textContent = picked.length ? tn('simple.library.use_n', picked.length) : t('simple.library.use', { n: 0 });
+  };
+  grid.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-lib-id]');
+    if (!b) return;
+    const id = b.dataset.libId;
+    const i = picked.indexOf(id);
+    // Order of picking is the order they play in.
+    if (i === -1) picked.push(id); else picked.splice(i, 1);
+    b.setAttribute('aria-pressed', i === -1 ? 'true' : 'false');
+    paint();
+  });
+  useBtn.addEventListener('click', () => { if (picked.length) onUse(picked.slice()); });
+  paint();
+}
+
 function doneBody(lines) {
   return `<p class="simple-lead">${esc(lines[0])}</p>${lines[1] ? `<p class="simple-muted">${esc(lines[1])}</p>` : ''}
     <div class="simple-done-actions">
@@ -224,6 +269,14 @@ async function renderChange(container, presetId) {
           <input type="file" data-file multiple accept="${ACCEPT}" hidden>
         </div>
         <div class="simple-or"><span>${esc(t('onboarding.step.upload.or'))}</span> <button type="button" class="btn btn-secondary btn-sm" data-sample>${esc(t('onboarding.step.upload.use_sample'))}</button></div>
+        <!-- Photos and videos already in this workspace's library: pick instead of uploading again. -->
+        <div class="simple-library" data-library hidden>
+          <div class="simple-library-head">
+            <span>${esc(t('simple.library.title'))}</span>
+            <button type="button" class="btn btn-primary btn-sm" data-library-use disabled>${esc(t('simple.library.use', { n: 0 }))}</button>
+          </div>
+          <div class="simple-library-grid" data-library-grid></div>
+        </div>
         ${others.length ? `
         <div class="simple-sameas">
           <label for="simpleSameAs">${esc(t('onboarding.step.upload.same_as_label'))}</label>
@@ -247,6 +300,13 @@ async function renderChange(container, presetId) {
       } catch (err) { fail(err); }
     };
     wireDrop(container.querySelector('[data-drop]'), container.querySelector('[data-file]'), go);
+    loadLibrary(container, async (ids) => {
+      busy(t('simple.working'));
+      try {
+        const r = await showOnScreen(device, ids, how);
+        doneStep(r.review ? t('simple.done.review') : tn('simple.done.shown', ids.length, { name: device.name }));
+      } catch (err) { fail(err); }
+    });
     container.querySelector('[data-sample]').addEventListener('click', async () => {
       try { go([await sampleFile()]); } catch { fail(new Error(t('onboarding.toast.sample_failed'))); }
     });

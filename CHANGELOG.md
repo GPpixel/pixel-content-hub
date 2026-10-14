@@ -32,8 +32,8 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
 - **Simple menu** (`users.ui_mode`): about 10 items for new accounts. A **Simple | Advanced** switch at the top of the menu changes it
   per account. Every page still opens from a link or bookmark.
 - **Simple view is guide-style** (`views/simple-home.js`). There is no sidebar. Home asks "What
-  would you like to do?" with four tasks: Add a screen, Change what a screen shows (replace or add,
-  upload / sample / same as another screen), Upload photos (then choose the screens), and Get help.
+  would you like to do?" with four tasks: Add a screen, Change what a screen shows (replace or add;
+  upload, pick from the photos and videos already in the library, sample, or same as another screen), Upload photos (then choose the screens), and Get help.
   Your screens are listed below with their status. A top bar carries the Simple | Advanced switch and
   an account menu. Other pages still open with the full shell from links and bookmarks.
 - **Add screen in Simple view is the same step-by-step guide** (`#/add-screen`): open the player,
