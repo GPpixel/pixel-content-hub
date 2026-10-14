@@ -1018,6 +1018,9 @@ function renderStage(container) {
   elementsOf(s).forEach((e, i) => {
     const d = document.createElement('div');
     d.style.cssText = `position:absolute;cursor:grab;${styleFor(e)}`;
+    // Which element this node draws. The stage also holds the background photo and its scrim, so a
+    // node's position among the stage's children is NOT its element index — see startDrag.
+    d.dataset.ei = String(i);
     if (i === state.ei) d.style.outline = '1.5px solid var(--primary)';
     if (e.motion && e.motion.animation !== 'none') {
       d.dataset.anim = e.motion.animation;
@@ -1079,7 +1082,15 @@ function startDrag(ev, i, node, container) {
   const e = elementsOf(slide())[i];
   const ox = ev.clientX - r.left - (e.box.x / 100) * r.width;
   const oy = ev.clientY - r.top - (e.box.y / 100) * r.height;
-  const live = stage.children[i];
+  /*
+   * ⚠️ FOUND BY ITS ELEMENT INDEX, NEVER BY ITS POSITION IN THE STAGE. The stage draws the
+   * background photo and its dim scrim before the elements, so `stage.children[i]` was a different
+   * element (or the photo itself) on any slide with a background picture: that node slid around
+   * under the pointer while the selected element's numbers changed unseen and it jumped into place
+   * on release — "another item is shown moving instead of the one I selected".
+   */
+  const live = stage.querySelector(`:scope > [data-ei="${i}"]`);
+  if (!live) return;
   live.setPointerCapture(ev.pointerId);
   const move = (m) => {
     e.box.x = Math.max(-20, Math.min(110, ((m.clientX - r.left - ox) / r.width) * 100));

@@ -100,7 +100,7 @@ async function startServer(tag) {
   }
 
   return {
-    base, api, upload, webPlayerDisplay, dataDir,
+    base, api, upload, webPlayerDisplay, dataDir, token,
     stop() { try { proc.kill('SIGKILL'); } catch { /* */ } },
   };
 }
