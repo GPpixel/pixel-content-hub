@@ -1327,6 +1327,16 @@ app.use('/api/auth/support', (req, res, next) => (req.path === '/' ? supportRede
 // 6-digit code. Cap attempts/min here; the per-user lockout (lib/totp-lockout) sits
 // on top in the handler.
 app.use('/api/auth/totp/verify', rateLimit(60000, 10));
+// 3.0 passkeys (routes/passkeys.js). Options are minted on every login-page view (for autofill), so
+// that bucket is roomier; verification is the attempt itself and is capped like a password. The
+// second-factor pair sits atop the per-user TOTP lockout, which passkey failures also feed. The
+// register pair is authenticated, but its options call checks the account password again.
+app.use('/api/auth/passkeys/login/options', rateLimit(60000, 60));
+app.use('/api/auth/passkeys/login/verify', rateLimit(60000, 20));
+app.use('/api/auth/passkeys/mfa/options', rateLimit(60000, 20));
+app.use('/api/auth/passkeys/mfa/verify', rateLimit(60000, 10));
+app.use('/api/auth/passkeys/register/options', rateLimit(60000, 10));
+app.use('/api/auth/passkeys/register/verify', rateLimit(60000, 10));
 // Email-verification resend: cap so it can't be used to spray mail at an address.
 app.use('/api/auth/resend-verification', rateLimit(60000, 5));
 // Domain lookup is unauthenticated by necessity (it runs before login). Rate limited so it

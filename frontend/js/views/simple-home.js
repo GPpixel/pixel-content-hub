@@ -4,6 +4,7 @@
  *   #/                       "What would you like to do?" — four big tasks and the list of screens
  *   #/simple/change[?device] Change what a screen shows: pick the screen → choose content → it's live
  *   #/simple/upload          Upload photos: choose files → choose screens → done
+ *   #/simple/passkey         Sign in with a passkey: confirm your password → the browser's prompt → done
  *   (#/add-screen is the setup guide's add mode, views/onboarding.js)
  *
  * No sidebar here: a small top bar carries the Simple | Advanced switch and an account menu. Every
@@ -24,6 +25,8 @@ import { isPlatformAdmin, inManagerApp, openOutsideApp, isTouchFirst } from '../
 import { renderStatsPrompt } from './dashboard.js';
 import { publishOrSubmit } from '../components/release.js';
 import { switchWorkspaceTo } from '../components/corporate-ui.js';
+import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
+import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -64,6 +67,7 @@ function shell(container, inner) {
               ? `<button type="button" data-outside="/app#/settings">${esc(t('simple.menu.settings'))} &#8599;</button>`
               : `<a href="#/settings">${esc(t('simple.menu.settings'))}</a>`}
             ${inManagerApp() && window.STManager ? `<button type="button" data-change-server>${esc(t('simple.menu.change_server'))}</button>` : ''}
+            ${passkeyMenuShown(u) ? `<a href="#/simple/passkey">${esc(t('passkey.simple_menu'))}</a>` : ''}
             <a href="#/simple/help">${esc(t('simple.menu.help'))}</a>
             <button type="button" data-simple-signout>${esc(t('auth.sign_out'))}</button>
           </div>
@@ -653,6 +657,70 @@ async function renderUpload(container, presetIds = []) {
 // ---------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------
+// 3.0: Sign in with a passkey — a password account adds one, guide-style. Managing them (rename,
+// remove) is in Settings; this is the one thing an everyday user needs: "next time, use my phone /
+// fingerprint". Not offered inside the Manager app (see lib/passkeys.js passkeysUsableHere).
+// ---------------------------------------------------------------------------------------------
+
+function passkeyMenuShown(u) {
+  return !!u && u.auth_provider === 'local' && !inManagerApp() && passkeysSupported();
+}
+
+async function renderPasskey(container) {
+  const u = cachedUser() || {};
+  if (!passkeyMenuShown(u)) { window.location.replace('#/'); return; }
+  shell(container, `<p class="simple-muted">${esc(t('common.loading'))}</p>`);
+  const page = container.querySelector('.simple-page');
+  let st;
+  try { st = await api.passkeysList(); } catch (err) { st = { error: err.message }; }
+  if (!document.contains(page)) return;
+
+  // Anything that stops a passkey being added here is said plainly, with a way home.
+  let blocker = '';
+  if (st.error) blocker = st.error;
+  else if (!st.available) blocker = unavailableMessage(st.reason, isPlatformAdmin(u));
+  else if (!st.eligible) blocker = t('passkey.sso_only_note');
+  else if (st.origin && st.origin !== window.location.origin) blocker = t('passkey.wrong_address', { origin: st.origin });
+  else if (st.passkeys.length >= st.max) blocker = t('passkey.limit', { n: st.max });
+
+  const body = blocker
+    ? `<p>${esc(blocker)}</p>`
+    : `<p>${esc(t('passkey.simple_intro'))}</p>
+       ${st.passkeys.length ? `<p class="simple-muted">${esc(t('passkey.simple_have', { n: st.passkeys.length }))}</p>` : ''}
+       <label class="simple-label" for="pkPassword">${esc(t('passkey.simple_password'))}</label>
+       <input id="pkPassword" class="input" type="password" autocomplete="current-password">
+       ${st.totp_enabled ? `<label class="simple-label" for="pkCode" style="margin-top:10px">${esc(t('auth.mfa_code_label'))}</label>
+       <input id="pkCode" class="input" inputmode="numeric" autocomplete="one-time-code" maxlength="6">` : ''}
+       <div class="simple-status" data-status></div>`;
+  page.innerHTML = guideFrame({
+    step: 0, total: 2, icon: '&#128273;', title: t('passkey.simple_title'), body, back: false,
+    next: !blocker, nextLabel: t('passkey.simple_set_up'),
+  });
+  const next = page.querySelector('[data-guide-next]');
+  if (!next) return;
+  page.querySelector('#pkPassword').focus();
+  const status = page.querySelector('[data-status]');
+  next.addEventListener('click', async () => {
+    const password = page.querySelector('#pkPassword').value;
+    if (!password) { status.textContent = t('passkey.password_required'); return; }
+    next.disabled = true;
+    status.textContent = t('passkey.simple_follow_browser');
+    try {
+      await addPasskey({ password, code: page.querySelector('#pkCode')?.value.trim(), name: suggestedPasskeyName() });
+    } catch (err) {
+      status.textContent = err.cancelled ? '' : err.message;
+      next.disabled = false;
+      return;
+    }
+    page.innerHTML = guideFrame({
+      step: 1, total: 2, icon: '&#10004;', title: t('passkey.simple_done_title'), back: false,
+      body: `<p>${esc(t('passkey.simple_done_body'))}</p>
+             <a href="#/" class="btn btn-primary">${esc(t('simple.done.home'))}</a>`,
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // Help, inside Simple view. The full Help page is about the whole product (widgets, layouts,
 // kiosks, video walls) and opens in the full shell; this one answers what Simple view does, keeps
 // the top bar, and always has a way home. Fully translated (simple.help.*), unlike views/help.js:
@@ -756,6 +824,7 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/change')) return renderChange(container, q.get('device'));
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
+  if (hash.startsWith('#/simple/passkey')) return renderPasskey(container);
   if (hash.startsWith('#/simple/team')) return renderTeam(container);
   return renderHome(container);
 }

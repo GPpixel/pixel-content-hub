@@ -23,6 +23,7 @@
     "@jsquash/avif": "^2.1.1",
     "@jsquash/webp": "^1.5.0",
     "@node-saml/node-saml": "^5.1.0",
+    "@simplewebauthn/server": "14.0.3",
     "@xmldom/xmldom": "^0.9.12",
     "archiver": "^8.0.0",
     "bcryptjs": "^3.0.3",
