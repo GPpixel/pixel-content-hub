@@ -172,9 +172,14 @@ function frameHtml(aspect, attrs, extraClass = '') {
 
 /**
  * @param {HTMLElement} container
- * @param {{ simple?: boolean, device?: string|null, from?: string|null }} opts
+ * @param {{ simple?: boolean, device?: string|null, from?: string|null, batch?: Array|null, aspect?: string, onBack?: Function }} opts
+ *
+ * 3.0 Private AI: `batch` is a starter set from "Set up my screens with AI" (views/ai-setup.js),
+ * [{template, values}] already checked by the server against each template's fields. Each one opens
+ * in this same fill step, one after another — the person reads and edits every sign — and then one
+ * screens step puts them all on the chosen screens.
  */
-export async function renderSign(container, { simple = false, device: presetId = null, from = null } = {}) {
+export async function renderSign(container, { simple = false, device: presetId = null, from = null, batch = null, aspect: startAspect = '16:9', onBack = null } = {}) {
   cleanup();
   const run = ++alive;
   const fromSlides = from === 'slides';
@@ -220,12 +225,16 @@ export async function renderSign(container, { simple = false, device: presetId =
   const brand = (cat && cat.brand) || {};
   devices = devices || [];
   const preset = devices.find((d) => d.id === presetId) || null;
-  // pick, fill, [screens], done
+  // pick, fill, [screens], done — or, for an AI starter set, one fill step per sign
   const withScreens = devices.length > 0 && !preset;
-  const total = withScreens ? 4 : 3;
+  const queue = Array.isArray(batch) ? batch.filter((b) => b && templates.some((x) => x.id === b.template)) : null;
+  const total = queue ? queue.length + (withScreens ? 2 : 1) : (withScreens ? 4 : 3);
+  const screensAt = queue ? queue.length : 2;
 
-  let aspect = '16:9';
+  let aspect = startAspect === '9:16' ? '9:16' : '16:9';
   let tplId = null;
+  let batchIdx = 0;
+  const skipped = new Set();
   let communityWidget = null;  // a community template, already created by its own dialog
   const community = (installed || []).filter((x) => x && x.usable && (!x.status || x.status === 'active'));
   const fitsAspect = (x) => !Array.isArray(x.orientation) || !x.orientation.length
@@ -333,10 +342,14 @@ export async function renderSign(container, { simple = false, device: presetId =
     const tp = byId(tplId);
     if (!tp) { pickStep(); return; }
     const v = valuesOf(tp);
-    const nextLabel = withScreens ? t('signs.next_screens')
+    const moreInBatch = queue && batchIdx < queue.length - 1;
+    const nextLabel = moreInBatch ? t('ai_setup.next_sign')
+      : withScreens ? t('signs.next_screens')
       : preset ? t('signs.show_on', { name: preset.name }) : t('signs.save_btn');
-    paint(guideFrame({ step: 1, total, icon: '&#9998;', title: tplName(tp), cancelHref: home, wide: true, next: true, nextLabel,
+    paint(guideFrame({ step: queue ? batchIdx : 1, total, icon: '&#9998;', title: tplName(tp), cancelHref: home, wide: true, next: true, nextLabel,
       body: `
+        ${queue ? `<p class="simple-muted ai-setup-progress">${esc(t('ai_setup.sign_of', { n: batchIdx + 1, total: queue.length }))}
+          <button type="button" class="btn btn-secondary btn-sm" data-skip>${esc(t(skipped.has(batchIdx) ? 'ai_setup.include' : 'ai_setup.skip'))}</button></p>` : ''}
         <div class="sign-fill">
           <div class="sign-preview-col">
             ${aspectToggle(aspect)}
@@ -346,7 +359,23 @@ export async function renderSign(container, { simple = false, device: presetId =
         </div>
         ${brandNote()}
         <p class="simple-status" data-status role="status"></p>` }));
-    wireBack(pickStep);
+    wireBack(queue ? () => {
+      if (batchIdx > 0) { batchIdx--; tplId = queue[batchIdx].template; fillStep(); }
+      else if (typeof onBack === 'function') onBack();
+      else window.location.hash = home;
+    } : pickStep);
+    const nextInBatch = () => {
+      batchIdx++;
+      tplId = queue[batchIdx].template;
+      fillStep();
+    };
+    container.querySelector('[data-skip]')?.addEventListener('click', () => {
+      if (skipped.has(batchIdx)) { skipped.delete(batchIdx); fillStep(); return; }
+      skipped.add(batchIdx);
+      if (moreInBatch) nextInBatch();
+      else if (withScreens) screensStep();
+      else make(preset ? [preset.id] : [], 'add', container.querySelector('[data-status]'));
+    });
     wireAspect(() => {
       container.querySelectorAll('[data-aspect-pick]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.aspectPick === aspect)));
       const fr = container.querySelector('.sign-frame--big');
@@ -409,7 +438,9 @@ export async function renderSign(container, { simple = false, device: presetId =
         form.querySelector(`[data-key="${missing.key}"]`)?.focus();
         return;
       }
-      if (withScreens) screensStep();
+      if (queue) skipped.delete(batchIdx);
+      if (moreInBatch) nextInBatch();
+      else if (withScreens) screensStep();
       else make(preset ? [preset.id] : [], 'add', status);
     });
     preview(0);
@@ -435,7 +466,7 @@ export async function renderSign(container, { simple = false, device: presetId =
   // ---------------------------------------------------------------- 3. screens
   function screensStep() {
     let how = 'add';
-    paint(guideFrame({ step: 2, total, icon: '&#128250;', title: t('signs.where_title'), cancelHref: home,
+    paint(guideFrame({ step: screensAt, total, icon: '&#128250;', title: t('signs.where_title'), cancelHref: home,
       next: true, nextLabel: t('signs.show_btn'),
       body: `
         <div class="simple-checks">${devices.map((d) => `
@@ -448,6 +479,8 @@ export async function renderSign(container, { simple = false, device: presetId =
         <p class="simple-muted">${esc(t('signs.where_hint'))}</p>
         <p class="simple-status" data-status role="status"></p>` }));
     wireBack(communityWidget ? pickStep : fillStep);
+    // A starter set with every sign left out has nothing to show.
+    if (queue && skipped.size >= queue.length) container.querySelector('[data-status]').textContent = t('ai_setup.all_skipped');
     container.querySelectorAll('input[name="signHow"]').forEach((r) => r.addEventListener('change', () => { how = r.value; }));
     container.querySelector('[data-guide-next]').addEventListener('click', () => {
       const ids = [...container.querySelectorAll('.simple-checks input:checked')].map((i) => i.value);
@@ -457,6 +490,7 @@ export async function renderSign(container, { simple = false, device: presetId =
 
   // ---------------------------------------------------------------- create + publish
   async function make(deviceIds, how, status) {
+    if (queue) return makeBatch(deviceIds, how, status);
     const tp = byId(tplId);
     const buttons = [...container.querySelectorAll('button, input, select, textarea')];
     buttons.forEach((b) => { b.disabled = true; });
@@ -504,15 +538,65 @@ export async function renderSign(container, { simple = false, device: presetId =
     doneStep({ shown, review });
   }
 
+  /*
+   * The AI starter set: every sign the person kept is created through the ordinary endpoint (the
+   * server validates each again), then all of them go on the chosen screens in ONE publish per
+   * screen — so a workspace that reviews changes gets one review, not six.
+   */
+  async function makeBatch(deviceIds, how, status) {
+    const keep = queue.map((b, i) => ({ ...b, i })).filter((b) => !skipped.has(b.i));
+    if (!keep.length) { status.textContent = t('ai_setup.all_skipped'); return; }
+    const buttons = [...container.querySelectorAll('button, input, select, textarea')];
+    buttons.forEach((b) => { b.disabled = true; });
+    status.textContent = t('simple.working');
+    const items = [];
+    for (const b of keep) {
+      const tp = byId(b.template);
+      try {
+        const sign = await api.createSign({ template: tp.id, aspect, values: payload(tp) });
+        items.push({ widget_id: sign.widget_id, duration_sec: sign.dwell_sec, name: sign.name });
+      } catch (err) {
+        buttons.forEach((x) => { x.disabled = false; });
+        const first = err && err.body && Array.isArray(err.body.errors) ? err.body.errors[0] : null;
+        status.textContent = `${tplName(tp)}: ${first ? t(`signs.err.${first.code}`, { field: fieldLabel(tp, first.field) }) : ((err && err.message) || t('signs.err.save'))}`;
+        return;
+      }
+      if (run !== alive) return;
+    }
+    let review = false;
+    let shown = 0;
+    try {
+      const seen = new Set();
+      for (const id of deviceIds) {
+        const d = devices.find((x) => x.id === id);
+        if (!d) continue;
+        if (how === 'add' && d.playlist_id && seen.has(d.playlist_id)) { shown++; continue; }
+        if (d.playlist_id) seen.add(d.playlist_id);
+        const r = await showOnScreen(d, items.map((x) => ({ widget_id: x.widget_id, duration_sec: x.duration_sec })), how,
+          { devices, playlists, note: `Set up with AI: ${items.length} signs` });
+        review = review || !!r.review;
+        shown++;
+      }
+    } catch (err) {
+      buttons.forEach((b) => { b.disabled = false; });
+      const reason = (err && err.message) || '';
+      status.textContent = t('signs.err.assign', { reason });
+      return;
+    }
+    if (run !== alive) return;
+    if (shown && !review) api.trackEvent('first_publish', { from: 'ai_setup' });
+    doneStep({ shown, review, count: items.length });
+  }
+
   // ---------------------------------------------------------------- 4. done
-  function doneStep({ shown, review }) {
+  function doneStep({ shown, review, count = 0 }) {
     const saved = shown === 0;
-    const title = saved ? t('signs.done.saved_title') : t(review ? 'simple.done.review_title' : 'onboarding.step.done.title');
+    const title = saved ? t(count > 1 ? 'ai_setup.saved_title' : 'signs.done.saved_title') : t(review ? 'simple.done.review_title' : 'onboarding.step.done.title');
     const lead = saved ? t('signs.done.saved')
       : review ? tn('simple.upload.review_on', shown) : tn('signs.done.live', shown);
     const hint = saved ? (devices.length ? '' : t('signs.done.no_screens')) : t(review ? 'simple.done.review_hint' : 'simple.done.seconds');
     paint(guideFrame({ step: total - 1, total, icon: saved ? '&#9989;' : review ? '&#9203;' : '&#127881;', title, back: false, cancelHref: home,
-      body: `<p class="simple-lead">${esc(lead)}</p>${hint ? `<p class="simple-muted">${esc(hint)}</p>` : ''}
+      body: `${count ? `<p class="simple-lead">${esc(tn('ai_setup.made', count))}</p>` : ''}${count > 1 && saved ? '' : `<p class="simple-lead">${esc(lead)}</p>`}${hint ? `<p class="simple-muted">${esc(hint)}</p>` : ''}
         <p class="simple-muted">${esc(t(communityWidget ? 'signs.done.edit_later_widget' : 'signs.done.edit_later'))}</p>
         <div class="simple-done-actions">
           <a class="btn btn-primary" href="${esc(fromGuide || fromSlides ? (fromSlides ? '#/slides' : '#/') : home)}">${esc(fromGuide ? t('onboarding.go_to_dashboard') : fromSlides ? t('signs.done.back_slides') : t('simple.done.home'))}</a>
@@ -526,7 +610,26 @@ export async function renderSign(container, { simple = false, device: presetId =
     });
   }
 
-  pickStep();
+  if (queue && queue.length) {
+    /*
+     * What the AI wrote, on top of the template's defaults — but a field it left out starts EMPTY,
+     * not with the sample text: "Corner Café" on a hospital's sign would be a fact nobody gave.
+     * Labels under More options keep theirs ("Network", "Password"); they are words, not facts.
+     */
+    for (const b of queue) {
+      const tp = byId(b.template);
+      const given = b.values || {};
+      const v = defaults(tp, brand);
+      for (const f of tp.fields) {
+        if (f.more || Object.prototype.hasOwnProperty.call(given, f.key)) continue;
+        if (f.type === 'text' || f.type === 'url' || f.type === 'multiline') v[f.key] = (f.brand && brand[f.brand]) || '';
+        else if (f.type === 'rows') v[f.key] = [];
+      }
+      values[tp.id] = { ...v, ...given };
+    }
+    tplId = queue[0].template;
+    fillStep();
+  } else pickStep();
 }
 
 /* ---------------------------------------------------------------- brand kit page (Simple) */

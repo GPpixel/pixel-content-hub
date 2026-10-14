@@ -22,6 +22,8 @@ const { v4: uuidv4 } = require('uuid');
 const { ingestUploadedFile } = require('../lib/content-ingest');
 const { logActivity, getClientIp } = require('../services/activity');
 const { trimTrailing } = require('../lib/trim-trailing');
+// 3.0 Private AI (docs/private-ai.md): one allowed LAN host per org, and "only allow private AI".
+const privateAi = require('../lib/private-ai');
 
 /*
  * ⚠️ NOT 502, THOUGH THAT IS WHAT THESE FAILURES ARE. Cloudflare REPLACES a 502 body with its own
@@ -41,11 +43,13 @@ const canEdit = (req) => req.isPlatformAdmin || req.actingAs || ['workspace_admi
 
 // SSRF guard. Self-hosted instances may point at localhost/LAN (the whole point);
 // the hosted instance must not let a tenant admin reach the host's private network.
-function endpointAllowed(rawUrl) {
+function endpointAllowed(rawUrl, workspaceId = null) {
   let u;
   try { u = new URL(rawUrl); } catch { return false; }
   if (!/^https?:$/.test(u.protocol)) return false;
   if (config.selfHosted) return true;
+  // 3.0 Private AI: the exact host an operator allowed for this workspace's organization.
+  if (workspaceId && !u.username && !u.password && privateAi.isHostAllowed(workspaceId, rawUrl)) return true;
   const h = u.hostname.toLowerCase();
   if (h === 'localhost' || h === '0.0.0.0' || h === '::1' || h.endsWith('.local')) return false;
   if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return false;
@@ -199,15 +203,18 @@ router.get('/settings', (req, res) => {
 });
 
 // PUT /api/ai/settings — workspace admin
-router.put('/settings', (req, res) => {
+router.put('/settings', async (req, res) => {
   if (!isWorkspaceAdmin(req)) return res.status(403).json({ error: 'Workspace admin required' });
   const base_url = trimTrailing(String(req.body && req.body.base_url || '').trim(), '/');
   const model = String(req.body && req.body.model || '').trim();
   const image_base_url = trimTrailing(String(req.body && req.body.image_base_url || '').trim(), '/');
   const image_model = String(req.body && req.body.image_model || '').trim();
   const image_provider = ['comfyui', 'openai', 'sdcpp'].includes(req.body && req.body.image_provider) ? req.body.image_provider : null;
-  if (base_url && !endpointAllowed(base_url)) return res.status(400).json({ error: 'Endpoint URL not allowed (private/internal addresses are blocked on this instance).' });
-  if (image_base_url && !endpointAllowed(image_base_url)) return res.status(400).json({ error: 'Image endpoint URL not allowed.' });
+  if (base_url && !endpointAllowed(base_url, req.workspaceId)) return res.status(400).json({ error: 'Endpoint URL not allowed (private/internal addresses are blocked on this instance).' });
+  if (image_base_url && !endpointAllowed(image_base_url, req.workspaceId)) return res.status(400).json({ error: 'Image endpoint URL not allowed.' });
+  // 3.0 Private AI: an organization that allows private AI only cannot save a cloud endpoint here.
+  const pol = await privateAi.policyCheck(req.workspaceId, [base_url, image_base_url]);
+  if (pol) return res.status(pol.status).json({ error: pol.error, code: pol.code });
 
   const existing = db.prepare('SELECT api_key_enc, image_api_key_enc FROM ai_settings WHERE workspace_id = ?').get(req.workspaceId);
   let api_key_enc = existing ? existing.api_key_enc : null;
@@ -225,6 +232,8 @@ router.put('/settings', (req, res) => {
       model=excluded.model, image_base_url=excluded.image_base_url, image_model=excluded.image_model,
       image_provider=excluded.image_provider, image_api_key_enc=excluded.image_api_key_enc, updated_at=excluded.updated_at
   `).run(req.workspaceId, base_url || null, api_key_enc, model || null, image_base_url || null, image_model || null, image_provider, image_api_key_enc);
+  // 3.0 Private AI: this form is the bring-your-own endpoint; the local provider is saved by routes/ai-private.js.
+  db.prepare('UPDATE ai_settings SET provider_kind = NULL, endpoint_private = NULL WHERE workspace_id = ?').run(req.workspaceId);
   logActivity(req.user.id, 'ai_settings_update', `endpoint: ${base_url || '(none)'} model: ${model || '(none)'}`, null, getClientIp(req), req.workspaceId);
   res.json({ ok: true });
 });
@@ -235,14 +244,16 @@ router.post('/models', async (req, res) => {
   if (!isWorkspaceAdmin(req)) return res.status(403).json({ error: 'Workspace admin required' });
   const base_url = trimTrailing(String(req.body && req.body.base_url || '').trim(), '/');
   if (!base_url) return res.status(400).json({ error: 'Endpoint base URL required' });
-  if (!endpointAllowed(base_url)) return res.status(400).json({ error: 'Endpoint URL not allowed (private/internal addresses are blocked on this instance).' });
+  if (!endpointAllowed(base_url, req.workspaceId)) return res.status(400).json({ error: 'Endpoint URL not allowed (private/internal addresses are blocked on this instance).' });
+  const pol = await privateAi.policyCheck(req.workspaceId, [base_url]);
+  if (pol) return res.status(pol.status).json({ error: pol.error, code: pol.code });
   let key = (req.body && typeof req.body.api_key === 'string' && req.body.api_key.length) ? req.body.api_key : null;
   if (!key) { const row = db.prepare('SELECT api_key_enc FROM ai_settings WHERE workspace_id = ?').get(req.workspaceId); key = (row && decrypt(row.api_key_enc)) || 'none'; }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   let r;
   try {
-    r = await aiFetch(base_url + '/models', { headers: { Authorization: `Bearer ${key}` }, signal: controller.signal });
+    r = await aiFetch(base_url + '/models', { headers: { Authorization: `Bearer ${key}` }, signal: controller.signal, privateHosts: privateAi.privateHostsFor(req.workspaceId) });
   } catch (e) {
     clearTimeout(timer);
     return res.status(UPSTREAM_STATUS).json({ error: 'Could not reach the endpoint: ' + (e.name === 'AbortError' ? 'timed out' : e.message) });
@@ -398,7 +409,9 @@ async function askModelForJson({ workspaceId, system, user, timeoutMs = 180000 }
   if (!row || !row.base_url || !row.model) {
     return { error: 'AI is not configured. Set an endpoint and model in AI settings first.', status: 400 };
   }
-  if (!endpointAllowed(row.base_url)) return { error: 'Configured endpoint is not allowed.', status: 400 };
+  if (!endpointAllowed(row.base_url, workspaceId)) return { error: 'Configured endpoint is not allowed.', status: 400 };
+  const pol = await privateAi.policyCheck(workspaceId, [row.base_url]);
+  if (pol) return pol;
 
   const key = decrypt(row.api_key_enc) || 'none';
   const url = row.base_url.replace(/\/+$/, '') + '/chat/completions';
@@ -414,6 +427,7 @@ async function askModelForJson({ workspaceId, system, user, timeoutMs = 180000 }
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       }),
       signal: controller.signal,
+      privateHosts: privateAi.privateHostsFor(workspaceId),
     });
   } catch (e) {
     clearTimeout(timer);
@@ -559,6 +573,7 @@ async function generateAndIngest({ row, prompt, width, height, name, userId, wor
     width,
     height,
     timeoutMs: 180000,
+    privateHosts: privateAi.privateHostsFor(workspaceId),
   });
   if (!dataUrl || dataUrl.indexOf('base64,') < 0) throw new Error('The image endpoint returned no image.');
 
@@ -613,7 +628,9 @@ router.post('/generate-background', async (req, res) => {
   if (!imgBase || !row.image_provider) {
     return res.status(400).json({ error: 'No image endpoint configured for this workspace.' });
   }
-  if (!endpointAllowed(imgBase)) return res.status(400).json({ error: 'Image endpoint URL not allowed.' });
+  if (!endpointAllowed(imgBase, req.workspaceId)) return res.status(400).json({ error: 'Image endpoint URL not allowed.' });
+  const pol = await privateAi.policyCheck(req.workspaceId, [imgBase]);
+  if (pol) return res.status(pol.status).json({ error: pol.error, code: pol.code });
 
   let content;
   try {
@@ -799,7 +816,9 @@ router.post('/generate-layered', async (req, res) => {
   if (!row || !row.image_base_url || !row.image_provider) {
     return res.status(400).json({ error: 'No image endpoint configured for this workspace.' });
   }
-  if (!endpointAllowed(row.image_base_url)) return res.status(400).json({ error: 'Image endpoint URL not allowed.' });
+  if (!endpointAllowed(row.image_base_url, req.workspaceId)) return res.status(400).json({ error: 'Image endpoint URL not allowed.' });
+  const pol = await privateAi.policyCheck(req.workspaceId, [row.image_base_url]);
+  if (pol) return res.status(pol.status).json({ error: pol.error, code: pol.code });
 
   const want = clampN(req.body && req.body.objects, 1, MAX_OBJECTS, 3);
   const W = clampN(req.body && req.body.width, 256, 4096, 1792);
@@ -1039,10 +1058,13 @@ router.post('/generate-design', async (req, res) => {
 
   const row = db.prepare('SELECT base_url, api_key_enc, model, image_base_url, image_model, image_provider, image_api_key_enc FROM ai_settings WHERE workspace_id = ?').get(req.workspaceId);
   if (!row || !row.base_url || !row.model) return res.status(400).json({ error: 'AI is not configured. Set an endpoint and model in AI settings first.' });
-  if (!endpointAllowed(row.base_url)) return res.status(400).json({ error: 'Configured endpoint is not allowed.' });
+  if (!endpointAllowed(row.base_url, req.workspaceId)) return res.status(400).json({ error: 'Configured endpoint is not allowed.' });
 
   const imgBase = row.image_base_url ? row.image_base_url.replace(/\/+$/, '') : '';
-  const imagesAvailable = !!(imgBase && row.image_provider && endpointAllowed(imgBase));
+  const imagesAvailable = !!(imgBase && row.image_provider && endpointAllowed(imgBase, req.workspaceId));
+  const pol = await privateAi.policyCheck(req.workspaceId, [row.base_url, imagesAvailable ? imgBase : null]);
+  if (pol) return res.status(pol.status).json({ error: pol.error, code: pol.code });
+  const privateHosts = privateAi.privateHostsFor(req.workspaceId);
 
   const key = decrypt(row.api_key_enc) || 'none';
   const url = row.base_url.replace(/\/+$/, '') + '/chat/completions';
@@ -1058,6 +1080,7 @@ router.post('/generate-design', async (req, res) => {
         messages: [{ role: 'system', content: designSystemPrompt(imagesAvailable) }, { role: 'user', content: prompt }],
       }),
       signal: controller.signal,
+      privateHosts,
     });
   } catch (e) {
     clearTimeout(timer);
@@ -1085,7 +1108,7 @@ router.post('/generate-design', async (req, res) => {
   if (imagesAvailable && (design.background_prompt || imageEls.length)) {
     // Separate image key if set, else fall back to the text key (all-OpenAI setups).
     const imgKey = decrypt(row.image_api_key_enc) || key;
-    const common = { provider: row.image_provider, baseUrl: imgBase, apiKey: imgKey, model: row.image_model, timeoutMs: 180000 };
+    const common = { provider: row.image_provider, baseUrl: imgBase, apiKey: imgKey, model: row.image_model, timeoutMs: 180000, privateHosts };
     const jobs = [];
     if (design.background_prompt) {
       jobs.push(generateImage({ ...common, prompt: design.background_prompt, width: 1024, height: 576 })

@@ -34,7 +34,9 @@ const crypto = require('node:crypto');
 // renders the head office setup prompt — the path every new organization sees first.
 const VIEWS = ['#/', '#/content', '#/playlists', '#/layouts', '#/widgets', '#/schedule',
   '#/walls', '#/reports', '#/kiosk', '#/designer', '#/activity', '#/members', '#/help', '#/settings',
-  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms'];
+  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms',
+  // 3.0 Private AI: with no AI set up, both explain instead of failing.
+  '#/ai-setup', '#/translate'];
 
 function findChrome() {
   if (process.env.CHROME && fs.existsSync(process.env.CHROME)) return process.env.CHROME;

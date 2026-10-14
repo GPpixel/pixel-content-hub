@@ -941,6 +941,23 @@ export const api = {
   aiHostedGenerate: (body) => request('/ai/hosted/generate', { method: 'POST', body: JSON.stringify(body) }),
   aiHostedCheckout: (pack_id) => request('/ai/hosted/checkout', { method: 'POST', body: JSON.stringify({ pack_id }) }),
   aiListModels: (base_url, api_key) => request('/ai/models', { method: 'POST', body: JSON.stringify({ base_url, api_key }) }),
+  /*
+   * 3.0 Private AI (server/routes/ai-private.js, docs/private-ai.md): a local / private provider,
+   * one allowed LAN host, the org's "only private AI", the AI starter set and auto-translate.
+   */
+  privateAiStatus: () => request('/ai/private/status'),
+  privateAiTest: (base_url, api_key) => request('/ai/private/test', { method: 'POST', body: JSON.stringify({ base_url, api_key }) }),
+  privateAiSave: (body) => request('/ai/private/settings', { method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  privateAiAllowHost: (host) => request('/ai/private/allow-host', { method: 'POST', body: JSON.stringify({ host }) }),
+  privateAiPolicy: (only_private) => request('/ai/private/policy', { method: 'PUT', body: JSON.stringify({ only_private: !!only_private }) }),
+  aiStarterSet: (description) => request('/ai/private/starter', { method: 'POST', body: JSON.stringify({ description }) }),
+  aiTranslations: (deckId) => request(`/ai/private/translations${deckId ? `?deck_id=${encodeURIComponent(deckId)}` : ''}`),
+  aiTranslate: (deck_id, langs) => request('/ai/private/translate', { method: 'POST', body: JSON.stringify({ deck_id, langs }) }),
+  aiTranslationSave: (id, strings) => request(`/ai/private/translations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ strings }) }),
+  aiTranslationApprove: (id) => request(`/ai/private/translations/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
+  aiTranslationDelete: (id) => request(`/ai/private/translations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  aiScreenLanguages: () => request('/ai/private/screens'),
+  aiSetScreenLanguage: (deviceId, mode, langs) => request(`/ai/private/screens/${encodeURIComponent(deviceId)}`, { method: 'PUT', body: JSON.stringify({ mode, langs }) }),
 
   // Instance-level default branding (#15, platform admin).
   /*

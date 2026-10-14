@@ -95,6 +95,8 @@ const JWT_ONLY_ROUTERS = [
    * in order, and listing it after would run /api/ai's auth + tenancy first for every hosted call.
    */
   { path: '/api/ai/hosted',   mod: './routes/ai-hosted',    tenancy: true },
+  // 3.0 Private AI (docs/private-ai.md): local provider, starter set, translations. Before /api/ai too.
+  { path: '/api/ai/private',  mod: './routes/ai-private',   tenancy: true },
   { path: '/api/ai',          mod: './routes/ai',           tenancy: true },
   { path: '/api/provision',   mod: './routes/provisioning', tenancy: true },
   { path: '/api/teams',       mod: './routes/teams',        tenancy: true },

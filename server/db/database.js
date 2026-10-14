@@ -2872,6 +2872,57 @@ const migrations = [
   'CREATE INDEX IF NOT EXISTS idx_request_email_challenges ON request_email_challenges(form_id, email)',
   'ALTER TABLE submissions ADD COLUMN request_id TEXT',
   'CREATE INDEX IF NOT EXISTS idx_submissions_request ON submissions(request_id)',
+  /*
+   * 3.0: Private AI (lib/private-ai.js, docs/private-ai.md).
+   *
+   * ai_settings.provider_kind = 'local' marks a workspace's endpoint as a local / private AI server
+   * (Ollama, LM Studio, llama.cpp, vLLM, LocalAI); NULL is the bring-your-own endpoint as before.
+   * endpoint_private is what the last save resolved the host to (1 = only private addresses), for
+   * the "data stays on your network" badge; enforcement re-resolves, it never trusts this column.
+   *
+   * ai_private_hosts: ONE host an operator allowed an organization's AI requests to reach on a
+   * private network, without opening the private ranges for anything else.
+   * org_ai_policy.only_private: the organization allows private AI only (no cloud, no hosted).
+   *
+   * sign_translations: a deck's text in another language, reviewed before it reaches a screen
+   * (status 'draft' until approved). doc is the translated deck document; widget_map is
+   * {source slide widget id: translated widget id}. device_languages: what a screen shows.
+   */
+  'ALTER TABLE ai_settings ADD COLUMN provider_kind TEXT',
+  'ALTER TABLE ai_settings ADD COLUMN endpoint_private INTEGER',
+  `CREATE TABLE IF NOT EXISTS ai_private_hosts (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     org_id TEXT NOT NULL,
+     host TEXT NOT NULL,
+     created_by TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     UNIQUE (org_id, host))`,
+  `CREATE TABLE IF NOT EXISTS org_ai_policy (
+     org_id TEXT PRIMARY KEY,
+     only_private INTEGER NOT NULL DEFAULT 0,
+     updated_by TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  `CREATE TABLE IF NOT EXISTS sign_translations (
+     id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL,
+     source_deck_id TEXT NOT NULL,
+     lang TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved')),
+     doc TEXT NOT NULL,
+     notes TEXT NOT NULL DEFAULT '[]',
+     widget_map TEXT NOT NULL DEFAULT '{}',
+     source_rev INTEGER,
+     created_by TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     UNIQUE (source_deck_id, lang))`,
+  'CREATE INDEX IF NOT EXISTS idx_sign_translations_ws ON sign_translations(workspace_id, status)',
+  `CREATE TABLE IF NOT EXISTS device_languages (
+     device_id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL,
+     mode TEXT NOT NULL CHECK (mode IN ('fixed','rotate')),
+     langs TEXT NOT NULL DEFAULT '[]',
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

@@ -8,6 +8,7 @@
  *   #/simple/share[?device]  Share my screen (3.0): pick the screen → choose what to share → live, Stop
  *   #/simple/sign            Make a sign: pick a template → fill it in → choose screens (views/make-sign.js)
  *   #/simple/brand           The workspace brand kit the sign templates use (components/brand-kit-editor.js)
+ *   #/simple/ai-setup        Set up my screens with AI (3.0 Private AI): describe the place → pick signs → check each (views/ai-setup.js)
  *   (#/add-screen is the setup guide's add mode, views/onboarding.js)
  *
  * No sidebar here: a small top bar carries the Simple | Advanced switch and an account menu. Every
@@ -33,6 +34,7 @@ import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
 import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
 import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText } from '../components/screen-share.js';
 import { renderSign, renderBrand } from './make-sign.js';
+import { renderAiSetup, cleanup as cleanupAiSetup } from './ai-setup.js';
 import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
 import { upcomingChanges } from '../components/preview-at-time.js';
 
@@ -165,6 +167,7 @@ async function renderHome(container) {
 
   adminNotices(document.getElementById('simpleAdminNotices'));
   if (canChange) freshnessLine(document.getElementById('simpleFreshness'));
+  if (canChange) aiSetupTask(container);
   const host = document.getElementById('simpleScreens');
   let devices = [];
   try { devices = await api.getDevices(); } catch { devices = []; }
@@ -210,6 +213,20 @@ async function renderHome(container) {
     const el = host.querySelector(`[data-sv-plain="${CSS.escape(d.id)}"]`);
     if (el && words) { el.textContent = words; el.classList.remove('on'); el.classList.add('warn'); }
   }
+}
+
+/*
+ * 3.0 Private AI: "Set up my screens with AI" joins the tasks only when this workspace has AI set
+ * up — with none, there is nothing to offer, and a task that ends in "not configured" is noise.
+ */
+async function aiSetupTask(container) {
+  let st = null;
+  try { st = await api.privateAiStatus(); } catch { return; }
+  const tasks = container.querySelector('.simple-tasks');
+  if (!st || !st.configured || !st.can_use || !tasks || !document.contains(tasks)) return;
+  const sign = tasks.querySelector('a[href="#/simple/sign"]');
+  const html = `<a class="simple-task" href="#/simple/ai-setup"><span class="simple-task-icon">&#10024;</span><span><strong>${esc(t('ai_setup.task'))}</strong><small>${esc(t(st.private ? 'ai_setup.task_desc_private' : 'ai_setup.task_desc'))}</small></span></a>`;
+  if (sign) sign.insertAdjacentHTML('afterend', html);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1186,14 +1203,14 @@ export function render(container, hash = window.location.hash || '#/') {
   const onRefreshed = (e) => {
     const h = window.location.hash || '#/';
     if (accessKey(e.detail) === drawnFor || !isSimpleRoute(h)) return;
-    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share') || h.startsWith('#/simple/requests/new')) return;
+    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share') || h.startsWith('#/simple/requests/new') || h.startsWith('#/simple/ai-setup')) return;
     render(container, h);
   };
   window.addEventListener('user-refreshed', onRefreshed);
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/requests'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/requests') || hash.startsWith('#/simple/ai-setup'))) {
     window.location.replace('#/');
     return undefined;
   }
@@ -1201,6 +1218,7 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/sign')) return renderSign(container, { simple: true, device: q.get('device'), from: q.get('from') });
   if (hash.startsWith('#/simple/brand')) return renderBrand(container, { simple: true });
+  if (hash.startsWith('#/simple/ai-setup')) { cleanupFns.push(cleanupAiSetup); return renderAiSetup(container, { simple: true, hash }); }
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
   if (hash.startsWith('#/simple/passkey')) return renderPasskey(container);
   if (hash.startsWith('#/simple/team')) return renderTeam(container);
