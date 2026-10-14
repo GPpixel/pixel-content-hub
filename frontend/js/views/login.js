@@ -254,10 +254,10 @@ export async function render(container) {
     </div>
   `;
 
-  setupHandlers(config, isSetup);
+  setupHandlers(container, config, isSetup);
 }
 
-function setupHandlers(config, isSetup) {
+function setupHandlers(container, config, isSetup) {
   const showError = (msg) => {
     const el = document.getElementById('loginError');
     el.textContent = msg;

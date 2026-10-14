@@ -644,6 +644,33 @@ const check = (name, ok, detail) => {
   }
   check('no horizontal overflow at phone width', overflowing.length === 0, overflowing.join(', '));
 
+  // ---- the Manager app: sign in through the form, as the Android WebView does --------------------
+  // The app is told apart by its user agent, and code that runs only there is invisible to every
+  // check above: an undefined variable in login.js's app-only branch once stopped the sign-in form
+  // from working in the app while every browser test passed.
+  {
+    const email = 'app' + Date.now() + '@x.test';
+    await fetch(BASE + '/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: 'Passw0rd123' }) });
+    const ctx = await browser.createBrowserContext();
+    const app = await ctx.newPage();
+    const appErrors = [];
+    app.on('pageerror', (e) => appErrors.push(e.message));
+    await app.setUserAgent('Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Mobile Safari/537.36 ScreenTinkerManager/1.0.0');
+    await app.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+    await app.goto(BASE + '/app#/login', { waitUntil: 'networkidle2' });
+    await app.type('#loginEmail', email);
+    await app.click('#loginBtn');
+    await app.waitForSelector('#loginPassword', { visible: true, timeout: 5000 }).catch(() => {});
+    await app.type('#loginPassword', 'Passw0rd123');
+    await app.click('#loginBtn');
+    await new Promise(r => setTimeout(r, 2500));
+    const landed = await app.evaluate(() => ({ hash: location.hash, signedIn: !!localStorage.getItem('token') }));
+    check('Manager app: the sign-in form works and throws nothing', landed.signedIn && appErrors.length === 0,
+      `${JSON.stringify(landed)} ${appErrors.slice(0, 3).join(' | ')}`);
+    await ctx.close();
+  }
+
   await browser.close();
   stop();
 
