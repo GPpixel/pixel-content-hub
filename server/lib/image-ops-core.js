@@ -236,4 +236,33 @@ async function frameMetrics(src) {
   return require('./screen-verify/frame-metrics').metricsFromBitmap(img.bitmap);
 }
 
-module.exports = { metadata, writeThumbnail, measureAndThumbnail, readImage, cutout, frameMetrics, MAX_DECODE_PIXELS };
+/*
+ * 3.0 accessibility (lib/a11y): the WCAG relative luminance of a photo, as a small grid of cells.
+ *
+ * Text over a photo can only be checked against what is under it, and the checker needs that for
+ * arbitrary rectangles (every text box on every slide that uses the photo). A grid computed once per
+ * image and cached answers all of them without decoding again. 64 cells across keeps a headline's
+ * box several cells tall on any normal photo, and the grid keeps the image's aspect so the checker
+ * can reproduce `background-size: cover` cropping. Area-averaged (resize), so a cell is the mean of
+ * the pixels it stands for, not one sampled pixel.
+ */
+async function luminanceGrid(src, cols = 64) {
+  const img = await readImage(src);
+  const { width, height } = img.bitmap;
+  const w = Math.max(1, Math.min(cols, width));
+  const h = Math.max(1, Math.min(64, Math.round((height / width) * w)));
+  img.resize({ w, h });
+  const d = img.bitmap.data;
+  const lin = (c) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const lum = new Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const o = p * 4;
+    const a = d[o + 3] / 255;
+    // A transparent pixel shows whatever is under the photo, which is not known here; it is read as
+    // its own colour at its alpha over black. Photos used as backgrounds are almost always opaque.
+    lum[p] = Math.round(a * (0.2126 * lin(d[o]) + 0.7152 * lin(d[o + 1]) + 0.0722 * lin(d[o + 2])) * 1000) / 1000;
+  }
+  return { w, h, lum, width, height };
+}
+
+module.exports = { metadata, writeThumbnail, measureAndThumbnail, readImage, cutout, frameMetrics, luminanceGrid, MAX_DECODE_PIXELS };

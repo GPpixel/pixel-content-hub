@@ -29,6 +29,8 @@ import * as corporate from './views/corporate.js';
 import * as activity from './views/activity.js';
 import * as freshness from './views/freshness.js';
 import { installFreshnessChips } from './components/freshness-chips.js';
+import * as accessibility from './views/accessibility.js';
+import { installA11yBadges } from './components/accessibility.js';
 import * as kiosk from './views/kiosk.js';
 import * as onboarding from './views/onboarding.js';
 import * as help from './views/help.js';
@@ -268,6 +270,7 @@ const NAV_LABEL_KEYS = {
   designer: 'nav.designer',
   activity: 'nav.activity',
   freshness: 'nav.freshness',
+  accessibility: 'nav.accessibility',
   teams: 'nav.teams',
   members: 'nav.members',
   help: 'nav.help',
@@ -628,7 +631,7 @@ function route() {
     else if ((hash === '#/playlists' || hash.startsWith('#/playlists/')) && link.dataset.view === 'playlists') link.classList.add('active');
     else if (hash === '#/schedule' && link.dataset.view === 'schedule') link.classList.add('active');
     else if (hash === '#/widgets' && link.dataset.view === 'widgets') link.classList.add('active');
-    else if ((hash === '#/slides' || hash.startsWith('#/signs')) && link.dataset.view === 'slides') link.classList.add('active');
+    else if ((hash === '#/slides' || hash.startsWith('#/slides?') || hash.startsWith('#/signs')) && link.dataset.view === 'slides') link.classList.add('active');
     else if (hash === '#/social' && link.dataset.view === 'social') link.classList.add('active');
     else if (hash === '#/templates' && link.dataset.view === 'templates') link.classList.add('active');
     else if ((hash === '#/data-sources' || hash.startsWith('#/data-sources/')) && link.dataset.view === 'data-sources') link.classList.add('active');
@@ -637,6 +640,7 @@ function route() {
     else if (hash === '#/audience' && link.dataset.view === 'audience') link.classList.add('active');
     else if (hash === '#/activity' && link.dataset.view === 'activity') link.classList.add('active');
     else if ((hash === '#/freshness' || hash.startsWith('#/freshness?')) && link.dataset.view === 'freshness') link.classList.add('active');
+    else if (hash === '#/accessibility' && link.dataset.view === 'accessibility') link.classList.add('active');
     else if ((hash === '#/designer' || hash.startsWith('#/designer/')) && link.dataset.view === 'designer') link.classList.add('active');
     else if ((hash === '#/kiosk' || hash.startsWith('#/kiosk/')) && link.dataset.view === 'kiosk') link.classList.add('active');
     else if (hash === '#/help' && link.dataset.view === 'help') link.classList.add('active');
@@ -668,7 +672,7 @@ function route() {
   } else if (hash === '#/schedule') {
     currentView = schedule;
     schedule.render(app);
-  } else if (hash === '#/slides') {
+  } else if (hash === '#/slides' || hash.startsWith('#/slides?')) {
     currentView = slides;
     slides.render(app);
   } else if (hash === '#/signs' || hash.startsWith('#/signs?')) {
@@ -737,6 +741,10 @@ function route() {
     // 3.0 content freshness: what is going stale, worst first (?ws= from the weekly digest).
     currentView = freshness;
     freshness.render(app);
+  } else if (hash === '#/accessibility') {
+    // 3.0 accessibility checker: what on the screens may be hard to read or unsafe, worst first.
+    currentView = accessibility;
+    accessibility.render(app);
   } else if (hash === '#/audience') {
     currentView = audience;
     audience.render(app);
@@ -1215,6 +1223,8 @@ if (isAuthenticated()) {
 window.addEventListener('hashchange', route);
 // 3.0 content freshness: "Stale" / "Mentions a past date" chips on screen, playlist and content cards.
 installFreshnessChips(app);
+// 3.0 accessibility: badges on content items, playlists and slide decks with errors or warnings.
+installA11yBadges(app);
 // 3.0: Simple and Advanced render #/ differently, so a view switch re-routes the current page.
 window.addEventListener('st:ui-mode', () => { if (isAuthenticated()) route(); });
 enableHelpTips();

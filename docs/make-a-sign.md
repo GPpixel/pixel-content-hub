@@ -62,8 +62,10 @@ Set your business name, logo, colours and headline font once and every new sign 
 | Headline font | One of the fonts slides already ship with (Inter, Archivo, Oswald, Bitter, JetBrains Mono) |
 
 Text colour is never chosen by you: it is whichever of white or near-black reads better on the
-background, and an accent too close to the background is swapped for the text colour. A sign can be
-off-brand; it cannot be unreadable.
+background (pure black when near-black is not enough), and an accent that would be hard to read is
+made lighter or darker — same colour family — until it meets WCAG AA (4.5:1). A sign can be
+off-brand; it cannot be unreadable. If a colour you picked had to be adjusted, the fill step says so
+and offers the adjusted colour (see [Accessibility](accessibility.md)).
 
 Changing the brand kit affects signs you make **afterwards**. Signs already on screens keep their
 look; to restyle one, make it again (or edit it in Slides).

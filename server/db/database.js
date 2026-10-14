@@ -2872,6 +2872,44 @@ const migrations = [
   'CREATE INDEX IF NOT EXISTS idx_request_email_challenges ON request_email_challenges(form_id, email)',
   'ALTER TABLE submissions ADD COLUMN request_id TEXT',
   'CREATE INDEX IF NOT EXISTS idx_submissions_request ON submissions(request_id)',
+  /*
+   * 3.0: accessibility checker (lib/a11y, docs/accessibility.md).
+   *
+   * a11y_settings: one row per workspace, created on first save — the typical viewing distance and
+   * screen size the size check assumes, and the opt-in "block publishing with accessibility errors"
+   * policy (off by default). devices.a11y_*: a screen's own distance / size, NULL = use the
+   * workspace's. a11y_media_checks: the cached result of reading a file (kind 'video': flash counts,
+   * audio track; kind 'grid': a photo's luminance grid), keyed by the content's revision so a
+   * replaced file is checked again. ai_settings.stt_*: the speech-to-text endpoint captions use
+   * (key encrypted with lib/secretbox like the other AI keys).
+   */
+  `CREATE TABLE IF NOT EXISTS a11y_settings (
+     workspace_id TEXT PRIMARY KEY,
+     viewing_distance_m REAL NOT NULL DEFAULT 3,
+     screen_diagonal_in REAL NOT NULL DEFAULT 55,
+     block_on_errors INTEGER NOT NULL DEFAULT 0,
+     updated_by TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'ALTER TABLE devices ADD COLUMN a11y_viewing_distance_m REAL',
+  'ALTER TABLE devices ADD COLUMN a11y_screen_diagonal_in REAL',
+  `CREATE TABLE IF NOT EXISTS a11y_media_checks (
+     content_id TEXT NOT NULL,
+     kind TEXT NOT NULL CHECK (kind IN ('video','grid')),
+     rev INTEGER NOT NULL DEFAULT 0,
+     workspace_id TEXT,
+     status TEXT NOT NULL CHECK (status IN ('done','failed')),
+     result TEXT,
+     error TEXT,
+     checked_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     PRIMARY KEY (content_id, kind))`,
+  'CREATE INDEX IF NOT EXISTS idx_a11y_media_checks_ws ON a11y_media_checks(workspace_id)',
+  // A check outlives nothing it describes: every path that deletes content (library, workspace and
+  // account deletion, retention sweeps) takes its cached result with it, without each learning of it.
+  `CREATE TRIGGER IF NOT EXISTS trg_a11y_media_checks_content_del AFTER DELETE ON content
+     BEGIN DELETE FROM a11y_media_checks WHERE content_id = OLD.id; END`,
+  'ALTER TABLE ai_settings ADD COLUMN stt_base_url TEXT',
+  'ALTER TABLE ai_settings ADD COLUMN stt_model TEXT',
+  'ALTER TABLE ai_settings ADD COLUMN stt_api_key_enc TEXT',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

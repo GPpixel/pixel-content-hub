@@ -65,16 +65,48 @@ const INK = '#14171C';
  * near-black contrasts better with that background, and an accent too close to the background to
  * read is swapped for the ink. The sign can be ugly-on-brand; it cannot be illegible.
  */
+/*
+ * ⚠️ AND EVERY TEXT COLOUR CLEARS WCAG AA (4.5:1), NOT MERELY "READS BETTER" (3.0: accessibility,
+ * lib/a11y). The checker found the gaps the old rule left: on a mid-tone background neither white nor
+ * the near-black ink reaches 4.5 (the best of the two can be 4.2); the muted line, a 30% mix towards
+ * the background, fell to ~3 on saturated colours; and an accent was kept from 2.2:1. So:
+ *   - the ink falls back to pure black when near-black is not enough — white or black always gives
+ *     at least 4.58 against any colour;
+ *   - the muted colour mixes towards the background only as far as 4.5 allows;
+ *   - an accent below 4.5 is moved in LIGHTNESS ONLY (lib/a11y/contrast.suggest) until it reads, so a
+ *     brand blue stays recognisably that blue rather than collapsing to the ink.
+ * test/accessibility-signs.test.js runs the real checker over every design, both shapes, defaults
+ * and a spread of awkward brand colours.
+ */
+const A11Y_MIN = 4.5;
+function inkOn(bg) {
+  const best = contrast(WHITE, bg) >= contrast(INK, bg) ? WHITE : INK;
+  if (contrast(best, bg) >= A11Y_MIN) return best;
+  return contrast(WHITE, bg) >= contrast('#000000', bg) ? WHITE : '#000000';
+}
+function readable(color, bg) {
+  if (contrast(color, bg) >= A11Y_MIN) return color;
+  return require('./a11y/contrast').suggest(color, bg, A11Y_MIN) || inkOn(bg);
+}
+/** ink mixed towards bg by up to `t`, stopping where the contrast would drop below AA. */
+function softened(ink, bg, t) {
+  for (let k = t; k > 0; k -= 0.05) {
+    const c = mix(ink, bg, k);
+    if (contrast(c, bg) >= A11Y_MIN) return c;
+  }
+  return ink;
+}
+
 function themeOf(bgIn, accentIn, extraIn) {
   const bg = hex6(bgIn) || '#111827';
-  const rawAccent = hex6(accentIn) || mix(bg, contrast(WHITE, bg) >= contrast(INK, bg) ? WHITE : INK, 0.6);
-  const ink = contrast(WHITE, bg) >= contrast(INK, bg) ? WHITE : INK;
-  const accent = contrast(rawAccent, bg) >= 2.2 ? rawAccent : ink;
-  const onAccent = contrast(WHITE, accent) >= contrast(INK, accent) ? WHITE : INK;
+  const ink = inkOn(bg);
+  const rawAccent = hex6(accentIn) || mix(bg, ink, 0.6);
+  const accent = readable(rawAccent, bg);
+  const onAccent = inkOn(accent);
   const extra = hex6(extraIn);
   return {
     bg, ink, accent, onAccent,
-    muted: mix(ink, bg, 0.3),
+    muted: softened(ink, bg, 0.3),
     faint: mix(ink, bg, 0.8),
     // Decorative shapes: present but quiet, so they never compete with the words.
     tint: mix(extra || rawAccent, bg, extra ? 0.35 : 0.72),

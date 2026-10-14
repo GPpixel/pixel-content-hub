@@ -19,6 +19,7 @@ const OPS = {
   measureAndThumbnail: (job) => core.measureAndThumbnail(job.src, job.dest, job.width, job.quality),
   cutout: (job) => core.cutout(job.src, job.dest, job.opts),
   frameMetrics: (job) => core.frameMetrics(job.src),
+  luminanceGrid: (job) => core.luminanceGrid(job.src, job.cols),
 };
 
 parentPort.on('message', async (job) => {

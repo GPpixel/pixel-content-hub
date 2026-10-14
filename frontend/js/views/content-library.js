@@ -4,6 +4,7 @@ import { showToast } from '../components/toast.js';
 import { esc, hydrateAuthImages } from '../utils.js';
 import { t } from '../i18n.js';
 import { openHistoryModal } from '../components/history-modal.js';
+import { generateCaptions, openCaptionsEditor } from '../components/captions.js';
 import { isPdf, renderPdfToPages, baseName } from '../components/pdf-pages.js';
 import { reportConnectResult, loadCanvaLinks, syncCanvaLink, openCanvaPicker } from '../components/canva-import.js';
 import { openDialog, confirmDialog } from '../components/library/dialog.js';
@@ -1322,6 +1323,11 @@ function showEditModal(contentItem, onSave, { focus = null } = {}) {
           </div>
           ${contentItem.subtitle_url ? `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="editSubtitleRemove" style="width:auto;margin:0"><span>${t('content.subtitle_remove')}</span></label>` : ''}
           <p style="font-size:11px;color:var(--text-muted);margin-top:4px">${t('content.subtitle_hint')}</p>
+          <div class="a11y-cap-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button type="button" class="btn btn-secondary btn-sm" id="editGenCaptions" hidden>${esc(t('a11y.act.generate_captions'))}</button>
+            ${contentItem.subtitle_url ? `<button type="button" class="btn btn-secondary btn-sm" id="editEditCaptions">${esc(t('a11y.act.edit_captions'))}</button>` : ''}
+          </div>
+          <p id="editCaptionsNote" style="font-size:11px;color:var(--text-muted);margin-top:4px" hidden></p>
         </div>
         ` : ''}
         ${!isRemote ? `
@@ -1354,6 +1360,30 @@ function showEditModal(contentItem, onSave, { focus = null } = {}) {
   overlay.querySelector('#closeEditModal').onclick = () => closeEdit();
   overlay.querySelector('#cancelEditBtn').onclick = () => closeEdit();
   overlay.onclick = (e) => { if (e.target === overlay) closeEdit(); };
+
+  // 3.0 accessibility: "Generate captions" (only when the workspace has a speech-to-text endpoint;
+  // otherwise one sentence says why it is not offered) and "Edit captions".
+  const genBtn = overlay.querySelector('#editGenCaptions');
+  if (genBtn) {
+    api.getCaptionsJob(contentItem.id).then((st) => {
+      if (!document.contains(genBtn) || !st || Array.isArray(st)) return;
+      const note = overlay.querySelector('#editCaptionsNote');
+      if (st.stt_configured) genBtn.hidden = false;
+      else { note.textContent = t('a11y.captions.not_set'); note.hidden = false; }
+      if (st.job && st.job.status === 'running') { genBtn.disabled = true; genBtn.textContent = t('a11y.captions.working'); }
+    }).catch(() => {});
+    genBtn.addEventListener('click', async () => {
+      genBtn.disabled = true;
+      genBtn.textContent = t('a11y.captions.working');
+      const lang = overlay.querySelector('#editSubtitleLang')?.value;
+      const ok = await generateCaptions(contentItem.id, () => {}, lang);
+      if (!document.contains(genBtn)) return;
+      genBtn.disabled = false;
+      genBtn.textContent = t('a11y.act.generate_captions');
+      if (ok) { closeEdit(); openCaptionsEditor(contentItem.id); }
+    });
+  }
+  overlay.querySelector('#editEditCaptions')?.addEventListener('click', () => openCaptionsEditor(contentItem.id));
 
   overlay.querySelector('#saveEditBtn').onclick = async () => {
     const filename = overlay.querySelector('#editFilename').value.trim();
