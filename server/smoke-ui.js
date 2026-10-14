@@ -34,7 +34,7 @@ const crypto = require('node:crypto');
 // renders the head office setup prompt — the path every new organization sees first.
 const VIEWS = ['#/', '#/content', '#/playlists', '#/layouts', '#/widgets', '#/schedule',
   '#/walls', '#/reports', '#/kiosk', '#/designer', '#/activity', '#/members', '#/help', '#/settings',
-  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms', '#/energy', '#/experiments', '#/experiments/new', '#/site-caches',
+  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms', '#/energy', '#/experiments', '#/experiments/new', '#/site-caches', '#/migrate',
   // 3.0 Private AI: with no AI set up, both explain instead of failing.
   '#/ai-setup', '#/translate'];
 
@@ -113,6 +113,22 @@ const check = (name, ok, detail) => {
   await page.reload({ waitUntil: 'networkidle2' });
   await new Promise(r => setTimeout(r, 1500));
   check('a new signup is sent to the first-run guide', await page.evaluate(() => location.hash === '#/onboarding'));
+  // 3.0 switch to ScreenTinker: right after the welcome, the guide asks about another signage app,
+  // and "No, start fresh" (the Next button) carries on with the normal guide.
+  await page.evaluate(() => document.getElementById('nextBtn')?.click());
+  await page.waitForSelector('#onboardImport [data-act="fresh"]', { timeout: 8000 }).catch(() => {});
+  check('the first-run guide offers importing from another app', await page.evaluate(() =>
+    !!document.querySelector('#onboardImport [data-act="fresh"]')
+    && ['xibo', 'yodeck', 'optisigns', 'screencloud', 'generic-zip'].every((v) => !!document.querySelector(`#onboardImport [data-vendor="${v}"]`))));
+  // Width only: changing isMobile/hasTouch makes puppeteer reload the page (back to step one).
+  await page.setViewport({ width: 390, height: 844 });
+  await new Promise(r => setTimeout(r, 300));
+  check('the import choice fits a phone', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+  await page.setViewport({ width: 1440, height: 900 });
+  await page.evaluate(() => document.getElementById('nextBtn')?.click());
+  await new Promise(r => setTimeout(r, 600));
+  check('"No, start fresh" continues the normal guide (the player step)', await page.evaluate(() =>
+    !document.getElementById('onboardImport') && !!document.querySelector('a[href="/player"]')));
   const skipped = await page.evaluate(() => { const b = document.getElementById('skipBtn'); if (b) b.click(); return !!b; });
   await new Promise(r => setTimeout(r, 1500));
   await page.evaluate(() => localStorage.removeItem('rd_onboarded')); // only the server-side record may keep it closed

@@ -122,6 +122,13 @@ export async function render(container) {
       <div id="brandKitHost" class="bk-settings"></div>
     </div>
 
+    <!-- 3.0 switch to ScreenTinker (views/migrate.js). The page itself says so to a view-only member. -->
+    <div class="settings-section" id="migrateCard">
+      <h3>${esc(t('migrate.title'))}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">${esc(t('migrate.subtitle'))}</p>
+      <a class="btn btn-secondary btn-sm" href="#/migrate">${esc(t('migrate.simple.offer_link'))}</a>
+    </div>
+
     <!-- Where media is stored (org owners/admins). Mounted only for them; the server enforces it. -->
     <div class="settings-section" id="storageCard" style="display:none"></div>
     <div class="settings-section" id="m365Card" style="display:none"></div>

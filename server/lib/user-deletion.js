@@ -40,6 +40,9 @@ const WORKSPACE_SCOPED = [
   // 3.0 site cache: a deleted workspace's cache boxes stop being able to sign in (their token_hash
   // goes) and their assignments cascade with them.
   'site_caches',
+  // 3.0 switch to ScreenTinker (lib/migrate): a deleted workspace's import jobs (and any source
+  // credential still held for one), its idempotency map and its unpaired placeholders.
+  'migration_jobs', 'migration_items', 'migration_screens',
 ];
 // Logs that carry a device_id but NO foreign key (so they don't block, but we
 // clean them to avoid dangling rows).
@@ -52,6 +55,7 @@ const NULLABLE_USER_REFS = [
   ['activity_log', 'user_id'], ['activity_log', 'acting_user_id'],
   ['cap_feeds', 'user_id'], ['automation_hooks', 'created_by'], ['social_feeds', 'created_by'],
   ['social_connections', 'created_by'], ['bi_connections', 'created_by'], ['canva_integrations', 'updated_by'],
+  ['migration_jobs', 'user_id'],
 ];
 // NOT NULL legacy creator columns on workspace-scoped resources -> reassign to
 // the resource's org owner (fallback: the acting admin) so the row survives.

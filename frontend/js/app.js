@@ -32,6 +32,7 @@ import * as corporate from './views/corporate.js';
 import * as activity from './views/activity.js';
 import * as freshness from './views/freshness.js';
 import * as energy from './views/energy.js';
+import * as migrate from './views/migrate.js';
 import { installFreshnessChips } from './components/freshness-chips.js';
 import * as kiosk from './views/kiosk.js';
 import * as onboarding from './views/onboarding.js';
@@ -629,7 +630,7 @@ function route() {
   navLinks.forEach(link => {
     link.classList.remove('active');
     if (hash === '#/' && link.dataset.view === 'dashboard') link.classList.add('active');
-    else if (hash.startsWith('#/content') && link.dataset.view === 'content') link.classList.add('active');
+    else if ((hash.startsWith('#/content') || hash.startsWith('#/migrate')) && link.dataset.view === 'content') link.classList.add('active');
     else if (hash.startsWith('#/settings') && link.dataset.view === 'settings') link.classList.add('active');
     else if (hash.startsWith('#/billing') && link.dataset.view === 'billing') link.classList.add('active');
     else if ((hash.startsWith('#/layout') || hash === '#/layouts') && link.dataset.view === 'layouts') link.classList.add('active');
@@ -697,6 +698,10 @@ function route() {
   } else if (hash === '#/templates') {
     currentView = templates;
     templates.render(app);
+  } else if (hash === '#/migrate' || hash.startsWith('#/migrate?')) {
+    // 3.0 switch to ScreenTinker: import from another signage CMS (views/migrate.js).
+    currentView = migrate;
+    migrate.render(app);
   } else if (hash === '#/data-sources' || hash.startsWith('#/data-sources/')) {
     currentView = dataSources;
     dataSources.render(app);

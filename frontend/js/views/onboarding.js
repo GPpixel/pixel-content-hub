@@ -5,6 +5,7 @@ import { esc, isTouchFirst } from '../utils.js';
 import { publishOrSubmit } from '../components/release.js';
 import { mountStockPicker } from '../components/stock-picker.js';
 import { isSimpleMode } from '../components/ui-mode.js';
+import { mountMigrate, cleanup as cleanupMigrate } from './migrate.js';
 
 // 3.0: the sample a first-run user can show instead of hunting for a file (brand-neutral on purpose).
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
@@ -200,7 +201,23 @@ function getSteps(addMode = false) {
     }
   ];
   // 3.0 Add screen (Simple view): the same guide for every later screen, without the welcome.
-  return addMode ? steps.slice(1) : steps;
+  if (addMode) return steps.slice(1);
+  /*
+   * 3.0 switch to ScreenTinker: right after the welcome, a new account is asked whether it is coming
+   * from another signage app. "No, start fresh" is the Next button, so the guide is exactly what it
+   * was for everyone who says no. Choosing an app runs the import wizard (views/migrate.js, guide
+   * mode) inside this step's card, one question at a time; finishing or skipping it moves on to the
+   * player step, and the done step's playlist picker then offers the imported playlists for the
+   * first screen. An import keeps running on the server if the person moves on or the app is
+   * backgrounded; coming back to this step shows its progress.
+   */
+  const importStep = {
+    title: t('migrate.guide.title'),
+    icon: '&#128230;',
+    content: '<div id="onboardImport"></div>',
+    action: 'import',
+  };
+  return [steps[0], importStep, ...steps.slice(1)];
 }
 
 export function render(container, { mode = 'first' } = {}) {
@@ -260,6 +277,7 @@ export function render(container, { mode = 'first' } = {}) {
   }
 
   function renderStep() {
+    cleanupMigrate();
     const STEPS = getSteps(addMode);
     const step = STEPS[currentStep];
     const isFirst = currentStep === 0;
@@ -286,7 +304,7 @@ export function render(container, { mode = 'first' } = {}) {
             ${isFirst ? '<div></div>' : `<button class="btn btn-secondary" id="prevBtn">${t('onboarding.back')}</button>`}
             <div style="display:flex;gap:8px">
               ${!isLast ? `<button class="btn btn-secondary" id="skipBtn" style="color:var(--text-muted)">${t(addMode ? 'common.cancel' : 'onboarding.skip')}</button>` : ''}
-              <button class="btn btn-primary" id="nextBtn">${isLast ? t('onboarding.go_to_dashboard') : step.action === 'pair' ? t('onboarding.pair_display') : t('onboarding.next')}</button>
+              <button class="btn btn-primary" id="nextBtn">${isLast ? t('onboarding.go_to_dashboard') : step.action === 'pair' ? t('onboarding.pair_display') : step.action === 'import' ? esc(t('migrate.guide.fresh')) : t('onboarding.next')}</button>
             </div>
           </div>
         </div>
@@ -296,6 +314,11 @@ export function render(container, { mode = 'first' } = {}) {
     document.getElementById('prevBtn')?.addEventListener('click', () => { currentStep--; renderStep(); });
     document.getElementById('skipBtn')?.addEventListener('click', () => finish('skip'));
     document.getElementById('nextBtn')?.addEventListener('click', handleNext);
+
+    if (step.action === 'import') {
+      const advance = () => { if (currentStep === STEPS.indexOf(step)) { currentStep++; renderStep(); } };
+      mountMigrate(document.getElementById('onboardImport'), { guide: true, onSkip: advance, onFinish: advance });
+    }
 
     if (step.action === 'pair') {
       const box = document.getElementById('onboardNoStorage');
@@ -707,4 +730,4 @@ export function render(container, { mode = 'first' } = {}) {
   renderStep();
 }
 
-export function cleanup() {}
+export function cleanup() { cleanupMigrate(); }

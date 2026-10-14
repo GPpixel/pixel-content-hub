@@ -2052,6 +2052,11 @@ app.use('/api/experiments/:id/pos-locations', rateLimit(60000, 10));
 // Free stock search/import (routes/stock-media.js): every miss spends the instance's provider quota.
 // Per IP here; lib/stock-media.js also limits per person and per workspace.
 app.use('/api/stock', rateLimit(60000, 90));
+// 3.0 switch to ScreenTinker (routes/migrate.js): each connect makes the server call another vendor's
+// API with a key the person pasted, and the wizard polls a job while it runs.
+app.use('/api/migrate', rateLimit(60000, 120));
+app.post('/api/migrate/jobs', rateLimit(3600000, 30));
+app.post('/api/migrate/jobs/upload', rateLimit(3600000, 30));
 app.post('/api/plugin-submissions', rateLimit(3600000, 10)); // 10 plugin zips per hour per IP
 app.post('/api/admin/plugins/submissions', rateLimit(3600000, 20));
 app.get('/api/kiosk/:id/render', (req, res, next) => { req._skipAuth = true; next(); });
@@ -2698,6 +2703,9 @@ require('./lib/smart-playlist').start(io);
 require('./lib/ota-rollout').start();   // player rollouts: waves, automatic halt and rollback
 require('./lib/local-conditions').start(io);   // local weather for weather conditions
 require('./lib/experiments/sweep').start(io);   // experiments: end dates, exposure copies, hourly sales import
+// 3.0 switch to ScreenTinker: imports a dead process left running become 'interrupted', and the
+// sweep that deletes expired source credentials and export uploads starts (lib/migrate).
+try { require('./lib/migrate').boot(); } catch (e) { console.error('[migrate] boot:', e && e.name); }
 // Dynamic device groups: a backstop for membership inputs changed by a path that does not reconcile
 // (an import, a mesh sync, a direct fix-up). A sweep that finds nothing to change writes nothing.
 {

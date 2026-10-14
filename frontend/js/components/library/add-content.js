@@ -34,6 +34,7 @@ const ICONS = {
   hdmi: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   stock: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
   canva: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/><path d="M12 22a3 3 0 0 1 0-6h2"/></svg>',
+  migrate: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 12h13"/><polyline points="12 7 17 12 12 17"/><path d="M21 4v16"/></svg>',
   folder: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
   chevron: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
   back: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>',
@@ -197,6 +198,9 @@ export function openAddContent(opts) {
       list.push({ key: 'canva', icon: ICONS.canva, title: t('library.add.src_canva'),
         desc: c.connected ? t('library.add.src_canva_desc') : c.configured ? t('library.add.src_canva_connect') : t('library.add.src_canva_setup') });
     }
+    // 3.0 switch to ScreenTinker: the whole library (and playlists, schedules, screens) from another
+    // CMS. Not a form in this modal — it is a wizard with a background job — so the tile leaves for it.
+    list.push({ key: 'migrate', icon: ICONS.migrate, title: t('library.add.src_migrate'), desc: t('library.add.src_migrate_desc') });
     return list;
   }
 
@@ -283,7 +287,10 @@ export function openAddContent(opts) {
       e.preventDefault();
       startFiles([...e.dataTransfer.files]);
     });
-    b.querySelectorAll('[data-source]').forEach((el) => el.addEventListener('click', () => go(el.dataset.source)));
+    b.querySelectorAll('[data-source]').forEach((el) => el.addEventListener('click', () => {
+      if (el.dataset.source === 'migrate') { dlg.close(); window.location.hash = '#/migrate'; return; }
+      go(el.dataset.source);
+    }));
     b.querySelector('[data-act="change-dest"]').addEventListener('click', () => { state.returnTo = 'home'; go('dest'); });
   }
 
