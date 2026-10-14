@@ -604,4 +604,13 @@ module.exports = {
   // #talk: dedicated master switch for the voice intercom / PA feature, separate from live video.
   // Per-org enablement lives in organizations.talk_enabled; this is the global gate. Off by default.
   talkEnabled: process.env.TALK_ENABLED === 'true',
+  /*
+   * 3.0: screen share to a screen (lib/screen-share.js, docs/screen-share.md). ON by default: it
+   * needs no sidecar (peer-to-peer WebRTC, this server only relays signalling), only an editor can
+   * start one, and the meeting-room code is off per screen until an admin turns it on. Set
+   * SCREEN_SHARE_ENABLED=false to remove the feature from the whole server.
+   */
+  screenShareEnabled: process.env.SCREEN_SHARE_ENABLED !== 'false',
+  // The longest a single share may run before the screen goes back to its content (minutes, 1-480).
+  screenShareMaxMinutes: Math.min(480, Math.max(1, parseInt(process.env.SCREEN_SHARE_MAX_MINUTES) || 60)),
 };

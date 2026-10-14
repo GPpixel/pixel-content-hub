@@ -2750,6 +2750,12 @@ html.nav-pending .main-wrapper { margin-left: 0 !important; }
 .simple-screen-status::before { content: '\25CF'; margin-right: 6px; }
 .simple-screen-status.on::before { color: var(--success); }
 .simple-screen-status.off::before { color: var(--text-muted); }
+/* 3.0 screen share: a screen card with its "Share my screen" button underneath. */
+.simple-screen-wrap { display: grid; gap: 6px; align-content: start; }
+.simple-screen-wrap .simple-screen { height: 100%; }
+.simple-screen-share { justify-content: center; }
+.simple-share-audio { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; font-size: 14px; cursor: pointer; }
+.simple-share-go { font-size: 16px; padding: 12px 22px; }
 .simple-empty { text-align: center; padding: 28px; background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--radius-lg); }
 .simple-empty p { color: var(--text-secondary); margin-bottom: 14px; }
 .simple-muted { color: var(--text-muted); font-size: 13px; }

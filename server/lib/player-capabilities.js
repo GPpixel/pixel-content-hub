@@ -111,6 +111,14 @@ const CAPABILITIES = [
    * A screen (signage) declares remote.talk but NOT this; a phone/tablet (or a browser tab with a
    * mic) declares both. Implies remote.talk. */
   'remote.mic',
+  /* 3.0: a person's screen, shared from their browser, shown fullscreen on this screen
+   * (lib/screen-share.js). The player RECEIVES a peer-to-peer WebRTC stream and renders it over its
+   * content, then puts the content back. Declared only by a player that runs that receiver — today
+   * the web player in a real browser (not inside the BrightSign / webOS / Vega / iOS shells, where it
+   * is unverified). In NO baseline: a player that never heard of it would leave a guest staring at
+   * a TV that ignores them, so the dashboard and the meeting-room code offer only screens that
+   * declare it. */
+  'remote.screen_share',
   /* #312 follow-up: the player can accept a server-URL rewrite from the dashboard AND verify the new
    * address is reachable before committing, rolling back if not. Declared only by a player that
    * implements that verify-then-commit path (so a fat-fingered URL cannot strand it), which is why

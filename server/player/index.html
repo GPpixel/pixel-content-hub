@@ -326,6 +326,8 @@
   <script src="/player/offline-play-queue.js"></script>
   <script src="/player/live-publish.js"></script>
   <script src="/player/talk.js"></script>
+  <!-- 3.0: screen share receiver (lib/screen-share-player.js), window.STScreenShare -->
+  <script src="/player/screen-share.js"></script>
   <script src="/player/trigger-resolve.js"></script>
   <script src="/player/media-mute.js"></script>
   <script src="/player/orientation-style.js"></script>
@@ -369,6 +371,12 @@
         info_sw: 'Service Worker',
         nothing_scheduled: 'Nothing scheduled right now',
         preview_webpage_blocked: 'If this area is blank, the site blocks being embedded and won’t display on the device either. Try a page that allows embedding.',
+        // 3.0: screen share (other languages fall back to these until translated)
+        share_shared_by: 'Shared by {name}',
+        share_guest: 'guest',
+        share_connecting: 'Connecting to {name}…',
+        share_code_title: 'Share your screen here',
+        share_code_hint: 'Go to {url} and enter',
       },
       es: {
         web_player: 'Reproductor web', server_url: 'URL del servidor', server_url_placeholder: 'https://signage.tudominio.com', connect: 'Conectar', pairing_code: 'Código de vinculación', pairing_hint: 'Ingresa este código en el panel para vincular esta pantalla', connecting: 'Conectando...', connecting_muted: 'Conectando (audio silenciado)...', info_title: 'Reproductor web ScreenTinker', info_close_hint: 'Presiona Atrás de nuevo o haz clic para cerrar', info_device_id: 'ID del dispositivo', info_device_name: 'Nombre del dispositivo', info_server: 'Servidor', info_status: 'Estado', info_now_playing: 'Reproduciendo', info_resolution: 'Resolución', info_uptime: 'Tiempo activo', info_platform: 'Plataforma', info_cache: 'Caché', info_connected: 'Conectado', info_disconnected: 'Desconectado', info_active: 'Activo', info_inactive: 'Inactivo', info_nothing: 'Nada', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'No hay nada programado en este momento', preview_webpage_blocked: 'Si esta área está en blanco, el sitio bloquea la inserción y tampoco se mostrará en el dispositivo. Prueba con una página que permita la inserción.',
@@ -3558,6 +3566,46 @@
         try { setTalkDucking(false); } catch (_) {}   // restore playlist audio + resume video
       });
 
+      /*
+       * 3.0 screen share (docs/screen-share.md): a person's screen, shown fullscreen over the
+       * playlist. STScreenShare opens the screen's own signalling leg with this player's device_token
+       * and receives the stream peer to peer. The playlist keeps running underneath (ducked, like
+       * talk), so ending the share — however it ends — simply shows it again.
+       */
+      const shareLabels = () => ({
+        sharedBy: _t('share_shared_by'), guest: _t('share_guest'), connecting: _t('share_connecting'),
+        codeTitle: _t('share_code_title'), codeHint: _t('share_code_hint'),
+      });
+      socket.on('device:screenshare-start', (data) => {
+        const SS = window.STScreenShare;
+        if (!SS || !data || typeof data.session_id !== 'string') return;
+        if (!config || !config.deviceId || !config.deviceToken) return;
+        try {
+          setShareDucking(true);
+          SS.start({
+            deviceId: config.deviceId,
+            deviceToken: config.deviceToken,
+            serverUrl: config.serverUrl || '',
+            sessionId: data.session_id,
+            sharedBy: typeof data.shared_by === 'string' ? data.shared_by : '',
+            guest: !!data.guest,
+            maxSeconds: data.max_seconds,
+            iceServers: Array.isArray(data.ice_servers) ? data.ice_servers : [],
+            labels: shareLabels(),
+            onState: (st, reason) => {
+              console.log('[share]', st, reason || '');
+              if (st === 'stopped' || st === 'unsupported') { try { setShareDucking(false); } catch (_) {} }
+            },
+          });
+        } catch (_) { try { setShareDucking(false); } catch (e) {} }   // a share never breaks playback
+      });
+      socket.on('device:screenshare-stop', (data) => {
+        try { window.STScreenShare && window.STScreenShare.stop(data && data.session_id, data && data.reason); } catch (_) {}
+      });
+      socket.on('device:screenshare-code', (data) => {
+        try { window.STScreenShare && window.STScreenShare.showCode(data, shareLabels()); } catch (_) {}
+      });
+
       socket.on('device:pip-show', (data) => pipShow(data));
       socket.on('device:pip-clear', (data) => pipClear(data && data.pip_id));
     }
@@ -3744,19 +3792,32 @@
       if (typeof setBaseAudioSuppressed !== 'function') return;
       // Base audio is ducked when a trigger covers the screen OR a voice call/PA is active
       // (talkDucking) — combined here so neither source clobbers the other.
-      try { setBaseAudioSuppressed(!!(triggerActive && triggerActive.coversBase) || talkDucking); } catch (e) {}
+      // 3.0: a screen share ducks the playlist the same way (typeof: tests compile this alone).
+      const sharing = typeof shareDucking !== 'undefined' && shareDucking;
+      try { setBaseAudioSuppressed(!!(triggerActive && triggerActive.coversBase) || talkDucking || sharing); } catch (e) {}
     }
 
     // #talk: while a voice call / PA announcement is active on this device, duck the playlist so the
     // announcement is heard — mute the base audio AND pause the current video (frozen, silent). The
     // announcement's own <audio> is __stOverlay, so setBaseAudioSuppressed leaves it alone.
     let talkDucking = false;
+    // 3.0 screen share: while a person's screen is shown over the playlist, mute and pause what is
+    // underneath — the same ducking talk uses, as a separate flag so ending one does not undo the other.
+    let shareDucking = false;
+    function setShareDucking(on) {
+      shareDucking = !!on;
+      triggerSyncAudio();
+      try {
+        if (on) { if (currentVideoEl) currentVideoEl.pause(); }
+        else if (!talkDucking && currentVideoEl && !currentVideoEl.__stOverlay) { const p = currentVideoEl.play(); if (p && p.catch) p.catch(() => {}); }
+      } catch (e) { /* torn down */ }
+    }
     function setTalkDucking(on) {
       talkDucking = !!on;
       triggerSyncAudio();   // re-evaluate the combined base-audio suppression
       try {
         if (on) { if (currentVideoEl) currentVideoEl.pause(); }
-        else if (currentVideoEl && !currentVideoEl.__stOverlay) { const p = currentVideoEl.play(); if (p && p.catch) p.catch(() => {}); }
+        else if (!shareDucking && currentVideoEl && !currentVideoEl.__stOverlay) { const p = currentVideoEl.play(); if (p && p.catch) p.catch(() => {}); }
       } catch (e) { /* torn down */ }
     }
 
@@ -4601,6 +4662,19 @@
       // (detectMic) put a media-permission prompt on top of the pairing code on a fresh Pi, so it is
       // not called. See register(). Until it is restored, every screen reports one-way Talk / PA.
       if (window.__stHasMic) caps.push('remote.mic');
+      /*
+       * 3.0 screen share: this page can RECEIVE a peer-to-peer WebRTC stream and show it fullscreen
+       * (window.STScreenShare). Claimed only in a plain browser / desktop shell: inside the
+       * BrightSign, webOS, Vega and iOS shells the WebRTC receive path is unverified, and a screen
+       * that claims it and then shows nothing is a guest presenting to a blank TV. typeof-guarded
+       * throughout because the capability tests run this function on its own.
+       */
+      try {
+        const SS = typeof window !== 'undefined' ? window.STScreenShare : null;
+        const rtc = !!(SS && typeof SS.isSupported === 'function' && SS.isSupported());
+        const shell = (typeof ON_BRIGHTSIGN !== 'undefined' && ON_BRIGHTSIGN) || (typeof HOST !== 'undefined' && !!HOST);
+        if (rtc && !shell) caps.push('remote.screen_share');
+      } catch (e) { /* not declared */ }
       if (typeof triggerStats === 'object' && triggerStats.listeners && triggerStats.listeners.http) {
         caps.push('trigger.http');
       }

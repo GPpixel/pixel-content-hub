@@ -2820,6 +2820,9 @@ module.exports = function setupDeviceSocket(io) {
           // loop reset that counter on each post-install reconnect and was offered forever.
           try { require('../lib/ota-breaker').forgiveDevice(device_id); } catch (_) { /* non-fatal */ }
           socket.emit('device:registered', { device_id, device_token: tokenToSend, status: 'online' });
+          // 3.0 screen share: remember the address this screen reaches us on (its QR) and send its
+          // meeting-room code if it shows one. No-op for every screen with the code off.
+          try { require('../lib/screen-share').onDeviceRegistered(device_id, socket.handshake); } catch (_) { /* never block register */ }
           // #143: a device paired/claimed server-side (user_id set) that RECONNECTS must be told
           // it's paired — the app leaves the Connect page ONLY on 'device:paired' (web: hides the
           // setup screen; Android ProvisioningActivity.onPaired -> MainActivity). The
@@ -3270,6 +3273,11 @@ module.exports = function setupDeviceSocket(io) {
 
       const deviceId = currentDeviceId;
       const closingSocketId = socket.id;
+      // 3.0 screen share: a share cannot outlive the screen's connection, and its code means nothing
+      // now. Immediate (not debounced) for the pty reason above: a share that looks alive for the
+      // debounce window is a sharer presenting to a dark TV. After the stale/evicted guards, so a
+      // newer socket's share is not ended by an old socket's late disconnect.
+      try { require('../lib/screen-share').deviceGone(deviceId); } catch (_) { /* never block the offline path */ }
       console.log(`Device disconnected: ${deviceId} (offline transition deferred ${OFFLINE_DEBOUNCE_MS}ms)`);
 
       // Defensive: clear any existing timer for this device. Shouldn't happen

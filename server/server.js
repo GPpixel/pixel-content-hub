@@ -101,6 +101,13 @@ try {
 } catch (e) {
   console.warn('[go2rtc] live-publish WS proxy not attached:', e && e.message);
 }
+// 3.0: screen share signalling (lib/screen-share.js) — /api/screen-share/ws (the sharer's browser)
+// and /api/devices/:id/screen-share/ws (the screen). Same 'upgrade' pattern: only its own paths.
+try {
+  require('./lib/screen-share').attach(server);
+} catch (e) {
+  console.warn('[screen-share] signalling WS not attached:', e && e.message);
+}
 
 // Middleware
 const helmet = require('helmet');
@@ -594,6 +601,14 @@ app.get('/app', (req, res) => {
   }
 });
 
+// 3.0: the meeting-room share page (frontend/share.html). Module scripts only, so it runs under the
+// strict dashboard CSP. The code may arrive in the fragment (#ABCD1234, from the screen's QR), which
+// the browser never sends here.
+app.get(['/share', '/share/'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(config.frontendDir, 'share.html'));
+});
+
 // Sitemap and robots — served explicitly so the Content-Type is guaranteed
 // and these endpoints are immune to any future static-middleware reshuffle.
 app.get('/sitemap.xml', (req, res) => {
@@ -798,6 +813,13 @@ app.get('/player/live-publish-legacy.js', (req, res) => {
 app.get('/player/talk.js', (req, res) => {
   res.type('application/javascript').setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'lib', 'talk-web.js'));
+});
+
+// 3.0: the web-player screen-share receiver (lib/screen-share-player.js), same serving pattern.
+// Inert until a device:screenshare-start (or a meeting-room code) arrives.
+app.get('/player/screen-share.js', (req, res) => {
+  res.type('application/javascript').setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(__dirname, 'lib', 'screen-share-player.js'));
 });
 
 app.get('/player/talk-legacy.js', (req, res) => {
@@ -1389,6 +1411,14 @@ app.use('/api/hooks/in', rateLimit(60000, 240), require('./routes/hooks-in'));
  * purpose — every panel in a building polls from one NAT address.
  */
 app.use('/api/room-panel', rateLimit(60000, 1200), require('./routes/room-panel'));
+
+/*
+ * 3.0: screen share, the meeting-room side (routes/screen-share-guest.js). No session by design —
+ * the code the screen shows is the credential — so it is limited hard per address: 10 tries a
+ * minute is plenty for a person mistyping, and nothing like enough to guess a 40-bit code that
+ * changes every ten minutes. The page itself is /share (below, with the dashboard pages).
+ */
+app.use('/api/share', rateLimit(60000, 10), require('./routes/screen-share-guest'));
 
 app.use('/unsubscribe',
   rateLimit(60000, 20),
@@ -2555,6 +2585,7 @@ app.use('/media', require('./routes/media'));
 const setupWebSockets = require('./ws');
 const { deviceNs, dashboardNs } = setupWebSockets(io);
 app.set('io', io);
+require('./lib/screen-share').init(io);   // 3.0: screen share — reaches the screens over /device
 
 // Start heartbeat checker
 const { startHeartbeatChecker } = require('./services/heartbeat');

@@ -171,6 +171,11 @@ const JWT_ONLY_ROUTERS = [
    * repoint every store's screens. Authoring is a signed-in human action.
    */
   { path: '/api/corporate',   mod: './routes/corporate',    tenancy: true },
+  /*
+   * 3.0: screen share (lib/screen-share.js). JWT only: putting your screen on a TV is a person at a
+   * browser. The meeting-room join is /api/share, mounted separately in server.js (no account).
+   */
+  { path: '/api/screen-share', mod: './routes/screen-share', tenancy: true },
 ];
 
 // #73: AGENCY_ROUTERS - capability-restricted ('agency' scope) surface. Mounted with

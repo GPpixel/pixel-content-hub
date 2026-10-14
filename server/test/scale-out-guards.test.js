@@ -137,6 +137,7 @@ const NOT_WORKSPACE_SCOPED = Object.freeze({
   // session. Not exempt on trust: a guard forwards every action for a copied workspace to the
   // primary before the body is read (asserted below).
   'room-panel.js': 'room display actions; a guard forwards every one for a copied workspace to the primary (asserted below)',
+  'screen-share-guest.js': '3.0 meeting-room screen share join: spends an in-memory code and mints an in-memory session on the node the screen is connected to; writes no workspace row (only the activity_log audit line)',
 });
 
 const INLINE_NOT_WORKSPACE_SCOPED = Object.freeze({
