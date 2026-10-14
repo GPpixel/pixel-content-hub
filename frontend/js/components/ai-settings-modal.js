@@ -22,6 +22,10 @@ import { esc } from '../utils.js';
 export async function openAiSettingsModal(opts = {}) {
   let cur = {};
   try { cur = await api.aiGetSettings(); } catch { /* show empty form */ }
+  // 3.0 accessibility: the speech-to-text endpoint "Generate captions" uses. Its own endpoint and
+  // save (routes/accessibility.js /stt), so this dialog's existing fields and save are untouched.
+  let stt = {};
+  try { stt = (await api.getSttSettings()) || {}; } catch { /* older server: section still shown, save reports */ }
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.style.display = 'flex';
@@ -64,6 +68,17 @@ export async function openAiSettingsModal(opts = {}) {
         <div class="form-group"><label>${t('designer.ai.image_api_key')}</label>
           <input id="aiImageKey" class="input" type="password" autocomplete="off" placeholder="${cur.has_image_key ? t('designer.ai.key_set') : t('designer.ai.image_key_ph')}" style="width:100%">
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${t('designer.ai.image_key_hint')}</div></div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:14px 0 10px">
+        <h4 style="font-size:13px;margin-bottom:4px">${esc(t('a11y.stt.title'))}</h4>
+        <p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">${esc(t('a11y.stt.desc'))}</p>
+        <div class="form-group"><label for="aiSttBaseUrl">${esc(t('a11y.stt.base_url'))}</label>
+          <input id="aiSttBaseUrl" class="input" value="${esc(stt.base_url || '')}" placeholder="https://api.openai.com/v1  ·  http://localhost:8000/v1" style="width:100%"></div>
+        <div class="form-group"><label for="aiSttModel">${esc(t('a11y.stt.model'))}</label>
+          <input id="aiSttModel" class="input" value="${esc(stt.model || '')}" placeholder="whisper-1  ·  Systran/faster-whisper-small" style="width:100%"></div>
+        <div class="form-group"><label for="aiSttKey">${esc(t('a11y.stt.key'))}</label>
+          <input id="aiSttKey" class="input" type="password" autocomplete="off" placeholder="${esc(stt.has_key ? t('designer.ai.key_set') : t('a11y.stt.key_placeholder'))}" style="width:100%">
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${esc(t('a11y.stt.privacy'))}</div></div>
         <div id="aiSettingsErr" style="display:none;color:var(--danger);font-size:13px;margin-top:8px"></div>
       </div>
       <div class="modal-footer">
@@ -135,8 +150,16 @@ export async function openAiSettingsModal(opts = {}) {
     if (key) data.api_key = key;
     const imgKey = overlay.querySelector('#aiImageKey').value;
     if (imgKey) data.image_api_key = imgKey;
+    const sttData = {
+      base_url: overlay.querySelector('#aiSttBaseUrl').value.trim(),
+      model: overlay.querySelector('#aiSttModel').value.trim(),
+    };
+    const sttKey = overlay.querySelector('#aiSttKey').value;
+    if (sttKey) sttData.api_key = sttKey;
+    const sttChanged = sttKey || sttData.base_url !== (stt.base_url || '') || sttData.model !== (stt.model || '');
     try {
       await api.aiSaveSettings(data);
+      if (sttChanged) await api.saveSttSettings(sttData);
       showToast(t('designer.ai.saved'), 'success');
       close();
     } catch (e2) {

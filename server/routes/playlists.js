@@ -1008,6 +1008,13 @@ router.post('/:id/publish', requirePlaylistWrite, (req, res) => {
         + 'from this playlist — an empty nested playlist can leave some players on a black screen.',
     });
   }
+  // 3.0 accessibility: the workspace's opt-in "do not publish with accessibility errors" policy
+  // (lib/a11y publishGate). Off by default, in which case this is one indexed lookup and nothing else.
+  {
+    const pl = db.prepare('SELECT workspace_id FROM playlists WHERE id = ?').get(req.params.id);
+    const gate = pl && require('../lib/a11y').publishGate(db, pl.workspace_id, 'playlist', req.params.id);
+    if (gate) return res.status(gate.status).json({ error: gate.error, code: gate.code, errors: gate.check.errors });
+  }
   // Snapshot shape (no pi.id) is intentional — published_snapshot is consumed
   // by devices and stored as JSON; row IDs there would be misleading.
   // The release gate: with approval off this is the old direct publish; with approval on it

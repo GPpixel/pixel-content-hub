@@ -9,6 +9,7 @@ import { renderApprovalBar } from '../components/approval-actions.js';
 import { openSmartRulesModal, rulesSummary, loadFolders, DEFAULT_RULES } from '../components/smart-rules.js';
 import * as cui from '../components/corporate-ui.js';
 import { openSlotDialog } from '../components/corporate-slot-dialog.js';
+import { confirmAccessibility } from '../components/accessibility.js';
 
 function formatDate(ts) {
   if (!ts) return '--';
@@ -579,6 +580,8 @@ function renderDetailContent(container, playlist) {
     publishBtn.addEventListener('click', async () => {
       try {
         publishBtn.disabled = true;
+        // 3.0 accessibility: list errors/warnings first, with "Publish anyway".
+        if (!(await confirmAccessibility('playlist', playlist.id))) { publishBtn.disabled = false; return; }
         publishBtn.textContent = t('playlist.draft.publishing');
         const updated = await api.publishPlaylist(playlist.id);
         showToast(t('playlist.toast.published'));

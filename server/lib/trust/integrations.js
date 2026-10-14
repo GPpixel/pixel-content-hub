@@ -166,6 +166,15 @@ const INTEGRATIONS = [
     },
   },
   {
+    // 3.0 accessibility: "Generate captions" sends a video's audio to the speech-to-text endpoint set here.
+    id: 'captions', level: 'org', customerData: true,
+    status(ctx) {
+      const sc = wsScope(ctx);
+      const n = count(ctx, 'ai_settings', "COALESCE(stt_base_url,'') <> ''", sc);
+      return { enabled: n > 0, count: n, hosts: hostsFrom(ctx, "SELECT stt_base_url AS u FROM ai_settings WHERE COALESCE(stt_base_url,'') <> ''", sc) };
+    },
+  },
+  {
     id: 'data_sources', level: 'org', customerData: false,
     status(ctx) {
       const n = count(ctx, 'data_sources', "type IN ('rest','csv','rss','sheets','ical')", wsScope(ctx));

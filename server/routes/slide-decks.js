@@ -226,6 +226,10 @@ router.post('/:id/publish', (req, res) => {
   const deck = checkDeckAccess(req, res, true);
   if (!deck) return;
 
+  // 3.0 accessibility: the opt-in "do not publish with accessibility errors" policy (lib/a11y).
+  const gate = require('../lib/a11y').publishGate(db, deck.workspace_id, 'slide_deck', deck.id);
+  if (gate) return res.status(gate.status).json({ error: gate.error, code: gate.code, errors: gate.check.errors });
+
   let out;
   try {
     out = require('../lib/releases').releaseSlideDeck(db, deck.id, req, { actor: require('../lib/releases').actorOf(req) });

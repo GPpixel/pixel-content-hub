@@ -4,6 +4,7 @@ import { showToast } from '../components/toast.js';
 import { t } from '../i18n.js';
 import { renderApprovalBar } from '../components/approval-actions.js';
 import { mountHostedPicker } from '../components/ai-hosted-picker.js';
+import { confirmAccessibility } from '../components/accessibility.js';
 
 /*
  * The slide deck editor.
@@ -469,6 +470,9 @@ export async function render(container) {
     return;
   }
   if (state.deck) return renderEditor(container);
+  // 3.0 accessibility: "Open the editor" from the Accessibility page lands on #/slides?deck=<id>.
+  const want = new URLSearchParams((window.location.hash.split('?')[1]) || '').get('deck');
+  if (want && state.decks.some((d) => d.id === want)) return openDeck(container, want);
   renderList(container);
 }
 
@@ -483,9 +487,9 @@ function renderList(container) {
   }
   host.innerHTML = `<div class="settings-section" style="padding:0">
     ${state.decks.map((d) => `
-      <div style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--border)">
+      <div data-deck-row="${esc(d.id)}" style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--border)">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:600">${esc(d.name)}</div>
+          <div style="font-weight:600" data-deck-name>${esc(d.name)}</div>
           <div style="font-size:12px;color:var(--text-muted)">
             ${d.slide_count} slide${d.slide_count === 1 ? '' : 's'} · ${(d.total_sec || 0)}s total
             ${d.playlist_id ? '· published' : '· not published yet'}</div>
@@ -647,6 +651,8 @@ function renderEditor(container) {
   container.querySelector('#backBtn').addEventListener('click', async () => {
     if (state.dirty && !confirm('Leave without saving? Your changes will be lost.')) return; // eslint-disable-line no-alert
     state.deck = null;
+    // Opened from a #/slides?deck= link: drop the parameter, or render would reopen the same deck.
+    if (window.location.hash.startsWith('#/slides?')) history.replaceState(null, '', '#/slides');
     await render(container);
   });
   container.querySelector('#saveBtn').addEventListener('click', () => save(container));
@@ -1822,6 +1828,8 @@ async function save(container) {
 
 async function publish(container) {
   if (state.dirty) await save(container);
+  // 3.0 accessibility: list errors/warnings first, with "Publish anyway".
+  if (!(await confirmAccessibility('slide_deck', state.deck.id))) return;
   try {
     const out = await api.post(`/slide-decks/${state.deck.id}/publish`, {});
     state.deck = out;

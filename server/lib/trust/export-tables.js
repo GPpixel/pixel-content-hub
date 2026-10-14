@@ -182,6 +182,8 @@ const EXPORTED = {
   experiment_units: { category: 'playlists', scope: via('experiment_id', 'experiments') },
   experiment_exposure: { category: 'proof_of_play', scope: via('experiment_id', 'experiments') },
   experiment_outcomes: { category: 'proof_of_play', scope: via('experiment_id', 'experiments') },
+  // accessibility checker (3.0)
+  a11y_settings: { category: 'settings', scope: ws() },
   // switch to ScreenTinker (3.0): screens imported from another system, waiting to be paired
   migration_screens: { category: 'devices', scope: ws() },
   // the audit trail
@@ -194,6 +196,7 @@ const EXPORTED = {
 // at all (transient state a restart would rebuild). Each one says why.
 const EXCLUDED = {
   app_settings: 'instance configuration, not an organization\'s',
+  a11y_media_checks: 'cached results of the accessibility checks on media: recomputed automatically',
   site_caches: 'a site cache box and the credential it signs in with: set the box up again on the new server (docs/site-cache.md)',
   site_cache_assignments: 'which screens use a site cache box: follows site_caches',
   migration_jobs: 'import jobs from another signage system: transient, and may still hold an encrypted source credential',

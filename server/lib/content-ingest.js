@@ -222,7 +222,12 @@ async function ingestUploadedFile({ file, userId, workspaceId, folderId = null }
   } catch { /* hooks must not fail an upload */ }
   require('./smart-playlist').notifyContentChanged(workspaceId);
 
-  return db.prepare('SELECT * FROM content WHERE id = ?').get(id);
+  const row = db.prepare('SELECT * FROM content WHERE id = ?').get(id);
+  // 3.0 accessibility: start the flash/caption check of a video or GIF now, while its bytes are
+  // certainly local, so the report and the publish warning usually have the answer before anyone
+  // asks. Best-effort and queued (lib/a11y/media.js); never delays or fails the upload.
+  try { require('./a11y/media').queueVideo(row); } catch { /* checked later, on demand */ }
+  return row;
 }
 
 /*

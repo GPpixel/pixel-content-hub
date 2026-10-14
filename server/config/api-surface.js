@@ -237,6 +237,12 @@ const JWT_ONLY_ROUTERS = [
    * human's act, never an API token's.
    */
   { path: '/api/migrate', mod: './routes/migrate', tenancy: true },
+  /*
+   * 3.0 accessibility checker (lib/a11y, docs/accessibility.md): the report, the pre-publish check,
+   * settings and "Generate captions". JWT only, like freshness: a dashboard surface, and captions
+   * send a video's audio to an endpoint, which is a person's decision at a browser.
+   */
+  { path: '/api/accessibility', mod: './routes/accessibility', tenancy: true },
 ];
 
 // #73: AGENCY_ROUTERS - capability-restricted ('agency' scope) surface. Mounted with

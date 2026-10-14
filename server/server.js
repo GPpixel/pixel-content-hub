@@ -2069,6 +2069,11 @@ app.use('/api/widgets/preview', rateLimit(60000, 30)); // base64 inline = memory
 // 3.0 Make a sign: one gallery request renders every built-in template, and the form re-renders as
 // the person types (debounced). Generous for a person, a ceiling for a loop.
 app.use('/api/signs/preview', rateLimit(60000, 120));
+// 3.0 accessibility: the Make-a-sign check rides along with every preview; captions start an
+// ffmpeg encode and an upload to an AI endpoint, so they are counted like the AI generators.
+app.use('/api/accessibility/check/sign', rateLimit(60000, 120));
+const captionsLimit = rateLimit(60000, 10);
+app.use('/api/accessibility/captions', (req, res, next) => (req.method === 'POST' ? captionsLimit(req, res, next) : next()));
 app.use('/api/widgets/preview-session', rateLimit(60000, 30)); // preview session creation retains rendered HTML in memory for 5min
 // `/test` triggers an outbound fetch of an arbitrary calendar feed; cap it so a single
 // workspace cannot fan out unbounded requests to third-party URLs.

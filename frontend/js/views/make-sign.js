@@ -357,6 +357,7 @@ export async function renderSign(container, { simple = false, device: presetId =
           </div>
           <div class="sign-form" data-form>${formHtml(tp, v, brand)}</div>
         </div>
+        <div class="sign-a11y" data-a11y role="status" hidden></div>
         ${brandNote()}
         <p class="simple-status" data-status role="status"></p>` }));
     wireBack(queue ? () => {
@@ -460,7 +461,46 @@ export async function renderSign(container, { simple = false, device: presetId =
         // The gallery's thumbnail of this template follows the edits too.
         if (gallery[a]) gallery[a][`${tp.id}:${a}`] = r.html;
       } catch { /* keep the last good preview */ }
+      readability(tp, a);
     }, delay)];
+  }
+
+  /*
+   * 3.0 accessibility: one plain sentence when the sign may be hard to read, with a one-tap fix.
+   *
+   * The sign itself always uses readable text colours (the server adjusts a colour that would not
+   * read), so what this tells the person is that the colour they PICKED was changed, and offers to
+   * make the picker say what the screen will show. Text too small for the workspace's viewing
+   * distance gets its own sentence. A failed check says nothing: it is advice, not a gate.
+   */
+  async function readability(tp, a) {
+    const box = container.querySelector('[data-a11y]');
+    if (!box) return;
+    let r;
+    try { r = await api.checkSignAccessibility({ template: tp.id, aspect: a, values: payload(tp) }); } catch { return; }
+    if (run !== alive || !document.contains(box) || a !== aspect || !r || Array.isArray(r)) return;
+    const chosen = Array.isArray(r.chosen) ? r.chosen[0] : null;
+    const small = (r.issues || []).find((i) => i.code === 'text_small' && i.severity !== 'note');
+    if (chosen && /^#[0-9A-Fa-f]{6}$/.test(chosen.suggested || '')) {
+      box.innerHTML = `<p><span class="a11y-swatch" style="background:${esc(chosen.suggested)}" aria-hidden="true"></span>${esc(t('a11y.sign.hard_to_read'))}</p>
+        <button type="button" class="btn btn-secondary" data-a11y-fix>${esc(t('a11y.sign.use_suggested'))}</button>`;
+      box.hidden = false;
+      box.querySelector('[data-a11y-fix]').addEventListener('click', () => {
+        const v = valuesOf(tp);
+        v[chosen.key] = chosen.suggested.toLowerCase();
+        const inp = container.querySelector(`[data-form] [data-key="${chosen.key}"]`);
+        if (inp) inp.value = v[chosen.key];
+        box.hidden = true;
+        preview(0);
+      });
+    } else if (small) {
+      const distance = r.view && r.view.distance_m ? r.view.distance_m : '';
+      box.innerHTML = `<p>${esc(t('a11y.sign.too_small', { distance }))}</p>`;
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+      box.innerHTML = '';
+    }
   }
 
   // ---------------------------------------------------------------- 3. screens

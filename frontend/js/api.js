@@ -547,6 +547,19 @@ export const api = {
   unsnoozeFreshness: (type, id) => request(`/freshness/snooze/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   getFreshnessDigest: () => request('/freshness/digest'),
   setFreshnessDigest: (enabled) => request('/freshness/digest', { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  // 3.0 accessibility checker (routes/accessibility.js)
+  getAccessibility: () => request('/accessibility'),
+  getAccessibilityBadges: () => request('/accessibility/badges'),
+  checkAccessibility: (type, id) => request(`/accessibility/check/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
+  checkSignAccessibility: (body) => request('/accessibility/check/sign', { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  updateAccessibilitySettings: (data) => request('/accessibility/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  updateAccessibilityScreen: (id, data) => request(`/accessibility/screens/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getSttSettings: () => request('/accessibility/stt'),
+  saveSttSettings: (data) => request('/accessibility/stt', { method: 'PUT', body: JSON.stringify(data) }),
+  generateCaptions: (id, lang) => request(`/accessibility/captions/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify(lang ? { lang } : {}) }),
+  getCaptionsJob: (id) => request(`/accessibility/captions/${encodeURIComponent(id)}`),
+  getCaptionsText: (id) => request(`/accessibility/captions/${encodeURIComponent(id)}/vtt`),
+  saveCaptionsText: (id, vtt, lang) => request(`/accessibility/captions/${encodeURIComponent(id)}/vtt`, { method: 'PUT', body: JSON.stringify({ vtt, lang }) }),
   moveContent: (id, folderId) => request(`/content/${id}`, {
     method: 'PUT',
     body: JSON.stringify({ folder_id: folderId })
