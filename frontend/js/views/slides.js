@@ -448,6 +448,9 @@ export async function render(container) {
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <!-- 3.0 Make a sign: the built-in sign templates, which come back here as an ordinary deck. -->
       <a class="btn btn-secondary" href="#/signs?from=slides">${esc(t('signs.new_from_template'))}</a>
+      <!-- 3.0 Private AI: a starter set from one sentence, and translations of any deck. -->
+      <a class="btn btn-secondary" href="#/ai-setup">${esc(t('ai_setup.short'))}</a>
+      <a class="btn btn-secondary" href="#/translate">${esc(t('translate.title'))}</a>
       <button class="btn btn-primary" id="newDeck">+ New deck</button></div></div>
     <div id="deckArea"><p style="color:var(--text-muted)">Loading…</p></div>`;
 
@@ -578,6 +581,7 @@ function renderEditor(container) {
           </svg>
         </button>
         <span id="aiStatus" style="font-size:12px;color:var(--text-muted);margin-left:4px"></span>
+        <span data-private-ai-badge></span>
       </div>
       <!-- Hosted AI (ScreenTinker credits). Stays hidden unless the server has a platform image
            provider configured; then "Generate background" follows whichever path is picked here. -->
@@ -703,8 +707,10 @@ function renderEditor(container) {
   mountHostedPicker(container.querySelector('#aiHostedRow')).then((ctl) => { hostedCtl = ctl; }).catch(() => {});
   container.querySelector('#aiCfgBtn').addEventListener('click', async () => {
     const { openAiSettingsModal } = await import('../components/ai-settings-modal.js');
-    openAiSettingsModal();
+    // 3.0 Private AI: the badge follows a change of provider.
+    openAiSettingsModal({ onClose: () => import('../components/private-ai.js').then((m) => { m.getPrivateAiStatus(true); m.decoratePrivateBadges(container); }) });
   });
+  import('../components/private-ai.js').then((m) => m.decoratePrivateBadges(container)).catch(() => {});
   container.querySelectorAll('.tabBtn').forEach((b) => b.addEventListener('click', () => {
     state.tab = b.dataset.tab; paintTabs(container); renderProps(container);
   }));

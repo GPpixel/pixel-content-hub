@@ -1986,6 +1986,13 @@ app.use('/api/ai/generate-layered', rateLimit(60000, 3));
  */
 app.use('/api/ai/hosted/generate', rateLimit(60000, 10));
 app.use('/api/ai/hosted/checkout', rateLimit(60000, 10));
+/*
+ * 3.0 Private AI (routes/ai-private.js). Each of these is an outbound call to the workspace's AI
+ * server with a long budget; a starter set or a translation is several model calls per press.
+ */
+app.use('/api/ai/private/test', rateLimit(60000, 20));
+app.use('/api/ai/private/starter', rateLimit(60000, 6));
+app.use('/api/ai/private/translate', rateLimit(60000, 4));
 {
   /*
    * Hosted-AI housekeeping. A reservation left 'pending' is an attempt a crash interrupted: refund

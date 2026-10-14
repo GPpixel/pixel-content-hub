@@ -11,6 +11,8 @@ import * as widgets from './views/widgets.js';
 import * as slides from './views/slides.js';
 import * as templates from './views/templates.js';
 import * as makeSign from './views/make-sign.js';
+import * as aiSetup from './views/ai-setup.js';
+import * as translateView from './views/translate.js';
 import * as dataSources from './views/data-sources.js';
 import * as reviews from './views/reviews.js';
 import * as contentRequests from './views/requests.js';
@@ -630,7 +632,7 @@ function route() {
     else if ((hash === '#/playlists' || hash.startsWith('#/playlists/')) && link.dataset.view === 'playlists') link.classList.add('active');
     else if (hash === '#/schedule' && link.dataset.view === 'schedule') link.classList.add('active');
     else if (hash === '#/widgets' && link.dataset.view === 'widgets') link.classList.add('active');
-    else if ((hash === '#/slides' || hash.startsWith('#/signs')) && link.dataset.view === 'slides') link.classList.add('active');
+    else if ((hash === '#/slides' || hash.startsWith('#/signs') || hash.startsWith('#/ai-setup') || hash.startsWith('#/translate')) && link.dataset.view === 'slides') link.classList.add('active');
     else if (hash === '#/social' && link.dataset.view === 'social') link.classList.add('active');
     else if (hash === '#/templates' && link.dataset.view === 'templates') link.classList.add('active');
     else if ((hash === '#/data-sources' || hash.startsWith('#/data-sources/')) && link.dataset.view === 'data-sources') link.classList.add('active');
@@ -678,6 +680,14 @@ function route() {
     // 3.0 Make a sign, in the full shell (Slides → New from template). Simple view has #/simple/sign.
     currentView = makeSign;
     makeSign.render(app, hash);
+  } else if (hash === '#/ai-setup' || hash.startsWith('#/ai-setup?')) {
+    // 3.0 Private AI: "Set up my screens with AI" in the full shell. Simple view has #/simple/ai-setup.
+    currentView = aiSetup;
+    aiSetup.render(app, hash);
+  } else if (hash === '#/translate' || hash.startsWith('#/translate?')) {
+    // 3.0 Private AI: auto-translate signs and decks, and each screen's language.
+    currentView = translateView;
+    translateView.render(app, hash);
   } else if (hash === '#/templates') {
     currentView = templates;
     templates.render(app);

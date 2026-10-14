@@ -768,6 +768,16 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
     const playlist = db.prepare('SELECT published_snapshot, published_playback_order, workspace_id FROM playlists WHERE id = ?').get(device.playlist_id);
     if (playlist?.published_snapshot) {
       try { assignments = JSON.parse(playlist.published_snapshot); } catch (e) { assignments = []; }
+      /*
+       * 3.0 auto-translate (lib/sign-translate.js): a screen set to a language plays the approved
+       * translation of a slide in place of the original, or after it when rotating. Ordinary
+       * playlists only — head office, emergency and automation playlists play as published — and
+       * never fatal: the loop as published is always the fallback.
+       */
+      if (device.workspace_id) {
+        try { assignments = require('../lib/sign-translate').applyScreenLanguage(db, deviceId, device.workspace_id, assignments); }
+        catch (e) { console.warn(`[translate] screen language skipped for ${deviceId}: ${e && e.message}`); }
+      }
       refreshWidgetRevs(assignments, deviceId);
       refreshContentRevs(assignments);   // re-stamps a.mime_type, so strip live AFTER it
       assignments = dropLiveIfUnsupported(assignments, baseSink);

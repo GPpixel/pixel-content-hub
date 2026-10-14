@@ -51,6 +51,8 @@ loopback ports. That is fine for a single-household install and not for a shared
 - Both settings are off unless set, so a hosted instance is unchanged.
 - **Storage backends** (S3, MinIO and the like) keep their own per-profile "allow private" switch,
   and honour these settings too.
+- **A local AI server** (Ollama, LM Studio, …) can be allowed for AI requests only, one exact host for
+  one organization, by a platform administrator: see [private-ai.md](private-ai.md).
 - **The template catalog** has its own `TEMPLATE_CATALOG_ALLOW_PRIVATE` for a LAN mirror (see
   [templates.md](templates.md)).
 - On a self-hosted instance, the "not allowed" message names these settings, so the next person

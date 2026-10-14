@@ -68,6 +68,7 @@ export function render(container, widgetId) {
           <textarea id="aiPrompt" rows="2" class="input" placeholder="${t('designer.ai.placeholder')}" style="width:100%;resize:vertical;font-size:12px"></textarea>
           <button class="btn btn-primary btn-sm" id="aiGenerateBtn" style="width:100%;justify-content:center;margin-top:6px">${t('designer.ai.generate')}</button>
           <div id="aiStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>
+          <div data-private-ai-badge style="margin-top:6px"></div>
         </div>
 
         <!-- Add Elements -->
@@ -134,8 +135,10 @@ export function render(container, widgetId) {
   document.getElementById('aiSettingsBtn').onclick = async () => {
     // Shared with the Slides editor — one workspace, one AI configuration, one dialog.
     const { openAiSettingsModal } = await import('../components/ai-settings-modal.js');
-    openAiSettingsModal();
+    // 3.0 Private AI: the badge follows a change of provider.
+    openAiSettingsModal({ onClose: () => import('../components/private-ai.js').then((m) => { m.getPrivateAiStatus(true); m.decoratePrivateBadges(document); }) });
   };
+  import('../components/private-ai.js').then((m) => m.decoratePrivateBadges(document)).catch(() => {});
   const aiGenBtn = document.getElementById('aiGenerateBtn');
   aiGenBtn.onclick = async () => {
     const prompt = document.getElementById('aiPrompt').value.trim();
