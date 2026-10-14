@@ -871,7 +871,11 @@ export default {
   'simple.done.shown_one': 'Done — {name} is now showing it.',
   'simple.done.shown_other': 'Done — {name} is now showing {n} items.',
   'simple.done.same_as': '{name} now shows the same as "{playlist}".',
-  'simple.done.review': 'Added. Your workspace reviews changes before they go live, so it will show once approved.',
+  'simple.done.review': 'Submitted for review. {name} will show it once a reviewer approves it.',
+  'simple.done.review_title': 'Sent for review',
+  'simple.done.review_hint': 'Your workspace reviews changes before they reach the screens. Nothing changes on the screen until then.',
+  'simple.upload.review_on_one': 'Submitted for review. It will show on 1 screen once a reviewer approves it.',
+  'simple.upload.review_on_other': 'Submitted for review. It will show on {n} screens once a reviewer approves it.',
   'simple.done.seconds': 'Screens update within a few seconds.',
   'simple.done.home': 'Back to home',
   'simple.upload.title': 'Choose your photos and videos',
@@ -1302,7 +1306,7 @@ export default {
   // Dashboard toasts
   'dashboard.toast.display_paired': 'Screen connected!',
   'device.simple.sent_to_screen': 'Sent to your screen. It updates within a few seconds.',
-  'device.simple.needs_review': 'Added. Your workspace reviews changes before they go live: submit it for review from the banner above.',
+  'device.simple.needs_review': 'Submitted for review. It will show on this screen once a reviewer approves it.',
   'device.simple.publish_failed': 'Added, but it could not be sent to the screen yet. Use Publish above.',
   // 3.0: a screen the plan is holding back shows a paused card; the dashboard now says so too.
   'dashboard.plan_paused.trial_expired': 'Paused — trial ended. Choose a plan to resume',
@@ -3653,6 +3657,8 @@ export default {
   'onboarding.toast.content_assigned_n': '{n} items sent to your screen!',
   'onboarding.step.upload.same_as_label': 'Or show the same as another screen:',
   'onboarding.step.upload.same_as_btn': 'Use this',
+  'onboarding.toast.sent_for_review': 'Submitted for review',
+  'onboarding.step.done.intro_review': 'Your screen is connected. Your content was submitted for review and will show once a reviewer approves it.',
   'onboarding.toast.sample_failed': 'Could not add the sample. Try uploading your own file instead.',
 
   // Admin (platform admin panel)

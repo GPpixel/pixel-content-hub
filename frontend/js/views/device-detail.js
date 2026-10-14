@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { publishOrSubmit } from '../components/release.js';
 import { isSimpleMode } from '../components/ui-mode.js';
 import { on, off, requestScreenshot, startRemote, stopRemote, sendTouch, sendSwipe, sendKey, sendCommand, requestLivePublish, startTalk, stopTalk, ptyOpen, ptyInput, ptyResize, ptyClose } from '../socket.js';
 import { TalkClient } from '../lib/talk-client.js';
@@ -3343,15 +3344,11 @@ async function setupPlaylistActions(device) {
  */
 async function publishForSimpleMode(playlistId) {
   try {
-    await api.publishPlaylist(playlistId);
+    if (await publishOrSubmit(playlistId) === 'review') { showToast(t('device.simple.needs_review'), 'info'); return; }
     showToast(t('device.simple.sent_to_screen'), 'success');
     api.trackEvent('first_publish', { from: 'device_page' });
   } catch (err) {
-    if (err && ['approval_required', 'awaiting_review', 'approval_stale', 'changes_requested', 'deps_changed'].includes(err.code)) {
-      showToast(t('device.simple.needs_review'), 'info');
-    } else {
-      showToast(err.message || t('device.simple.publish_failed'), 'error');
-    }
+    showToast(err.message || t('device.simple.publish_failed'), 'error');
   }
 }
 

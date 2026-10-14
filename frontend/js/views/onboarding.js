@@ -2,6 +2,7 @@ import { showToast } from '../components/toast.js';
 import { api, browserTimezone } from '../api.js';
 import { t } from '../i18n.js';
 import { esc } from '../utils.js';
+import { publishOrSubmit } from '../components/release.js';
 
 // 3.0: the sample a first-run user can show instead of hunting for a file (brand-neutral on purpose).
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
@@ -202,6 +203,7 @@ export function render(container, { mode = 'first' } = {}) {
   let pairedDeviceId = null;
   let assignedPlaylistId = null;   // whatever the upload step put on this device, if anything
   let createdPlayerUrl = null;     // #313: set once a no-storage display has been created here
+  let sentForReview = false;       // 3.0: the content went to the review queue, not to the screen
   // Playlists in this workspace that have NEVER been published, from the picker's own fetch.
   // Assigning one of these without publishing hands the screen an empty list (see publish()).
   const neverPublished = new Set();
@@ -225,14 +227,12 @@ export function render(container, { mode = 'first' } = {}) {
   async function publish(playlistId) {
     if (!playlistId) return { ok: true };
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(`/api/playlists/${playlistId}/publish`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) { neverPublished.delete(playlistId); return { ok: true }; }
-      const data = await res.json().catch(() => ({}));
-      return { ok: false, error: data.error };
+      // 3.0: a workspace that requires review gets it SUBMITTED for review (components/release.js),
+      // and the last step then says "Sent for review" instead of claiming it is playing.
+      const state = await publishOrSubmit(playlistId, { note: 'From the setup guide' });
+      neverPublished.delete(playlistId);
+      if (state === 'review') sentForReview = true;
+      return { ok: true, review: state === 'review' };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -352,6 +352,15 @@ export function render(container, { mode = 'first' } = {}) {
       populateSameAs();
     }
 
+    if (isLast && sentForReview) {
+      // Nothing is playing yet: the workspace reviews changes first. Say so, plainly.
+      const h2 = container.querySelector('h2');
+      if (h2) h2.textContent = t('simple.done.review_title');
+      const icon = h2?.previousElementSibling;
+      if (icon) icon.innerHTML = '&#9203;';
+      const intro = document.querySelector('#onboardDonePlayerUrl')?.previousElementSibling;
+      if (intro) intro.textContent = t('onboarding.step.done.intro_review');
+    }
     if (isLast) {
       populatePlaylistPicker();
       document.getElementById('onboardSeePlans')?.addEventListener('click', () => api.trackEvent('trial_banner_clicked', { from: 'onboarding' }));
@@ -600,8 +609,9 @@ export function render(container, { mode = 'first' } = {}) {
     const published = await publish(assignedPlaylistId);
     if (!published.ok) return fail(published.error || t('onboarding.toast.publish_failed'));
 
-    showToast(items.length > 1 ? t('onboarding.toast.content_assigned_n', { n: items.length }) : t('onboarding.toast.content_assigned'), 'success');
-    if (assignedPlaylistId) api.trackEvent('first_publish', { from: 'onboarding', items: items.length });
+    showToast(published.review ? t('onboarding.toast.sent_for_review')
+      : items.length > 1 ? t('onboarding.toast.content_assigned_n', { n: items.length }) : t('onboarding.toast.content_assigned'), 'success');
+    if (assignedPlaylistId && !published.review) api.trackEvent('first_publish', { from: 'onboarding', items: items.length });
     currentStep++;
     renderStep();
   }

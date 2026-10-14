@@ -22,6 +22,7 @@ import { setUiMode } from '../components/ui-mode.js';
 import { plansVisible } from '../components/plan-nudges.js';
 import { isPlatformAdmin, inManagerApp, openOutsideApp } from '../utils.js';
 import { renderStatsPrompt } from './dashboard.js';
+import { publishOrSubmit } from '../components/release.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -209,18 +210,14 @@ async function showOnScreen(device, contentIds, how, ctx = {}) {
   }
   if (!playlistId) return { ok: true };
   device.playlist_id = playlistId;
-  try {
-    await api.publishPlaylist(playlistId);
-    return { ok: true };
-  } catch (err) {
-    if (err && /approval|review|changes_requested|deps_changed/.test(String(err.code || ''))) return { ok: true, review: true };
-    throw err;
-  }
+  const state = await publishOrSubmit(playlistId, { note: `From the Simple view: ${device.name}` });
+  return { ok: true, review: state === 'review' };
 }
 
 async function useSameAs(device, playlist) {
   await api.assignPlaylistToDevice(playlist.id, device.id);
-  if (!playlist.published_snapshot) await api.publishPlaylist(playlist.id);
+  if (!playlist.published_snapshot) return (await publishOrSubmit(playlist.id)) === 'review';
+  return false;
 }
 
 function wireDrop(area, input, onFiles) {
@@ -368,7 +365,7 @@ async function renderChange(container, presetId) {
         const up = await api.uploadContent(files, (pct) => { status.textContent = `${tn('simple.uploading', files.length)} ${pct}%`; });
         const items = (Array.isArray(up) ? up : [up]).filter((c) => c && c.id);
         const r = await showOnScreen(device, items.map((c) => c.id), how, { devices, playlists });
-        doneStep(r.review ? t('simple.done.review') : tn('simple.done.shown', items.length, { name: device.name }));
+        doneStep(r.review ? t('simple.done.review', { name: device.name }) : tn('simple.done.shown', items.length, { name: device.name }), r.review);
       } catch (err) { fail(err); }
     };
     wireDrop(container.querySelector('[data-drop]'), container.querySelector('[data-file]'), go);
@@ -376,7 +373,7 @@ async function renderChange(container, presetId) {
       busy(t('simple.working'));
       try {
         const r = await showOnScreen(device, ids, how, { devices, playlists });
-        doneStep(r.review ? t('simple.done.review') : tn('simple.done.shown', ids.length, { name: device.name }));
+        doneStep(r.review ? t('simple.done.review', { name: device.name }) : tn('simple.done.shown', ids.length, { name: device.name }), r.review);
       } catch (err) { fail(err); }
     });
     container.querySelector('[data-sample]').addEventListener('click', async () => {
@@ -386,14 +383,19 @@ async function renderChange(container, presetId) {
       const p = others.find((x) => x.id === container.querySelector('#simpleSameAs').value);
       if (!p) return;
       busy(t('simple.working'));
-      try { await useSameAs(device, p); doneStep(t('simple.done.same_as', { name: device.name, playlist: p.name })); } catch (err) { fail(err); }
+      try {
+        const review = await useSameAs(device, p);
+        doneStep(review ? t('simple.done.review', { name: device.name }) : t('simple.done.same_as', { name: device.name, playlist: p.name }), review);
+      } catch (err) { fail(err); }
     });
   }
 
-  function doneStep(line) {
-    shell(container, guideFrame({ step: total - 1, total, icon: '&#127881;', title: t('onboarding.step.done.title'), back: false,
-      body: doneBody([line, t('simple.done.seconds')]) }));
-    api.trackEvent('first_publish', { from: 'simple_change' });
+  // Live: "It's live!". In review: "Sent for review" — nothing claims to be showing until approved.
+  function doneStep(line, review = false) {
+    shell(container, guideFrame({ step: total - 1, total, icon: review ? '&#9203;' : '&#127881;',
+      title: t(review ? 'simple.done.review_title' : 'onboarding.step.done.title'), back: false,
+      body: doneBody([line, t(review ? 'simple.done.review_hint' : 'simple.done.seconds')]) }));
+    if (!review) api.trackEvent('first_publish', { from: 'simple_change' });
   }
 
   if (device) contentStep(); else pickStep();
@@ -464,8 +466,10 @@ async function renderUpload(container, presetIds = []) {
           const r = await showOnScreen(d, uploaded.map((c) => c.id), how, { devices, playlists });
           review = review || !!r.review;
         }
-        shell(container, guideFrame({ step: total - 1, total, icon: '&#127881;', title: t('onboarding.step.done.title'), back: false,
-          body: doneBody([review ? t('simple.done.review') : tn('simple.upload.shown_on', ids.length), t('simple.done.seconds')]) }));
+        shell(container, guideFrame({ step: total - 1, total, icon: review ? '&#9203;' : '&#127881;',
+          title: t(review ? 'simple.done.review_title' : 'onboarding.step.done.title'), back: false,
+          body: doneBody([review ? tn('simple.upload.review_on', ids.length) : tn('simple.upload.shown_on', ids.length),
+            t(review ? 'simple.done.review_hint' : 'simple.done.seconds')]) }));
       } catch (err) {
         status.textContent = err.message || t('onboarding.toast.assign_failed');
         e.target.disabled = false;
