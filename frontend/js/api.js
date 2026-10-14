@@ -513,6 +513,19 @@ export const api = {
    * an expiry) are NOT here: they use updateContent and the library's own replace, so approval and
    * publishing apply exactly as they do from the library.
    */
+  /*
+   * 3.0 energy & carbon (routes/energy.js, docs/energy.md). Estimates, not metering. The CSV and
+   * appendix downloads go through downloadEnergyFile below (a bearer header cannot ride on a link).
+   */
+  getEnergyReport: (start, end) => request(`/energy/report?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
+  getEnergySuggestions: (start, end, days) => request(`/energy/suggestions?start=${start}&end=${end}${days ? `&days=${encodeURIComponent(days)}` : ''}`),
+  getEnergyGlance: () => request('/energy/glance'),
+  getEnergyDevices: () => request('/energy/devices'),
+  setEnergyDevice: (id, body) => request(`/energy/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  setEnergyGroup: (id, body) => request(`/energy/groups/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  getEnergySettings: () => request('/energy/settings'),
+  updateEnergySettings: (body) => request('/energy/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  getEnergyOrg: (start, end) => request(`/energy/org?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
   getFreshness: () => request('/freshness'),
   getFreshnessChips: () => request('/freshness/chips'),
   updateFreshnessSettings: (data) => request('/freshness/settings', { method: 'PUT', body: JSON.stringify(data) }),
@@ -1061,6 +1074,13 @@ export async function downloadSlotReportCsv(problemsOnly) {
   return r.blob();
 }
 
+
+/** 3.0 energy: an authenticated download (CSV / appendix text) from /api/energy/<path>, as a blob. */
+export async function downloadEnergyFile(pathAndQuery) {
+  const r = await fetch(`${API_BASE}/energy/${pathAndQuery}`, { headers: getAuthHeaders() });
+  if (!r.ok) throw requestError(r.status, await r.json().catch(() => ({})));
+  return r.blob();
+}
 
 // Raw, authenticated fetches for history previews: a widget revision rendered as HTML (for an
 // srcdoc iframe) and a content revision's retained bytes (for an object URL). Both need the

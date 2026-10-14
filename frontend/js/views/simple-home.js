@@ -151,6 +151,7 @@ async function renderHome(container) {
     ${multiWs && currentWorkspace() ? `<p class="simple-where">${esc(t('simple.home.in_workspace', { name: workspaceLabel(currentWorkspace()) }))}</p>` : ''}
     ${canChange ? '' : `<p class="simple-muted simple-viewer-note">${esc(t('simple.home.viewer_note'))}</p>`}
     <div id="simpleFreshness"></div>
+    <div id="simpleEnergy"></div>
     <div class="simple-tasks">
       ${canChange ? `<a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
@@ -165,6 +166,7 @@ async function renderHome(container) {
 
   adminNotices(document.getElementById('simpleAdminNotices'));
   if (canChange) freshnessLine(document.getElementById('simpleFreshness'));
+  if (canChange) energyLine(document.getElementById('simpleEnergy'));
   const host = document.getElementById('simpleScreens');
   let devices = [];
   try { devices = await api.getDevices(); } catch { devices = []; }
@@ -336,6 +338,25 @@ async function freshnessLine(host) {
     try { localStorage.setItem(FRESH_DISMISS_KEY, String(Date.now() + 7 * 86400000)); } catch { /* fine */ }
     host.innerHTML = '';
   });
+}
+
+/*
+ * 3.0 energy & carbon: one friendly line for admins and editors — "Your screens used about 42 kWh
+ * this month — schedules saved 18 kWh" — linking to the Energy page. Month to date, estimated
+ * (docs/energy.md). Silent until there is at least a kWh to talk about.
+ */
+async function energyLine(host) {
+  if (!host) return;
+  let g;
+  try { g = await api.getEnergyGlance(); } catch { return; }
+  if (!g || !document.contains(host) || !(g.kwh >= 1)) return;
+  const used = Math.round(g.kwh);
+  const saved = Math.round(g.saved_kwh || 0);
+  const text = saved >= 1 ? t('simple.energy.line_saved', { kwh: used, saved }) : t('simple.energy.line', { kwh: used });
+  host.innerHTML = `<div class="simple-notice simple-energy">
+    <span>&#9889; ${esc(text)}</span>
+    <a class="btn btn-secondary btn-sm" href="#/energy">${esc(t('simple.energy.more'))}</a>
+  </div>`;
 }
 
 /*

@@ -421,6 +421,12 @@ module.exports = {
    * ~1.1 GB, and a YEAR of hourly rollups is ~108 MB.
    */
   playLogRetentionDays: parseFloat(process.env.PLAY_LOG_RETENTION_DAYS) || 90,
+  // 3.0 energy & carbon (lib/energy, docs/energy.md): the hourly on-time table feeds the four-week
+  // what-if suggestions only, the daily one a year's ESG report plus a month. Both pruned in chunks.
+  energy: {
+    hourlyRetentionDays: parseFloat(process.env.ENERGY_HOURLY_RETENTION_DAYS) || 35,
+    dailyRetentionDays: parseFloat(process.env.ENERGY_DAILY_RETENTION_DAYS) || 400,
+  },
   statusLogPruneBatch: parseInt(process.env.STATUS_LOG_PRUNE_BATCH) || 2000,
   // #146 P1.3 kill switch: when false, interval maintenance runs regardless of loop-lag
   // band (disables the band-gate that skips maintenance while loaded). Startup prune is
