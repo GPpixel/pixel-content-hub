@@ -4,7 +4,9 @@ import { mountCanvaSettings } from '../components/canva-settings.js';
 import * as whatsNew from '../components/whats-new.js';
 import { showToast } from '../components/toast.js';
 import { getLanguage, setLanguage, getAvailableLanguages, t } from '../i18n.js';
-import { esc, isPlatformAdmin } from '../utils.js';
+import { esc, isPlatformAdmin, inManagerApp } from '../utils.js';
+import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
+import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
 import { resetBranding, applyAccent } from '../branding.js';
 import { mountCorporateSettings } from '../components/corporate-settings.js';
 import { mountStorageSettings } from '../components/storage-settings.js';
@@ -85,6 +87,12 @@ export async function render(container) {
       <!-- Two-factor authentication (#100). Populated by load2FA() from /auth/totp/status. -->
       <div id="twoFactorBlock" style="border-top:1px solid var(--border);margin-top:20px;padding-top:16px">
         <h4 style="font-size:14px;margin-bottom:8px">${t('settings.2fa_title')}</h4>
+        <p style="color:var(--text-muted);font-size:12px">…</p>
+      </div>
+
+      <!-- 3.0: passkeys. Populated by loadPasskeys() from /auth/passkeys. -->
+      <div id="passkeyBlock" style="border-top:1px solid var(--border);margin-top:20px;padding-top:16px">
+        <h4 style="font-size:14px;margin-bottom:8px">${t('passkey.title')}</h4>
         <p style="color:var(--text-muted);font-size:12px">…</p>
       </div>
 
@@ -1054,8 +1062,118 @@ export async function render(container) {
     }
   }
 
+  // ==================== Passkeys (3.0) ====================
+  // List / add / rename / remove this account's passkeys (server/routes/passkeys.js). Every value
+  // from the server reaches the page through esc().
+  async function loadPasskeys() {
+    const block = document.getElementById('passkeyBlock');
+    if (!block) return;
+    const muted = 'color:var(--text-muted);font-size:12px';
+    const paint = (inner) => { block.innerHTML = `<h4 style="font-size:14px;margin-bottom:8px">${esc(t('passkey.title'))}</h4>${inner}`; };
+
+    let st;
+    try { st = await api.passkeysList(); }
+    catch (e) { paint(`<p style="${muted}">${esc(e.message)}</p>`); return; }
+
+    if (!st.available) {
+      // Never silently bound to whatever address this page happens to be on: say why it is off,
+      // and to the people who can fix it, how.
+      paint(`<p style="${muted}">${esc(unavailableMessage(st.reason, isSuperAdmin))}</p>`);
+      return;
+    }
+    if (!st.eligible && !st.passkeys.length) {
+      paint(`<p style="${muted}">${esc(t(user.auth_provider === 'local' ? 'passkey.sso_only_note' : 'passkey.sso_account_note'))}</p>`);
+      return;
+    }
+
+    const fmt = (ts) => (ts ? new Date(ts * 1000).toLocaleDateString() : '');
+    const rows = st.passkeys.map((p) => `
+      <div class="passkey-row" data-id="${esc(p.id)}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="flex:1;min-width:180px">
+          <div style="font-weight:500">${esc(p.name)}${p.backed_up ? ` <span style="${muted};margin-left:6px">${esc(t('passkey.synced'))}</span>` : ''}</div>
+          <div style="${muted}">${esc(t('passkey.added_on', { date: fmt(p.created_at) }))} · ${esc(p.last_used_at ? t('passkey.last_used', { date: fmt(p.last_used_at) }) : t('passkey.never_used'))}</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" data-pk-rename>${esc(t('passkey.rename'))}</button>
+        <button class="btn btn-danger btn-sm" data-pk-remove>${esc(t('passkey.remove'))}</button>
+      </div>`).join('');
+
+    // Why adding is not offered on this page, if it is not.
+    let addNote = '';
+    if (!st.eligible) addNote = t('passkey.sso_only_note');
+    else if (inManagerApp()) addNote = t('passkey.not_in_app');
+    else if (!passkeysSupported()) addNote = t('passkey.browser_unsupported');
+    else if (st.origin && st.origin !== window.location.origin) addNote = t('passkey.wrong_address', { origin: st.origin });
+    else if (st.passkeys.length >= st.max) addNote = t('passkey.limit', { n: st.max });
+
+    paint(`
+      <p style="${muted};margin-bottom:10px">${esc(t('passkey.desc'))}</p>
+      ${rows || `<p style="${muted};margin-bottom:10px">${esc(t('passkey.none'))}</p>`}
+      ${addNote ? `<p style="${muted};margin-top:10px">${esc(addNote)}</p>` : `
+      <div style="margin-top:12px">
+        <button class="btn btn-primary btn-sm" id="passkeyAddBtn">${esc(t('passkey.add'))}</button>
+        <div id="passkeyAddForm" style="display:none;margin-top:10px">
+          <p style="${muted};margin-bottom:8px">${esc(t(st.totp_enabled ? 'passkey.reauth_prompt_totp' : 'passkey.reauth_prompt'))}</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+            <div class="form-group"><label>${esc(t('passkey.name_label'))}</label><input type="text" id="passkeyName" class="input" maxlength="64" value="${esc(suggestedPasskeyName())}"></div>
+            <div class="form-group"><label>${esc(t('settings.current_password'))}</label><input type="password" id="passkeyPassword" class="input" autocomplete="current-password"></div>
+            ${st.totp_enabled ? `<div class="form-group"><label>${esc(t('auth.mfa_code_label'))}</label><input type="text" id="passkeyCode" class="input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="${esc(t('settings.2fa_code_placeholder'))}"></div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" id="passkeyCreateBtn">${esc(t('passkey.create'))}</button>
+            <button class="btn btn-secondary btn-sm" id="passkeyCancelBtn">${esc(t('settings.2fa_cancel'))}</button>
+          </div>
+        </div>
+      </div>`}`);
+
+    const form = document.getElementById('passkeyAddForm');
+    document.getElementById('passkeyAddBtn')?.addEventListener('click', (e) => {
+      e.target.style.display = 'none';
+      form.style.display = 'block';
+      document.getElementById('passkeyPassword')?.focus();
+    });
+    document.getElementById('passkeyCancelBtn')?.addEventListener('click', loadPasskeys);
+    document.getElementById('passkeyCreateBtn')?.addEventListener('click', async (e) => {
+      const btn = e.target;
+      const password = document.getElementById('passkeyPassword').value;
+      if (!password) { showToast(t('passkey.password_required'), 'error'); return; }
+      btn.disabled = true;
+      try {
+        await addPasskey({
+          password,
+          code: document.getElementById('passkeyCode')?.value.trim(),
+          name: document.getElementById('passkeyName').value.trim(),
+        });
+        showToast(t('passkey.added_toast'), 'success');
+        loadPasskeys();
+      } catch (err) {
+        if (!err.cancelled) showToast(err.message, 'error');
+        btn.disabled = false;
+      }
+    });
+
+    block.querySelectorAll('.passkey-row').forEach((row) => {
+      const id = row.dataset.id;
+      const current = (st.passkeys.find((p) => p.id === id) || {}).name || '';
+      row.querySelector('[data-pk-rename]').addEventListener('click', async () => {
+        const name = window.prompt(t('passkey.rename_prompt'), current);
+        if (name == null || !name.trim()) return;
+        try { await api.passkeyRename(id, name.trim()); loadPasskeys(); }
+        catch (err) { showToast(err.message, 'error'); }
+      });
+      row.querySelector('[data-pk-remove]').addEventListener('click', async () => {
+        if (!window.confirm(t('passkey.remove_confirm', { name: current }))) return;
+        try {
+          await api.passkeyDelete(id);
+          showToast(t('passkey.removed_toast'), 'success');
+          loadPasskeys();
+        } catch (err) { showToast(err.message, 'error'); }
+      });
+    });
+  }
+
   loadTokens();
   load2FA();
+  loadPasskeys();
   loadSsoLink();
   document.getElementById('revokeOtherSessionsBtn')?.addEventListener('click', async (e) => {
     e.target.disabled = true;

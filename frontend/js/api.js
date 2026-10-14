@@ -812,6 +812,14 @@ export const api = {
   revokeOtherSessions: () => request('/auth/sessions/revoke-others', { method: 'POST' }).then(keepSession),
   totpRegenRecovery: (code) => request('/auth/totp/recovery-codes/regenerate', { method: 'POST', body: JSON.stringify({ code }) }),
 
+  // 3.0 passkeys (server/routes/passkeys.js). Adding one asks for the password again (plus the TOTP
+  // code when 2FA is on). Removing one ends every other session and hands this one a fresh token.
+  passkeysList: () => request('/auth/passkeys'),
+  passkeyRegisterOptions: (password, code) => request('/auth/passkeys/register/options', { method: 'POST', body: JSON.stringify({ password, code }) }),
+  passkeyRegisterVerify: (challenge_id, response, name) => request('/auth/passkeys/register/verify', { method: 'POST', body: JSON.stringify({ challenge_id, response, name }) }),
+  passkeyRename: (id, name) => request('/auth/passkeys/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ name }) }),
+  passkeyDelete: (id) => request('/auth/passkeys/' + encodeURIComponent(id), { method: 'DELETE' }).then(keepSession),
+
   // Email verification (signup). Resend is generic (never reveals whether the address exists).
   resendVerification: (email) => request('/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) }),
 

@@ -21,6 +21,7 @@ const jwt = require('jsonwebtoken');
 const oidc = require('../lib/oidc');
 const oidcProviders = require('../lib/oidc-providers');
 const saml = require('../lib/saml');
+const passkeys = require('../lib/passkeys');
 
 // Phase 2.1: find or create the user's default org+workspace. Returns the
 // workspace_id to embed in the JWT. Idempotent: if the user already has
@@ -472,7 +473,9 @@ router.post('/login', (req, res) => {
   // the ONLY place TOTP gates (interactive password login). The SSO routes and the
   // API-token path never reach here, so both bypass TOTP by construction.
   if (user.totp_enabled) {
-    return res.json({ mfa_required: true, mfa_token: generateMfaPendingToken(user) });
+    // 3.0: `passkey` tells the second step it may offer "Use a passkey instead" (routes/passkeys.js).
+    // Only someone who just proved the password learns it.
+    return res.json({ mfa_required: true, mfa_token: generateMfaPendingToken(user), passkey: passkeys.countForUser(user.id) > 0 });
   }
   issueSession(req, res, user);
 });
@@ -812,6 +815,11 @@ router.post('/totp/verify', (req, res) => {
     recovery_codes_remaining: recoveryCodesRemaining(user.id),
   });
 });
+
+// ==================== Passkeys (3.0) ====================
+// WebAuthn sign-in, second factor and management: routes/passkeys.js. Handed the same finisher a
+// password login uses, so a passkey sign-in is logged, stamped and tokened identically.
+router.use('/passkeys', require('./passkeys')({ issueSession, logFailedLogin, ensureVerificationEmail }));
 
 // ==================== Google OAuth ====================
 
@@ -1163,6 +1171,12 @@ router.get('/config', (req, res) => {
     // 3.0: whether new accounts here start on a trial (hosted only), so the login page does not
     // advertise one on a self-hosted server that gives every account the full plan.
     trial_offered: !config.selfHosted,
+    // 3.0: whether "Sign in with a passkey" can work here, and at which address (lib/passkeys.js).
+    // The page compares `origin` with its own: on any other address the browser would refuse.
+    passkeys: (() => {
+      const rp = passkeys.rpConfig(req);
+      return { enabled: rp.enabled, origin: rp.enabled ? rp.origin : null };
+    })(),
   });
 });
 

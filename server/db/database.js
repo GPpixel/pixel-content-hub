@@ -2522,6 +2522,43 @@ const migrations = [
    * is copied to players, and a credit is neither.
    */
   'ALTER TABLE content ADD COLUMN attribution TEXT',
+  /*
+   * 3.0: passkeys (lib/passkeys.js, routes/passkeys.js). One row per registered credential.
+   * credential_id and public_key are base64url; the public key is not a secret, so it is stored
+   * plain. user_handle is the random WebAuthn user id the authenticator holds (never the email or
+   * our user id). rp_id records which address the passkey is bound to, so Settings can say so.
+   * ON DELETE CASCADE plus an explicit delete in lib/user-deletion.js, like the TOTP codes.
+   */
+  `CREATE TABLE IF NOT EXISTS webauthn_credentials (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     credential_id TEXT NOT NULL UNIQUE,
+     public_key TEXT NOT NULL,
+     counter INTEGER NOT NULL DEFAULT 0,
+     transports TEXT,
+     user_handle TEXT NOT NULL,
+     rp_id TEXT NOT NULL,
+     name TEXT NOT NULL,
+     aaguid TEXT,
+     device_type TEXT,
+     backed_up INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     last_used_at INTEGER)`,
+  "CREATE INDEX IF NOT EXISTS idx_webauthn_credentials_user ON webauthn_credentials(user_id)",
+  /*
+   * 3.0: outstanding WebAuthn challenges. Single-use (deleted when read), five minutes, swept on
+   * every insert and capped in size (lib/passkeys.js), because the login page mints one per view.
+   */
+  `CREATE TABLE IF NOT EXISTS webauthn_challenges (
+     id TEXT PRIMARY KEY,
+     challenge TEXT NOT NULL,
+     purpose TEXT NOT NULL,
+     user_id TEXT,
+     user_handle TEXT,
+     rp_id TEXT NOT NULL,
+     origin TEXT NOT NULL,
+     expires_at INTEGER NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)",
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

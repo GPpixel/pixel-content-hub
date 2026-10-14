@@ -422,6 +422,9 @@ function deleteUserCascade(db, { targetId, actingAdminId, unlink, revokeCanva })
     if (have.has('canva_jobs')) db.prepare('DELETE FROM canva_jobs WHERE user_id = ?').run(targetId);
     // 3.0 funnel rows (lib/conversion-events.js): no foreign key, so nothing else would remove them.
     if (have.has('conversion_events')) db.prepare('DELETE FROM conversion_events WHERE user_id = ?').run(targetId);
+    // 3.0 passkeys: declared ON DELETE CASCADE, deleted here too so it holds whatever the pragma.
+    if (have.has('webauthn_credentials')) db.prepare('DELETE FROM webauthn_credentials WHERE user_id = ?').run(targetId);
+    if (have.has('webauthn_challenges')) db.prepare('DELETE FROM webauthn_challenges WHERE user_id = ?').run(targetId);
     if (have.has('cloud_folders')) {
       db.prepare(`UPDATE cloud_folders SET user_id = NULL, enabled = 0, last_status = 'error',
           last_error = 'Paused: the person who set up this folder no longer has an account.',

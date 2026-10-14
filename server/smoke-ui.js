@@ -69,7 +69,10 @@ const check = (name, ok, detail) => {
   const logFile = path.join(os.tmpdir(), 'st-smoke.log');
   const srv = spawn('node', ['server.js'], {
     cwd: __dirname,
-    env: { ...process.env, DATA_DIR, SELF_HOSTED: 'true', PORT: String(PORT), NODE_ENV: 'production' },
+    // PUBLIC_HOSTS: the passkey check below runs on http://localhost:<port> (WebAuthn refuses an IP
+    // as the relying party), and passkeys are only enabled on an address the operator declared.
+    env: { ...process.env, DATA_DIR, SELF_HOSTED: 'true', PORT: String(PORT), NODE_ENV: 'production',
+      APP_URL: '', PUBLIC_HOSTS: `localhost:${PORT}` },
     stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')],
   });
   const stop = () => { try { srv.kill('SIGKILL'); } catch { /* */ } };
@@ -668,6 +671,59 @@ const check = (name, ok, detail) => {
     const landed = await app.evaluate(() => ({ hash: location.hash, signedIn: !!localStorage.getItem('token') }));
     check('Manager app: the sign-in form works and throws nothing', landed.signedIn && appErrors.length === 0,
       `${JSON.stringify(landed)} ${appErrors.slice(0, 3).join(' | ')}`);
+    await ctx.close();
+  }
+
+  // ---- 3.0 passkeys: add one in Settings and sign in with it, on Chrome's virtual authenticator ----
+  // The server side is covered with real signatures in test/passkeys.test.js; what only a browser
+  // shows is the glue: base64url both ways, the options shapes navigator.credentials accepts, and
+  // the button actually ending signed in.
+  {
+    const LOCAL = `http://localhost:${PORT}`;
+    const email = 'pk' + Date.now() + '@x.test';
+    const reg = await fetch(BASE + '/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: 'Passw0rd123' }) }).then((r) => r.json());
+    // Past the first-run guide, so #/settings is where we land.
+    await fetch(BASE + '/api/auth/me', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + reg.token },
+      body: JSON.stringify({ onboarded: true }) });
+    const ctx = await browser.createBrowserContext();
+    const pk = await ctx.newPage();
+    const pkErrors = [];
+    pk.on('pageerror', (e) => pkErrors.push(e.message));
+    const wa = await pk.target().createCDPSession();
+    await wa.send('WebAuthn.enable');
+    await wa.send('WebAuthn.addVirtualAuthenticator', { options: {
+      protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true,
+      isUserVerified: true, automaticPresenceSimulation: true,
+    } });
+
+    await pk.goto(LOCAL + '/app#/login', { waitUntil: 'networkidle2' });
+    check('the login page offers "Sign in with a passkey"', await pk.evaluate(() => !!document.getElementById('passkeyLoginBtn')));
+    await pk.evaluate((tok, user) => { localStorage.setItem('token', tok); localStorage.setItem('user', JSON.stringify(user)); }, reg.token, reg.user);
+    await pk.goto(LOCAL + '/app#/settings', { waitUntil: 'networkidle2' });
+    await pk.reload({ waitUntil: 'networkidle2' });
+    const addBtn = await pk.waitForSelector('#passkeyAddBtn', { visible: true, timeout: 8000 }).catch(() => null);
+    let rows = 0;
+    if (addBtn) {
+      await addBtn.click();
+      await pk.type('#passkeyPassword', 'Passw0rd123');
+      await pk.click('#passkeyCreateBtn');
+      await pk.waitForSelector('.passkey-row', { timeout: 8000 }).catch(() => {});
+      rows = await pk.evaluate(() => document.querySelectorAll('.passkey-row').length);
+    }
+    check('a passkey can be added from Settings → Security', rows === 1,
+      addBtn ? `${rows} passkey rows after creating one` : 'no "Add a passkey" button in Settings');
+
+    await pk.evaluate(() => { localStorage.removeItem('token'); localStorage.removeItem('user'); });
+    await pk.goto(LOCAL + '/app#/login', { waitUntil: 'networkidle2' });
+    await pk.reload({ waitUntil: 'networkidle2' });
+    await pk.evaluate(() => document.getElementById('passkeyLoginBtn')?.click());
+    await new Promise(r => setTimeout(r, 3000));
+    const signedIn = await pk.evaluate(() => ({ token: !!localStorage.getItem('token'), hash: location.hash,
+      err: (document.getElementById('loginError') || {}).textContent || '' }));
+    check('signing in with the passkey ends signed in, with no email or password typed', signedIn.token,
+      JSON.stringify(signedIn));
+    check('the passkey pages throw nothing', pkErrors.length === 0, pkErrors.slice(0, 3).join(' | '));
     await ctx.close();
   }
 
