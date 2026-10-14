@@ -2858,3 +2858,22 @@ html.simple-shell .trial-banner { padding-left: 16px; justify-content: center; }
   padding: 14px 18px; border: 1px solid var(--accent-dim); border-radius: var(--radius-lg);
   background: var(--bg-card); font-size: 14px; color: var(--text-primary);
 }
+
+/* Simple view: your team (js/views/simple-home.js renderTeam) */
+.simple-card-title { font-size: 16px; margin-bottom: 12px; }
+.simple-label { display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+.simple-card .input { width: 100%; }
+.simple-people { padding: 6px 22px; }
+.simple-person {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.simple-person:last-child { border-bottom: 0; }
+.simple-person strong { display: block; font-size: 14px; }
+.simple-person small { display: block; font-size: 12px; color: var(--text-muted); }
+.simple-person-role { font-size: 12px; color: var(--text-secondary); }
+.simple-person.is-pending strong { color: var(--text-secondary); }
+@media (max-width: 640px) {
+  .simple-person { grid-template-columns: 1fr auto; }
+  .simple-person-role { grid-column: 1; grid-row: 2; }
+}

@@ -109,6 +109,7 @@ async function renderHome(container) {
       <a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>
+      ${canManageTeam() ? `<a class="simple-task" href="#/simple/team"><span class="simple-task-icon">&#128101;</span><span><strong>${esc(t('simple.task.team'))}</strong><small>${esc(t('simple.task.team_desc'))}</small></span></a>` : ''}
       <a class="simple-task" href="#/simple/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
     </div>
     <h2 class="simple-h2">${esc(t('simple.home.your_screens'))}</h2>
@@ -157,6 +158,113 @@ async function adminNotices(host) {
     }
   } catch { /* the version check is a courtesy */ }
   try { await renderStatsPrompt(host); } catch { /* likewise */ }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task: your team — invite someone to this workspace, see who is in it.
+// Uses the workspace member/invite API the Advanced Members page uses (admin-only server-side).
+// ---------------------------------------------------------------------------------------------
+
+function currentWorkspace() {
+  const u = cachedUser() || {};
+  return (u.accessible_workspaces || []).find((w) => w.id === u.current_workspace_id) || null;
+}
+function canManageTeam() { const w = currentWorkspace(); return !!(w && w.can_admin); }
+
+const ROLE_KEYS = {
+  workspace_admin: 'simple.team.role_admin', workspace_editor: 'simple.team.role_editor', workspace_viewer: 'simple.team.role_viewer',
+  org_owner: 'simple.team.role_owner', org_admin: 'simple.team.role_org_admin',
+};
+
+/** Pass an invite link on: Android's share sheet in the app, the browser's, or the clipboard. */
+async function passOn(text) {
+  if (inManagerApp() && window.STManager && typeof window.STManager.shareText === 'function') { window.STManager.shareText(text); return 'shared'; }
+  if (navigator.share) { try { await navigator.share({ text }); return 'shared'; } catch { /* cancelled: fall through */ } }
+  try { await navigator.clipboard.writeText(text); return 'copied'; } catch { return 'failed'; }
+}
+
+async function renderTeam(container) {
+  const ws = currentWorkspace();
+  if (!ws || !ws.can_admin) { window.location.hash = '#/'; return; }
+  shell(container, `
+    <div class="simple-help-top"><a href="#/" class="btn btn-secondary btn-sm">&larr; ${esc(t('simple.done.home'))}</a></div>
+    <h1 class="simple-h1">${esc(t('simple.team.title'))}</h1>
+    <div class="simple-card">
+      <h3 class="simple-card-title">${esc(t('simple.team.invite_title'))}</h3>
+      <label class="simple-label" for="teamEmail">${esc(t('simple.team.email'))}</label>
+      <input id="teamEmail" class="input" type="email" autocomplete="off" inputmode="email" placeholder="name@example.com">
+      <div class="simple-choice" role="radiogroup" aria-label="${esc(t('simple.team.can'))}" style="margin-top:12px">
+        ${['workspace_editor', 'workspace_viewer', 'workspace_admin'].map((r, i) => `
+          <label><input type="radio" name="teamRole" value="${r}" ${i === 0 ? 'checked' : ''}> <span><strong>${esc(t(ROLE_KEYS[r]))}</strong><small>${esc(t(ROLE_KEYS[r] + '_desc'))}</small></span></label>`).join('')}
+      </div>
+      <button type="button" class="btn btn-primary" data-invite>${esc(t('simple.team.invite_btn'))}</button>
+      <div class="simple-status" data-status></div>
+    </div>
+    <h2 class="simple-h2">${esc(t('simple.team.people'))}</h2>
+    <div class="simple-card simple-people" data-people><p class="simple-muted">${esc(t('common.loading'))}</p></div>`);
+
+  const status = container.querySelector('[data-status]');
+  const people = container.querySelector('[data-people]');
+  const me = (cachedUser() || {}).id;
+
+  async function loadPeople() {
+    let members = [], invites = [];
+    try { [members, invites] = await Promise.all([api.getWorkspaceMembers(ws.id), api.getWorkspaceInvites(ws.id)]); } catch { /* shown empty */ }
+    const rows = [
+      ...members.map((m) => `
+        <div class="simple-person">
+          <span><strong>${esc(m.name || m.email)}</strong><small>${esc(m.email)}${m.user_id === me ? ` · ${esc(t('simple.team.you'))}` : ''}</small></span>
+          <span class="simple-person-role">${esc(t(ROLE_KEYS[m.role] || 'simple.team.role_viewer'))}</span>
+          ${!m.via_org && m.user_id !== me ? `<button type="button" class="btn btn-secondary btn-sm" data-remove="${esc(m.user_id)}" data-name="${esc(m.name || m.email)}">${esc(t('simple.team.remove'))}</button>` : '<span></span>'}
+        </div>`),
+      ...(invites || []).map((i) => `
+        <div class="simple-person is-pending">
+          <span><strong>${esc(i.email)}</strong><small>${esc(t('simple.team.invited'))}</small></span>
+          <span class="simple-person-role">${esc(t(ROLE_KEYS[i.role] || 'simple.team.role_viewer'))}</span>
+          <button type="button" class="btn btn-secondary btn-sm" data-cancel="${esc(i.id)}">${esc(t('simple.team.cancel_invite'))}</button>
+        </div>`),
+    ];
+    people.innerHTML = rows.join('') || `<p class="simple-muted">${esc(t('simple.team.nobody'))}</p>`;
+    people.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', async () => {
+      try { await api.cancelWorkspaceInvite(ws.id, b.dataset.cancel); loadPeople(); } catch (err) { showToast(err.message, 'error'); }
+    }));
+    people.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+      if (!window.confirm(t('simple.team.remove_confirm', { name: b.dataset.name }))) return;
+      try { await api.removeWorkspaceMember(ws.id, b.dataset.remove); loadPeople(); } catch (err) { showToast(err.message, 'error'); }
+    }));
+  }
+
+  container.querySelector('[data-invite]').addEventListener('click', async (e) => {
+    const email = container.querySelector('#teamEmail').value.trim();
+    const role = container.querySelector('input[name="teamRole"]:checked').value;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { status.textContent = t('simple.team.bad_email'); return; }
+    e.target.disabled = true;
+    status.textContent = t('simple.working_invite');
+    try {
+      const r = await api.inviteWorkspaceMember(ws.id, { email, role });
+      container.querySelector('#teamEmail').value = '';
+      status.innerHTML = '';
+      const msg = document.createElement('p');
+      msg.textContent = r.email_sent ? t('simple.team.sent', { email }) : t('simple.team.not_emailed', { email });
+      status.appendChild(msg);
+      if (r.accept_url) {
+        const share = document.createElement('button');
+        share.type = 'button';
+        share.className = 'btn btn-secondary btn-sm';
+        share.style.marginTop = '8px';
+        share.textContent = t(inManagerApp() || navigator.share ? 'simple.team.share_link' : 'simple.team.copy_link');
+        share.addEventListener('click', async () => {
+          const res = await passOn(t('simple.team.share_text', { name: ws.name, url: r.accept_url }));
+          if (res === 'copied') showToast(t('simple.team.copied'), 'success');
+        });
+        status.appendChild(share);
+      }
+      loadPeople();
+    } catch (err) {
+      status.textContent = err.message || t('simple.team.failed');
+    } finally { e.target.disabled = false; }
+  });
+  loadPeople();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -601,6 +709,7 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/change')) return renderChange(container, q.get('device'));
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
+  if (hash.startsWith('#/simple/team')) return renderTeam(container);
   return renderHome(container);
 }
 

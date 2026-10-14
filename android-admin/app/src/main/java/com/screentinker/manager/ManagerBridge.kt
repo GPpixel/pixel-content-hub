@@ -27,6 +27,16 @@ class ManagerBridge(private val activity: Activity, private val origin: String) 
         }
     }
 
+    /** Android's share sheet (WhatsApp, Messages, email...) for a short text such as an invite link. */
+    @JavascriptInterface
+    fun shareText(text: String) {
+        if (text.length > 2000) return
+        activity.runOnUiThread {
+            val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+            activity.startActivity(Intent.createChooser(send, null))
+        }
+    }
+
     @JavascriptInterface
     fun version(): String = BuildConfig.VERSION_NAME
 

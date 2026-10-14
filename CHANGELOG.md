@@ -40,6 +40,19 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
   account menu (Platform → Overview, with the way home), an **update available** notice on the
   home page, and the one-time "share install statistics?" question that was only on the Advanced
   dashboard.
+- **ScreenTinker Manager**, a new Android app (`android-admin/`, `com.screentinker.manager`) for
+  updating screens from a phone. It wraps the Simple view and adds:
+  - several servers, with switching between them;
+  - Android's photo picker;
+  - "Share → Show on a screen" from Photos;
+  - invite links through the share sheet;
+  - Advanced, Admin and Settings in the browser.
+
+  See `docs/manager-app.md`.
+- **Your team** (Simple view, workspace admins): invite someone as "can update screens", "can only
+  look" or "can manage everything", see who is in the workspace, cancel invites, remove people.
+  When the server cannot send email, the invite link is offered to share or copy. The invite
+  response now carries `email_sent` and `accept_url`.
 - **Add screen in Simple view is the same step-by-step guide** (`#/add-screen`): open the player,
   connect it, choose what it shows. The last step also offers "show the same as another screen".
   Advanced view keeps the Add screen dialog.

@@ -545,7 +545,10 @@ router.post('/:id/invites', async (req, res) => {
     return res.status(502).json({ error: 'Email send failed - invite not created' });
   }
 
-  res.status(201).json({ id: inviteId, email, role, expires_at: expiresAt });
+  // 3.0 (additive): whether the email actually went out, and the link itself, so the inviter can pass
+  // it on when it did not (no mail transport on a self-hosted server) or from a phone. The link only
+  // works for the invited email address (accept-invite checks it).
+  res.status(201).json({ id: inviteId, email, role, expires_at: expiresAt, email_sent: !!sendResult.sent, accept_url: acceptUrl });
 });
 
 // DELETE /:id/invites/:inviteId - admin only. Cancels a pending invite.
