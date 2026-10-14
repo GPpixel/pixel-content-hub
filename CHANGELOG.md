@@ -61,6 +61,11 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
 - `POST /api/auth/sessions/revoke-others` and Settings → "Sign out everywhere else".
 - CI runs the unit suite on Node 22.14.0 as well as on the latest 22. `.nvmrc` added.
 
+- **Self-hosted: an occasional GitHub Sponsors ask** in place of the trial banner. It is shown to
+  platform admins only, after setup: at once on an install upgraded from an earlier version, after
+  3 days on a fresh one. "Not now" snoozes it for 30 days; "Don't ask again" ends it. A permanent
+  link sits in Settings → About. `ST_HIDE_SPONSOR=true` turns it off.
+
 ### Changed
 
 - "Screen" is the user-facing noun (Screens, Add screen, Connect screen).

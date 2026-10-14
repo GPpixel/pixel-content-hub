@@ -113,4 +113,5 @@ them. The one effect: sessions revoked under 3.0 become valid again until they e
 | `ST_ALLOW_OLD_NODE` | unset | `1` starts below the Node floor with a warning (unsupported) |
 | `ST_SKIP_UPGRADE_SNAPSHOT` | unset | `1` skips the pre-upgrade database snapshot |
 | `SELF_HOSTED_SIGNUP_PLAN` | `enterprise` | `trial` restores the 2.x self-hosted signup trial |
+| `ST_HIDE_SPONSOR` | unset | `true` hides the self-hosted GitHub Sponsors ask (platform admins only; at once after an upgrade, 3 days after a fresh install) |
 | `PUBLIC_HOSTS` | unset | Comma-separated hosts trusted for emailed links when `APP_URL` is unset |

@@ -230,6 +230,15 @@ for support/recovery sessions, so **self-hosted sees none of it**.
 - **Readout:** platform admins see the cohort funnel under **Platform → Overview → Trial to paid**,
   with limit hits by code (`GET /api/subscription/funnel`).
 
+**Self-hosted sponsor ask:** the trial banner's slot carries a GitHub Sponsors request
+(https://github.com/sponsors/screentinker) on self-hosted installs.
+- Platform admins only, after setup.
+- Shown at once on an install upgraded from an earlier version (`app_settings.last_upgraded_at`),
+  after 3 days on a fresh one (`sponsorEligible()` in `routes/auth.js`).
+- Snoozed for 30 days by "Not now", for 180 days by opening the link, and permanently by "Don't ask
+  again".
+- `ST_HIDE_SPONSOR=true` turns it off; a permanent link sits in Settings → About.
+
 **Self-hosted respect:**
 - Later self-hosted signups are now `enterprise` with no trial clock, unless
   `SELF_HOSTED_SIGNUP_PLAN=trial` restores 2.x.
