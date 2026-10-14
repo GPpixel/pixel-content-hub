@@ -14,6 +14,17 @@
   ],
   "releases": [
     {
+      "version": "3.0.0",
+      "date": "2026-10-14",
+      "notes": [
+        "A Simple and an Advanced view. New accounts start in Simple, which shows just the essentials; switch at the top of the menu to see everything. Accounts that existed before 3.0 start in Advanced.",
+        "New accounts are guided from sign-up to a screen showing their content, with a sample image and an in-browser player if no TV is handy.",
+        "Adding content to a screen in the simple menu sends it to the screen straight away (unless your workspace reviews changes first).",
+        "The Screens page marks any screen that is paused by your plan, and plan limits now explain what to do instead of showing an error.",
+        "Changing your password or two-factor settings now signs you out on your other devices."
+      ]
+    },
+    {
       "version": "2.6.1",
       "date": "2026-10-12",
       "notes": [
