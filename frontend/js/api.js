@@ -414,6 +414,11 @@ export const api = {
   getServerStatus: () => request('/status'),
   reorderDevices: (order) => request('/devices/reorder', { method: 'POST', body: JSON.stringify({ order }) }),
   getDevice: (id) => request(`/devices/${id}`),
+  // "What will this screen show at…?" (docs/preview-at-time.md). `extra` carries an optional
+  // what-if weather ({ weather: 'rain', temp_c: 12 }).
+  simulateDevice: (id, at, extra = {}) => request(`/devices/${id}/simulate?${new URLSearchParams({ at, ...extra })}`),
+  deviceTimeline: (id, from, to, extra = {}) => request(`/devices/${id}/timeline?${new URLSearchParams({ from, ...(to ? { to } : {}), ...extra })}`),
+  simulateGroup: (id, at) => request(`/groups/${id}/simulate?${new URLSearchParams({ at })}`),
   getDeviceOwnerQR: () => request('/provision/device-owner-qr'),   // #161: device-owner provisioning
   updateDevice: (id, data) => request(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteDevice: (id) => request(`/devices/${id}`, { method: 'DELETE' }),

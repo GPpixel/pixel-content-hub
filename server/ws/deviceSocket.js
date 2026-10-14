@@ -569,7 +569,20 @@ function stampFileUrls(items, deviceId) {
 
 const { triggersForDevice, projectTrigger } = require('../lib/device-triggers');
 
-function buildPlaylistPayloadUnchecked(deviceId) {
+/*
+ * `opts` is for the "what will this screen show at…" preview (lib/device-simulate.js) ONLY. Every
+ * delivery path calls this with no options and gets exactly what it always got:
+ *   - resolved: { playlist_id, source, layout_id, scheduled_layout_id } — what the resolver view
+ *     WOULD say at the simulated instant, in place of what it says now (the scheduler writes the
+ *     schedule columns on its tick; a forecast cannot wait for a tick that has not happened);
+ *   - forecast: true — leave out the LIVE-ONLY overrides (an emergency alert, a CAP feed, an
+ *     automation override). They are states of the present, not rules about the future, and the
+ *     preview reports them separately rather than projecting them forward;
+ *   - weather: a reading that replaces the cached one for weather conditions ("and if it rains?");
+ *   - trace: an object the builder fills with what it left out (items this player cannot play, and
+ *     the items before the weather/area filter), so the preview can say WHY rather than guess.
+ */
+function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
   /*
    * ⚠️ playlist_id comes from the RESOLVER, not from the devices row.
    *
@@ -596,6 +609,13 @@ function buildPlaylistPayloadUnchecked(deviceId) {
       d.capabilities, d.platform, d.android_version, d.client_type
       FROM devices d JOIN device_resolved_playlist r ON r.device_id = d.id
       WHERE d.id = ?`).get(deviceId);
+  if (device && opts.resolved) {
+    device.playlist_id = opts.resolved.playlist_id ?? null;
+    device.playlist_source = opts.resolved.source ?? null;
+    device.layout_id = opts.resolved.layout_id ?? null;
+  }
+  const trace = opts.trace && typeof opts.trace === 'object' ? opts.trace : null;
+  if (trace) trace.unsupported = [];
 
   /*
    * P2 (additive): a live item must never reach a device that cannot decode it. HLS (video/hls) is
@@ -613,17 +633,21 @@ function buildPlaylistPayloadUnchecked(deviceId) {
   // A hold (lib/hold-item.js) is not live, but it rides the same strip for the same reason: a player
   // that does not know it would skip it, and skipping a hold silently shortens a timeline.
   const deviceSupportsHold = capsLib.supports(device, 'playback.hold');
-  const dropLiveIfUnsupported = (items) => {
+  // `sink` (preview trace only) collects what was left out; the base playlist passes it, triggers don't.
+  const dropLiveIfUnsupported = (items, sink = null) => {
     if (!Array.isArray(items) || (deviceSupportsHls && deviceSupportsRtsp && deviceSupportsHdmiIn && deviceSupportsHold)) return items;
     return items.filter((a) => {
       if (!a) return true;
-      if (a.mime_type === 'video/hls') return deviceSupportsHls;
-      if (a.mime_type === 'video/rtsp') return deviceSupportsRtsp;
-      if (a.mime_type === 'video/hdmi-in') return deviceSupportsHdmiIn;
-      if (a.mime_type === 'application/x-st-hold') return deviceSupportsHold;
-      return true;
+      let keep = true;
+      if (a.mime_type === 'video/hls') keep = deviceSupportsHls;
+      else if (a.mime_type === 'video/rtsp') keep = deviceSupportsRtsp;
+      else if (a.mime_type === 'video/hdmi-in') keep = deviceSupportsHdmiIn;
+      else if (a.mime_type === 'application/x-st-hold') keep = deviceSupportsHold;
+      if (!keep && sink) sink.push(a);
+      return keep;
     });
   };
+  const baseSink = trace ? trace.unsupported : null;
 
   let assignments = [];
   let playback_order = 'sequential';
@@ -651,7 +675,7 @@ function buildPlaylistPayloadUnchecked(deviceId) {
    * One Map.size test when nothing is live (lib/corporate/emergency-live.js).
    */
   let emergencyNow = null;
-  try { emergencyNow = require('../lib/corporate/emergency-live').activationFor(db, deviceId); } catch (e) {
+  if (!opts.forecast) try { emergencyNow = require('../lib/corporate/emergency-live').activationFor(db, deviceId); } catch (e) {
     console.warn(`[emergency] activation check failed for ${deviceId}: ${e && e.message}`);
     emergencyNow = null;
   }
@@ -661,7 +685,7 @@ function buildPlaylistPayloadUnchecked(deviceId) {
    * office's own alert outranks it. One Map.size test when nothing is live anywhere.
    */
   let capNow = null;
-  if (!emergencyNow) {
+  if (!emergencyNow && !opts.forecast) {
     try { capNow = require('../lib/cap/feeds').overrideFor(db, deviceId); } catch (e) {
       console.warn(`[cap] override check failed for ${deviceId}: ${e && e.message}`);
       capNow = null;
@@ -674,7 +698,7 @@ function buildPlaylistPayloadUnchecked(deviceId) {
    * a head office (corporate) playlist — automation is not a way round a locked playlist.
    */
   let hookNow = null;
-  if (!overrideNow && !corporateSource) {
+  if (!overrideNow && !corporateSource && !opts.forecast) {
     try { hookNow = require('../lib/automation/overrides').overrideFor(db, deviceId); } catch (e) {
       console.warn(`[automation] override check failed for ${deviceId}: ${e && e.message}`);
       hookNow = null;
@@ -737,14 +761,14 @@ function buildPlaylistPayloadUnchecked(deviceId) {
     }
     refreshWidgetRevs(assignments, deviceId);
     refreshContentRevs(assignments);   // re-stamps a.mime_type, so strip live AFTER it
-    assignments = dropLiveIfUnsupported(assignments);
+    assignments = dropLiveIfUnsupported(assignments, baseSink);
   } else if (device?.playlist_id) {
     const playlist = db.prepare('SELECT published_snapshot, published_playback_order, workspace_id FROM playlists WHERE id = ?').get(device.playlist_id);
     if (playlist?.published_snapshot) {
       try { assignments = JSON.parse(playlist.published_snapshot); } catch (e) { assignments = []; }
       refreshWidgetRevs(assignments, deviceId);
       refreshContentRevs(assignments);   // re-stamps a.mime_type, so strip live AFTER it
-      assignments = dropLiveIfUnsupported(assignments);
+      assignments = dropLiveIfUnsupported(assignments, baseSink);
     }
     if (playlist && playlist.published_playback_order) playback_order = playlist.published_playback_order;
   }
@@ -909,7 +933,9 @@ function buildPlaylistPayloadUnchecked(deviceId) {
        */
       // A wall schedule's layout (devices.scheduled_layout_id — only wall schedules set it on a
       // panel, see services/scheduler.js) is the wall's layout while it runs.
-      const scheduledWallLayout = db.prepare('SELECT scheduled_layout_id FROM devices WHERE id = ?').get(deviceId)?.scheduled_layout_id || null;
+      const scheduledWallLayout = opts.resolved
+        ? (opts.resolved.scheduled_layout_id || null)
+        : (db.prepare('SELECT scheduled_layout_id FROM devices WHERE id = ?').get(deviceId)?.scheduled_layout_id || null);
       const wallLayoutId = scheduledWallLayout || wall.layout_id;
       if (wallLayoutId && !overrideNow && !hookNow && !corporateSource) {
         const wl = db.prepare('SELECT * FROM layouts WHERE id = ?').get(wallLayoutId);
@@ -1004,7 +1030,8 @@ function buildPlaylistPayloadUnchecked(deviceId) {
   if (default_content) stampFileUrls([default_content], deviceId);
 
   // Weather and area conditions are decided here, for this screen (lib/local-conditions.js).
-  assignments = require('../lib/local-conditions').filterItems(assignments, device);
+  if (trace) trace.before_local = assignments;
+  assignments = require('../lib/local-conditions').filterItems(assignments, device, opts.weather || undefined);
   const assembled = assemblePayload({ assignments, layout, orientation: device?.orientation || 'landscape', background_color: device?.background_color || null, workspace_id: device?.workspace_id || null, wall_config, group_sync, timezone, triggers, trigger_config, local_api, playback_order, default_content, power_schedule, endpoints: deviceEndpoints });
   /*
    * Audience counting (lib/audience.js). Top-level and outside the item list, so switching it on or

@@ -586,6 +586,67 @@ router.get('/:id/preview-payload', (req, res) => {
   res.json(payload);
 });
 
+/*
+ * "What will this screen show at…?" (docs/preview-at-time.md, lib/device-simulate.js).
+ *
+ * READ routes, gated exactly like the preview payload above: the device's workspace must be one the
+ * caller can see (viewers allowed, as for GET /:id). They change nothing — no schedule column is
+ * written, no payload is pushed — they ask the live rules a question about another instant.
+ */
+function deviceReadable(req, res) {
+  const device = db.prepare('SELECT id, workspace_id FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return null; }
+  if (!device.workspace_id) { res.status(403).json({ error: 'Device not assigned to a workspace' }); return null; }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  return device;
+}
+
+function simulateParams(req, res) {
+  const sim = require('../lib/device-simulate');
+  const at = sim.parseInstant(req.query.at);
+  if (at === null) { res.status(400).json({ error: 'at must be an ISO 8601 date-time within a year back and five years ahead' }); return null; }
+  const weather = sim.parseWeather(req.query);
+  if (weather === false) { res.status(400).json({ error: 'weather must be one of clear, cloudy, fog, rain, snow, storm; temp_c a number of degrees' }); return null; }
+  return { sim, at, weather };
+}
+
+router.get('/:id/simulate', (req, res) => {
+  if (!deviceReadable(req, res)) return;
+  const p = simulateParams(req, res);
+  if (!p) return;
+  const out = p.sim.simulate(req.params.id, p.at, { weather: p.weather });
+  if (!out) return res.status(404).json({ error: 'Device not found' });
+  res.json(out);
+});
+
+// The payload the dashboard's preview frame renders for that instant (the player's ?preview=1&at=).
+router.get('/:id/simulate/payload', (req, res) => {
+  if (!deviceReadable(req, res)) return;
+  const p = simulateParams(req, res);
+  if (!p) return;
+  const out = p.sim.previewPayload(req.params.id, p.at, { weather: p.weather });
+  if (!out) return res.status(404).json({ error: 'Device not found' });
+  res.json(out);
+});
+
+router.get('/:id/timeline', (req, res) => {
+  if (!deviceReadable(req, res)) return;
+  const sim = require('../lib/device-simulate');
+  let from = sim.parseInstant(req.query.from);
+  if (from === null) return res.status(400).json({ error: 'from must be an ISO 8601 date-time' });
+  from = Math.floor(from / 60000) * 60000;   // every rule is minute-resolution; so are segments
+  const to = req.query.to ? sim.parseInstant(req.query.to, null) : from + 24 * 3600 * 1000;
+  if (to === null || to <= from) return res.status(400).json({ error: 'to must be an ISO 8601 date-time after from' });
+  if (to - from > sim.MAX_RANGE_MS) return res.status(400).json({ error: 'The range can be at most 14 days' });
+  const weather = sim.parseWeather(req.query);
+  if (weather === false) return res.status(400).json({ error: 'weather must be one of clear, cloudy, fog, rain, snow, storm; temp_c a number of degrees' });
+  const out = sim.timeline(req.params.id, from, to, { weather });
+  if (!out) return res.status(404).json({ error: 'Device not found' });
+  res.json(out);
+});
+
 // Update device
 // Clear a device's playlist — the "No playlist" option in the dashboard picker.
 //

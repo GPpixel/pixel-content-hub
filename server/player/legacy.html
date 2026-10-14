@@ -2154,6 +2154,10 @@ function bootPreview(qs) {
     const orientation = qs.get("orientation");
     const q = orientation ? "?orientation=" + encodeURIComponent(orientation) : "";
     url = "/api/playlists/" + encodeURIComponent(playlistId) + "/preview-payload" + q;
+  } else if (qs.get("at")) {
+    url = "/api/devices/" + encodeURIComponent(deviceId) + "/simulate/payload?at=" + encodeURIComponent(qs.get("at"));
+    var wq = qs.get("weather");
+    if (wq) url += "&weather=" + encodeURIComponent(wq);
   } else {
     url = "/api/devices/" + encodeURIComponent(deviceId) + "/preview-payload";
   }

@@ -2537,6 +2537,13 @@
         const orientation = qs.get('orientation');
         const q = orientation ? ('?orientation=' + encodeURIComponent(orientation)) : '';
         url = '/api/playlists/' + encodeURIComponent(playlistId) + '/preview-payload' + q;
+      } else if (qs.get('at')) {
+        // "What will this screen show at…?" (docs/preview-at-time.md): the payload the server
+        // resolves for THAT instant, already filtered to what plays then and with the time gates
+        // taken off, so this player's own clock cannot re-filter a Monday-9am loop against today.
+        url = '/api/devices/' + encodeURIComponent(deviceId) + '/simulate/payload?at=' + encodeURIComponent(qs.get('at'));
+        var wq = qs.get('weather');
+        if (wq) url += '&weather=' + encodeURIComponent(wq);
       } else {
         // Device preview: the device's own layout/orientation come from the server; no
         // orientation override (we show what the device actually shows).

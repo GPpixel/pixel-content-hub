@@ -80,8 +80,14 @@ function normalise(obj) {
 
 const isLocal = (w) => !!w && (w.type === 'weather' || w.type === 'geo');
 
-/** Does this screen pass the condition? `device`: { latitude, longitude }. */
-function passes(when, device) {
+/**
+ * Does this screen pass the condition? `device`: { latitude, longitude }.
+ *
+ * `reading` ({ group?, temperature_c? }) replaces the cached weather for this one call — the
+ * "what will this screen show at…" preview lets an operator ask "and if it rains?" (lib/device-
+ * simulate.js). Absent (every live caller), the cache decides exactly as before.
+ */
+function passes(when, device, reading) {
   const lat = device ? Number(device.latitude) : NaN, lon = device ? Number(device.longitude) : NaN;
   const placed = device && device.latitude != null && device.longitude != null && validLatLon(lat, lon);
   if (when.type === 'geo') {
@@ -91,7 +97,7 @@ function passes(when, device) {
   }
   if (when.type === 'weather') {
     if (!placed) return true;                                    // fails OPEN
-    const hit = cache.get(cellOf(lat, lon));
+    const hit = reading ? { data: reading } : cache.get(cellOf(lat, lon));
     if (!hit || !hit.data) return true;
     const w = hit.data;
     if (when.field === 'condition') {
@@ -112,12 +118,12 @@ function passes(when, device) {
  * Leave out the items whose local condition fails for this screen, and strip local conditions
  * from the rest (players do not know these types). Items without one are untouched.
  */
-function filterItems(items, device) {
+function filterItems(items, device, reading) {
   if (!Array.isArray(items) || !items.some((it) => it && isLocal(it.play_when))) return items;
   const out = [];
   for (const it of items) {
     if (!it || !isLocal(it.play_when)) { out.push(it); continue; }
-    if (!passes(it.play_when, device)) continue;
+    if (!passes(it.play_when, device, reading)) continue;
     const { play_when, ...rest } = it;   // eslint-disable-line no-unused-vars
     out.push(rest);
   }
