@@ -20,6 +20,7 @@ const { isRealTimezone } = require('../lib/device-timezone');
 const pluginRegistry = require('../lib/plugins/registry');
 const { redactSecrets, mergeSecrets, encryptSecrets, decryptSecrets, fieldsForDataSource } = require('../lib/plugins/secrets');
 const { getBuiltinType } = require('../lib/data-sources/builtin-types');
+const { auditFromReq } = require('../lib/audit');
 
 function isSupportedDataSourceType(type) {
   return type === 'ical' || type === 'weather' || !!getBuiltinType(type) || pluginRegistry.hasDataSource(type);
@@ -32,13 +33,21 @@ function testErrorMessage(type, err) {
   if (type === 'weather') return 'Could not fetch the weather. Check the location and try again.';
   if (type === 'sheets') return 'Could not reach Google Sheets. Check the link and try again.';
   if (type === 'rss') return 'Could not fetch the feed. Check the address and try again.';
+  if (type === 'square') return 'Could not reach Square. Try again in a minute.';
+  if (type === 'shopify') return 'Could not reach the Shopify store. Check the address and try again.';
   return 'Could not fetch or parse the data source. Check the URL and try again.';
 }
 
 // Two configs share a secret destination when their `url` fields resolve to the same origin.
 // A missing or unparseable URL on either side counts as "different" so we fail closed and never
-// forward a stored secret to a URL it was not saved for.
-function sameSecretDestination(a, b) {
+// forward a stored secret to a URL it was not saved for. A built-in type with no `url` (Square,
+// Shopify) names its destination itself — the same Shopify store, the same Square environment.
+function sameSecretDestination(a, b, type) {
+  const builtin = type ? getBuiltinType(type) : null;
+  if (builtin && typeof builtin.secretDestination === 'function') {
+    const da = builtin.secretDestination(a);
+    return da != null && da === builtin.secretDestination(b);
+  }
   const originOf = (cfg) => {
     const u = cfg && typeof cfg.url === 'string' ? cfg.url : '';
     try { return new URL(u).origin.toLowerCase(); } catch (_) { return null; }
@@ -80,6 +89,8 @@ function sanitizeConfigForRole(cfg, req, type) {
   if (safe.ics_data) safe.ics_data = '[redacted]';
   if (safe.raw_data) safe.raw_data = '[redacted]';
   if (safe.raw_ics) safe.raw_ics = '[redacted]';
+  // Half of a Shopify app's credential pair; the secret is already blank, the ID is not for viewers.
+  if (safe.client_id) safe.client_id = '';
   return safe;
 }
 
@@ -209,7 +220,8 @@ router.post('/test', requireWorkspaceWrite, async (req, res, next) => {
   if (req.body.id) {
     const existing = db.prepare('SELECT config, type FROM data_sources WHERE id = ? AND workspace_id = ?')
       .get(req.body.id, req.workspaceId);
-    if (existing) {
+    // Only into a test of the SAME type: a stored REST token has no business in a Shopify test.
+    if (existing && existing.type === type) {
       let prev = {};
       try { prev = decryptSecrets(JSON.parse(existing.config), fieldsForDataSource(existing.type || type)); } catch (_) {}
       // Only back-fill a stored secret when this test targets the SAME destination the secret was
@@ -217,7 +229,7 @@ router.post('/test', requireWorkspaceWrite, async (req, res, next) => {
       // workspace writer could point an existing source at their own URL, have the stored token
       // merged in, and receive it -- a redaction bypass / credential-exfil path. Fail closed: if
       // either URL is missing or unparseable, do not merge, and the test runs without the secret.
-      if (sameSecretDestination(parsedConfig, prev)) {
+      if (sameSecretDestination(parsedConfig, prev, type)) {
         parsedConfig = mergeSecrets(parsedConfig, prev, fieldsForDataSource(existing.type || type));
       }
     }
@@ -228,7 +240,8 @@ router.post('/test', requireWorkspaceWrite, async (req, res, next) => {
     const builtin = getBuiltinType(type);
     if (builtin) {
       const out = await withFetchSlot(() => builtin.resolve(parsedConfig, { now: new Date() }));
-      return res.json({ status: 'ok', preview: out.data, table: out.table || null, raw: out.raw === undefined ? null : out.raw });
+      // meta: what a connect form can offer next (Square's locations, Shopify's collections).
+      return res.json({ status: 'ok', preview: out.data, table: out.table || null, raw: out.raw === undefined ? null : out.raw, meta: out.meta || null });
     }
     if (type === 'ical') {
       previewData = await withFetchSlot(() => resolveIcalData(parsedConfig));
@@ -312,6 +325,8 @@ router.post('/', requireWorkspaceWrite, (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)
   `).run(id, wsId, uniqueSlug, cleanName, type, configJson, nowSec, nowSec);
 
+  auditFromReq(req, 'data_source.create', { id, type, slug: uniqueSlug });
+
   // Trigger initial sync in background
   const newRow = db.prepare('SELECT * FROM data_sources WHERE id = ?').get(id);
   syncDataSource(newRow, true).catch(err => {
@@ -375,7 +390,8 @@ router.put('/:id', requireWorkspaceWrite, (req, res) => {
     // (the form shows them blank anyway). Types with no `url` on either side (plugins whose host is
     // fixed by their network allow-list) have no repointable destination, so they keep merging.
     const urlLess = (c) => !c || c.url === undefined || c.url === null || c.url === '';
-    if (sameSecretDestination(parsedConfig, prev) || (urlLess(parsedConfig) && urlLess(prev))) {
+    const ownDestination = !!(getBuiltinType(existing.type) && getBuiltinType(existing.type).secretDestination);
+    if (sameSecretDestination(parsedConfig, prev, existing.type) || (!ownDestination && urlLess(parsedConfig) && urlLess(prev))) {
       parsedConfig = mergeSecrets(parsedConfig, prev, fields);
     } else {
       parsedConfig = mergeSecrets(parsedConfig, {}, fields); // strips blank/"***" placeholders only
@@ -393,6 +409,8 @@ router.put('/:id', requireWorkspaceWrite, (req, res) => {
     SET name = ?, slug = ?, config = ?, updated_at = ?
     WHERE id = ? AND workspace_id = ?
   `).run(cleanName, cleanSlug, configJson, nowSec, req.params.id, wsId);
+
+  auditFromReq(req, 'data_source.update', { id: req.params.id, type: existing.type, slug: cleanSlug, config_changed: plaintextChanged });
 
   // Trigger refresh only if the config's plaintext actually changed (encryption is non-deterministic,
   // so a ciphertext comparison would always look "changed").
@@ -448,6 +466,7 @@ router.delete('/:id', requireWorkspaceWrite, (req, res) => {
     return res.status(404).json({ error: 'Data source not found' });
   }
   db.prepare('DELETE FROM data_sources WHERE id = ?').run(row.id);
+  auditFromReq(req, 'data_source.delete', { id: row.id, slug: row.slug });
   // The bound widgets now resolve to '' and their rev must move, or every player keeps the
   // deleted source's last values in the year-long immutable render cache.
   bumpDependentWidgets(row, Math.floor(Date.now() / 1000));
