@@ -27,6 +27,11 @@ const LIMIT_PATH_SHAPES = [
   // shares a bucket with every other content operation. It wants its own, and a tight one.
   [/^\/api\/content\/uploads$/, () => '/api/content/uploads'],
   [/^\/api\/content\/[^/]+$/, () => '/api/content/:id'],
+  // 3.0 SCIM: user and group ids are caller-chosen, so the whole protocol surface is one bucket per
+  // IP; the admin routes fold their ids the same way.
+  [/^\/scim(\/.*)?$/, () => '/scim/v2'],
+  [/^\/api\/organizations\/[^/]+\/scim\/(tokens|mappings)\/[^/]+$/, (m) => `/api/organizations/:id/scim/${m[1]}/:id`],
+  [/^\/api\/organizations\/[^/]+\/scim(\/(tokens|mappings|events|users))?$/, (m) => `/api/organizations/:id/scim${m[1] || ''}`],
   [/^\/api\/organizations\/[^/]+\/sso\/[^/]+\/domains\/[^/]+\/verify$/, () => '/api/organizations/:id/sso/:id/domains/:domain/verify'],
   [/^\/api\/organizations\/[^/]+\/sso\/[^/]+\/test$/, () => '/api/organizations/:id/sso/:id/test'],
   [/^\/api\/organizations\/[^/]+\/sso\/[^/]+$/, () => '/api/organizations/:id/sso/:id'],

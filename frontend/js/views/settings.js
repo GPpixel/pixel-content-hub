@@ -14,6 +14,7 @@ import { mountM365Settings } from '../components/m365-settings.js';
 import { mountBiConnections } from '../components/bi-connections-settings.js';
 import { mountSocialConnections } from '../components/social-connections-settings.js';
 import { mountRoomSettings } from '../components/room-settings.js';
+import { mountScimSettings } from '../components/scim-settings.js';
 import { formatRow, buyPack, usd } from '../components/ai-hosted-picker.js';
 
 export async function render(container) {
@@ -163,6 +164,9 @@ export async function render(container) {
         </div>
       </details>
     </div>
+
+    <!-- 3.0: SCIM user provisioning (components/scim-settings.js). Org owners/admins; hidden otherwise. -->
+    <div class="settings-section" id="scimCard" style="display:none"></div>
 
     <div class="settings-section">
       <h3>${t('apitoken.title')}</h3>
@@ -1676,6 +1680,8 @@ export async function render(container) {
   if (canManageOrgSecurity) mountSocialConnections(document.getElementById('socialConnCard'));
   // Meeting-room calendar connections: org owners and admins (the server agrees, and says can_manage).
   if (canManageOrgSecurity) mountRoomSettings(document.getElementById('roomsCard'));
+  // SCIM provisioning belongs to the organization; the server answers 404 to anyone but its admins.
+  if (canManageOrgSecurity && orgId) mountScimSettings(document.getElementById('scimCard'), orgId);
 
 
   document.getElementById('createTokenBtn')?.addEventListener('click', async () => {

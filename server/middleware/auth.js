@@ -57,9 +57,11 @@ function generateToken(user, currentWorkspaceId) {
 const SESSION_COLS = 'id, email, name, role, auth_provider, avatar_url, plan_id, email_alerts, must_change_password';
 function loadSessionRow(id) {
   try {
-    return db.prepare(`SELECT ${SESSION_COLS}, token_version FROM users WHERE id = ?`).get(id);
+    return db.prepare(`SELECT ${SESSION_COLS}, token_version, disabled_at FROM users WHERE id = ?`).get(id);
   } catch (e) {
-    if (!/no such column: token_version/i.test(e.message)) throw e;
+    // disabled_at (3.0, SCIM) is guaranteed by schema-check.js like token_version; read the 2.x
+    // shape only when one of the two is genuinely absent.
+    if (!/no such column: (token_version|disabled_at)/i.test(e.message)) throw e;
     return db.prepare(`SELECT ${SESSION_COLS} FROM users WHERE id = ?`).get(id);
   }
 }
@@ -192,7 +194,14 @@ function resolveSessionUser(token, { allowPasswordChange = false, sourceIp = nul
   if ((Number.isInteger(decoded.tv) ? decoded.tv : 0) < (user.token_version || 0)) {
     throw new SessionError('session_revoked');
   }
+  /*
+   * 3.0: an account its organization's identity provider deactivated (SCIM, lib/scim/provision.js).
+   * Deactivation also bumps token_version, so this is the belt for a token minted in the moment
+   * between the two writes, and for any path that mints a session without going through a login.
+   */
+  if (user.disabled_at) throw new SessionError('account_disabled');
   delete user.token_version; // req.user's shape is unchanged
+  delete user.disabled_at;
   if (user.must_change_password && !allowPasswordChange) {
     throw new SessionError('password_change_required');
   }

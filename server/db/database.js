@@ -2599,6 +2599,121 @@ const migrations = [
    * the 'workspace and organization settings' step below: workspaces does not exist yet here.
    */
   "ALTER TABLE devices ADD COLUMN screen_share_guest INTEGER NOT NULL DEFAULT 0",
+  /*
+   * 3.0: SCIM 2.0 provisioning (routes/scim.js, lib/scim/*, docs/scim.md). All additive.
+   *
+   * users.disabled_at: set when an organization's identity provider DEACTIVATES an account that
+   * organization owns. Every session, API token and sign-in route refuses a disabled account
+   * (middleware/auth.js, middleware/apiToken.js, routes/auth.js); NULL is the normal state, so an
+   * upgrade changes nobody.
+   */
+  'ALTER TABLE users ADD COLUMN disabled_at INTEGER',
+  // One row per organization that has turned provisioning on. default_* is optional access every
+  // provisioned person gets, on top of whatever their groups map to.
+  `CREATE TABLE IF NOT EXISTS org_scim_settings (
+     organization_id      TEXT PRIMARY KEY,
+     enabled              INTEGER NOT NULL DEFAULT 0,
+     default_workspace_id TEXT,
+     default_role         TEXT,
+     updated_at           INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)`,
+  /*
+   * The identity provider's bearer credential. SHA-256 of a 256-bit random secret, like api_tokens:
+   * the plaintext is shown once at mint and never stored. created_by is deliberately not a foreign
+   * key, so deleting the admin who minted it neither blocks nor silently revokes provisioning.
+   */
+  `CREATE TABLE IF NOT EXISTS scim_tokens (
+     id              TEXT PRIMARY KEY,
+     organization_id TEXT NOT NULL,
+     token_hash      TEXT NOT NULL UNIQUE,
+     prefix          TEXT NOT NULL,
+     name            TEXT NOT NULL DEFAULT '',
+     created_by      TEXT,
+     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     last_used_at    INTEGER,
+     revoked_at      INTEGER,
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)`,
+  'CREATE INDEX IF NOT EXISTS idx_scim_tokens_org ON scim_tokens(organization_id)',
+  /*
+   * A ScreenTinker account as ONE organization's identity provider sees it. The SCIM id is its own
+   * random value rather than users.id, so nothing an IdP is told identifies the account anywhere else.
+   * suspended: the memberships taken away at deactivation, restored on reactivation (JSON). Whether
+   * this organization OWNS the account's sign-in is not stored: it is read live from
+   * users.auth_provider (lib/scim/provision.js ownsIdentity), so it cannot go stale.
+   */
+  `CREATE TABLE IF NOT EXISTS scim_users (
+     id              TEXT PRIMARY KEY,
+     organization_id TEXT NOT NULL,
+     user_id         TEXT NOT NULL,
+     user_name       TEXT NOT NULL,
+     external_id     TEXT,
+     display_name    TEXT,
+     given_name      TEXT,
+     family_name     TEXT,
+     active          INTEGER NOT NULL DEFAULT 1,
+     suspended       TEXT,
+     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     UNIQUE (organization_id, user_id),
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_scim_users_username ON scim_users(organization_id, user_name COLLATE NOCASE)',
+  'CREATE INDEX IF NOT EXISTS idx_scim_users_external ON scim_users(organization_id, external_id)',
+  `CREATE TABLE IF NOT EXISTS scim_groups (
+     id              TEXT PRIMARY KEY,
+     organization_id TEXT NOT NULL,
+     display_name    TEXT NOT NULL,
+     external_id     TEXT,
+     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_scim_groups_name ON scim_groups(organization_id, display_name COLLATE NOCASE)',
+  `CREATE TABLE IF NOT EXISTS scim_group_members (
+     group_id     TEXT NOT NULL,
+     scim_user_id TEXT NOT NULL,
+     PRIMARY KEY (group_id, scim_user_id),
+     FOREIGN KEY (group_id) REFERENCES scim_groups(id) ON DELETE CASCADE,
+     FOREIGN KEY (scim_user_id) REFERENCES scim_users(id) ON DELETE CASCADE)`,
+  'CREATE INDEX IF NOT EXISTS idx_scim_group_members_user ON scim_group_members(scim_user_id)',
+  // What a group grants: a role in a workspace of the same organization. Set by an org admin in
+  // Settings, never by the identity provider.
+  `CREATE TABLE IF NOT EXISTS scim_group_mappings (
+     id              TEXT PRIMARY KEY,
+     organization_id TEXT NOT NULL,
+     group_id        TEXT NOT NULL,
+     workspace_id    TEXT NOT NULL,
+     role            TEXT NOT NULL,
+     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     UNIQUE (group_id, workspace_id),
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+     FOREIGN KEY (group_id) REFERENCES scim_groups(id) ON DELETE CASCADE,
+     FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE)`,
+  /*
+   * The workspace memberships provisioning is responsible for. Only these are ever removed by it:
+   * access an admin granted by hand is left alone. prior_role is the hand-granted role a group raised,
+   * put back when the group stops applying.
+   */
+  `CREATE TABLE IF NOT EXISTS scim_workspace_grants (
+     workspace_id    TEXT NOT NULL,
+     user_id         TEXT NOT NULL,
+     organization_id TEXT NOT NULL,
+     role            TEXT NOT NULL,
+     prior_role      TEXT,
+     PRIMARY KEY (workspace_id, user_id),
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+     FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`,
+  // "Recent provisioning activity" in Settings. Pruned to the newest few hundred per organization.
+  `CREATE TABLE IF NOT EXISTS scim_events (
+     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+     organization_id TEXT NOT NULL,
+     action          TEXT NOT NULL,
+     resource        TEXT,
+     detail          TEXT,
+     status          INTEGER,
+     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE)`,
+  'CREATE INDEX IF NOT EXISTS idx_scim_events_org ON scim_events(organization_id, id DESC)',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

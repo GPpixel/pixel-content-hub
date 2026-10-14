@@ -96,6 +96,10 @@ const NOT_WORKSPACE_SCOPED = Object.freeze({
   'auth.js': 'account/session endpoints; login on a replica proxies for copied users (routes/auth.js /login)',
   'passkeys.js': '3.0 passkeys: mounted inside routes/auth.js; per-ACCOUNT credentials and sign-in, no workspace data',
   'org-sso.js': 'organization-level SSO configuration; not replicated (§3.1)',
+  // 3.0 SCIM: organization-level identity provisioning. Group access is only ever applied to LOCAL
+  // workspaces (lib/scim/provision.js filters origin_node_id IS NULL), so a copied one is never written.
+  'scim.js': 'identity provisioning from an organization\'s IdP; never writes a copied workspace (lib/scim/provision.js)',
+  'org-scim.js': 'organization-level provisioning settings; mappings refuse a copied workspace',
   'subscription.js': 'billing, owner-only, not scaled (Phase D)',
   'stripe.js': 'webhook from Stripe, not a user write',
   'billing.js': 'billing, not scaled',
