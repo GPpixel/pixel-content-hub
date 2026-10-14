@@ -20,6 +20,8 @@ import { esc, screenshotUrl, hydrateAuthImages } from '../utils.js';
 import { showToast } from '../components/toast.js';
 import { setUiMode } from '../components/ui-mode.js';
 import { plansVisible } from '../components/plan-nudges.js';
+import { isPlatformAdmin } from '../utils.js';
+import { renderStatsPrompt } from './dashboard.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -51,6 +53,7 @@ function shell(container, inner) {
         <details class="simple-account">
           <summary>${esc(u.name || u.email || '')}</summary>
           <div class="simple-account-menu">
+            ${isPlatformAdmin(u) ? `<a href="#/platform/overview">${esc(t('simple.menu.admin'))}</a>` : ''}
             ${showPlan ? `<a href="#/billing">${esc(t('simple.menu.plan'))}</a>` : ''}
             <a href="#/settings">${esc(t('simple.menu.settings'))}</a>
             <a href="#/simple/help">${esc(t('simple.menu.help'))}</a>
@@ -92,6 +95,7 @@ function guideFrame({ step, total, icon, title, body, back = true, next = null, 
 
 async function renderHome(container) {
   shell(container, `
+    <div id="simpleAdminNotices"></div>
     <h1 class="simple-h1">${esc(t('simple.home.title'))}</h1>
     <div class="simple-tasks">
       <a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
@@ -102,6 +106,7 @@ async function renderHome(container) {
     <h2 class="simple-h2">${esc(t('simple.home.your_screens'))}</h2>
     <div id="simpleScreens" class="simple-screens"><p class="simple-muted">${esc(t('common.loading'))}</p></div>`);
 
+  adminNotices(document.getElementById('simpleAdminNotices'));
   const host = document.getElementById('simpleScreens');
   let devices = [];
   try { devices = await api.getDevices(); } catch { devices = []; }
@@ -117,6 +122,33 @@ async function renderHome(container) {
       <span class="simple-screen-name">${esc(d.name)}</span>
       <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
     </a>`).join('');
+}
+
+/*
+ * For the person who runs the server (platform admins only): the two things the Advanced shell
+ * would have told them — a new version is out (the sidebar's Update badge), and the one-time
+ * "share install statistics?" question (the Advanced dashboard's prompt, reused as is: it asks once
+ * and only while the decision is unmade).
+ */
+async function adminNotices(host) {
+  const u = cachedUser();
+  if (!host || !isPlatformAdmin(u)) return;
+  try {
+    const v = await (await fetch('/api/version')).json();
+    if (v && v.update_available && document.contains(host)) {
+      const card = document.createElement('div');
+      card.className = 'simple-notice';
+      const text = document.createElement('span');
+      text.textContent = t('simple.admin.update', { latest: v.latest_version || '', current: v.version || '' });
+      const link = document.createElement('a');
+      link.className = 'btn btn-primary btn-sm';
+      link.href = '#/platform/system';
+      link.textContent = t('simple.admin.update_how');
+      card.append(text, link);
+      host.appendChild(card);
+    }
+  } catch { /* the version check is a courtesy */ }
+  try { await renderStatsPrompt(host); } catch { /* likewise */ }
 }
 
 // ---------------------------------------------------------------------------------------------

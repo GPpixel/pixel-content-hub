@@ -36,6 +36,10 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
   upload, pick from the photos and videos already in the library, sample, or same as another screen), Upload photos (then choose the screens), and Get help.
   Your screens are listed below with their status. A top bar carries the Simple | Advanced switch and
   an account menu. Other pages still open with the full shell from links and bookmarks.
+- Simple view, for the person who runs the server (platform admins): an **Admin** entry in the
+  account menu (Platform → Overview, with the way home), an **update available** notice on the
+  home page, and the one-time "share install statistics?" question that was only on the Advanced
+  dashboard.
 - **Add screen in Simple view is the same step-by-step guide** (`#/add-screen`): open the player,
   connect it, choose what it shows. The last step also offers "show the same as another screen".
   Advanced view keeps the Add screen dialog.

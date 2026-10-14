@@ -2850,3 +2850,11 @@ html.simple-shell .trial-banner { padding-left: 16px; justify-content: center; }
   color: var(--text-secondary); text-decoration: underline;
 }
 .trial-banner-link:hover { color: var(--text-primary); }
+
+/* Simple home: notices for the person who runs the server (update available, statistics question) */
+#simpleAdminNotices > * { margin-bottom: 16px; }
+.simple-notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 14px 18px; border: 1px solid var(--accent-dim); border-radius: var(--radius-lg);
+  background: var(--bg-card); font-size: 14px; color: var(--text-primary);
+}

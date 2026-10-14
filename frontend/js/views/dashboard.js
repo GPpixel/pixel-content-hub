@@ -533,7 +533,7 @@ function renderSelectionBar(scope, groupId = null) {
  * and only while the decision is genuinely unmade — BOTH answers persist, so it never returns
  * after an update. Re-prompting is how telemetry earns its reputation and gets patched out.
  */
-async function renderStatsPrompt(container) {
+export async function renderStatsPrompt(container) {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   if (!isPlatformAdmin(user)) return;
 
