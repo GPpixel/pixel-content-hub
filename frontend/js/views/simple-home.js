@@ -946,6 +946,7 @@ async function renderPasskey(container) {
   });
 }
 
+// ---------------------------------------------------------------------------------------------
 // Task: requests from people without an account (views/requests.js is the Advanced version).
 // What is waiting, with a big Approve / Decline each; the request links to pass on; and a three-step
 // guide to make a new link for some screens. Server: routes/content-requests.js. Approving goes
@@ -1185,16 +1186,14 @@ export function render(container, hash = window.location.hash || '#/') {
   const onRefreshed = (e) => {
     const h = window.location.hash || '#/';
     if (accessKey(e.detail) === drawnFor || !isSimpleRoute(h)) return;
-    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share')) return;
-    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/requests/new')) return;
+    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share') || h.startsWith('#/simple/requests/new')) return;
     render(container, h);
   };
   window.addEventListener('user-refreshed', onRefreshed);
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign'))) {
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/requests'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/requests'))) {
     window.location.replace('#/');
     return undefined;
   }
