@@ -1848,6 +1848,74 @@ function unlockAudioContext() {
   } catch (e) {
   }
 }
+function autoplayAudioRequested() {
+  try {
+    const v = new URLSearchParams(location.search).get("autoplay_audio");
+    return v === "1" || v === "true";
+  } catch (e) {
+    return false;
+  }
+}
+function autoplayAudioAllowed(timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let url = null;
+    let el = null;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      try {
+        if (el) {
+          el.pause();
+          el.removeAttribute("src");
+          el.load();
+        }
+      } catch (e) {
+      }
+      try {
+        if (url) URL.revokeObjectURL(url);
+      } catch (e) {
+      }
+      resolve(!!ok);
+    };
+    try {
+      if (navigator.getAutoplayPolicy) {
+        const policy = navigator.getAutoplayPolicy("mediaelement");
+        if (policy !== "allowed") return finish(false);
+      }
+      const n = 800;
+      const buf = new ArrayBuffer(44 + n);
+      const dv = new DataView(buf);
+      const str = (o, t) => {
+        for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i));
+      };
+      str(0, "RIFF");
+      dv.setUint32(4, 36 + n, true);
+      str(8, "WAVE");
+      str(12, "fmt ");
+      dv.setUint32(16, 16, true);
+      dv.setUint16(20, 1, true);
+      dv.setUint16(22, 1, true);
+      dv.setUint32(24, 8e3, true);
+      dv.setUint32(28, 8e3, true);
+      dv.setUint16(32, 1, true);
+      dv.setUint16(34, 8, true);
+      str(36, "data");
+      dv.setUint32(40, n, true);
+      for (let i = 0; i < n; i++) dv.setUint8(44 + i, 128);
+      url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+      el = document.createElement("audio");
+      el.muted = false;
+      el.src = url;
+      const p = el.play();
+      if (!p || typeof p.then !== "function") return finish(false);
+      p.then(() => finish(!el.muted), () => finish(false));
+      setTimeout(() => finish(false), timeoutMs || 2e3);
+    } catch (e) {
+      finish(false);
+    }
+  });
+}
 function tryUnmuteLeader() {
   const video = document.querySelector("#playerContainer video");
   if (!video) return false;
@@ -2117,6 +2185,22 @@ if (VIEWER_MODE) {
           connect(config.serverUrl);
         }
       }, 5e3);
+      if (autoplayAudioRequested()) {
+        setTimeout(() => {
+          autoplayAudioAllowed(2e3).then((allowed) => {
+            if (!allowed) {
+              console.warn("[audio] autoplay_audio=1, but this browser refused unmuted playback \u2014 keeping the tap screen (enable autoplay with sound in the kiosk browser)");
+              return;
+            }
+            if (!tapOverlay.parentNode) {
+              unlockAudio();
+              return;
+            }
+            console.log("[audio] autoplay_audio=1 and the browser allows sound \u2014 starting unmuted");
+            tapOverlay.onclick();
+          });
+        }, 0);
+      }
     }
   } else {
     startAutoContinue(5);

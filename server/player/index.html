@@ -2142,6 +2142,66 @@
       } catch (e) { /* harmless */ }
     }
 
+    /*
+     * #627 — `?autoplay_audio=1`: start with sound on a kiosk browser that allows it.
+     *
+     * Kiosk shells such as Fully Kiosk Browser ("Autoplay Audio") lift the WebView's user-gesture
+     * requirement for media, but the player cannot know that, so it showed the tap screen and then
+     * carried on MUTED — an unattended screen stayed silent after every reboot or power cut until
+     * someone walked up and tapped it. The operator opts in with this parameter in the kiosk's start
+     * URL; a normal browser opening /player behaves exactly as before.
+     *
+     * The parameter is a request, not a promise: autoplayAudioAllowed() asks the browser by actually
+     * starting a short silent clip UNMUTED. Only a resolved play() counts. Refused (the kiosk setting
+     * is off, or this is an ordinary browser) and the tap screen stays, exactly as without it.
+     */
+    function autoplayAudioRequested() {
+      try {
+        const v = new URLSearchParams(location.search).get('autoplay_audio');
+        return v === '1' || v === 'true';
+      } catch (e) { return false; }
+    }
+    function autoplayAudioAllowed(timeoutMs) {
+      return new Promise((resolve) => {
+        let settled = false;
+        let url = null;
+        let el = null;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          try { if (el) { el.pause(); el.removeAttribute('src'); el.load(); } } catch (e) {}
+          try { if (url) URL.revokeObjectURL(url); } catch (e) {}
+          resolve(!!ok);
+        };
+        try {
+          // Firefox can answer without playing anything. 'allowed-muted' is a refusal for this purpose.
+          if (navigator.getAutoplayPolicy) {
+            const policy = navigator.getAutoplayPolicy('mediaelement');
+            if (policy !== 'allowed') return finish(false);
+          }
+          // A tenth of a second of 8-bit silence, built here so the probe needs no file and no network.
+          const n = 800;
+          const buf = new ArrayBuffer(44 + n);
+          const dv = new DataView(buf);
+          const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+          str(0, 'RIFF'); dv.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt ');
+          dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+          dv.setUint32(24, 8000, true); dv.setUint32(28, 8000, true); dv.setUint16(32, 1, true);
+          dv.setUint16(34, 8, true); str(36, 'data'); dv.setUint32(40, n, true);
+          for (let i = 0; i < n; i++) dv.setUint8(44 + i, 128);
+          url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+          el = document.createElement('audio');
+          el.muted = false;
+          el.src = url;
+          const p = el.play();
+          if (!p || typeof p.then !== 'function') return finish(false);   // no promise: cannot tell, so no
+          p.then(() => finish(!el.muted), () => finish(false));
+          // A WebView that never settles the promise is a refusal, not a hang on the tap screen.
+          setTimeout(() => finish(false), timeoutMs || 2000);
+        } catch (e) { finish(false); }
+      });
+    }
+
     // Try to unmute and play the leader video. MUST be called synchronously
     // from inside a real user-gesture handler — any preceding await would
     // throw away the gesture's user-activation in stricter browsers (Firefox).
@@ -2489,6 +2549,36 @@
             connect(config.serverUrl);
           }
         }, 5000);
+
+        /*
+         * #627: ?autoplay_audio=1 — take the tap ourselves when the browser allows sound.
+         *
+         * ⚠️ DEFERRED, AND THAT IS LOAD-BEARING. This block runs during the initial script pass, and
+         * the tap handler reaches connect() and the socket/playback state behind it, much of which
+         * is `let` declared further down this script. Called synchronously from here it reads those
+         * bindings in their temporal dead zone: a ReferenceError, and the screen never connects
+         * (seen in the field on the first version of this). setTimeout(…, 0) runs it after the
+         * whole script has executed. test/web-player-autoplay-audio.test.js guards both the
+         * deferral and the behaviour in a real browser.
+         *
+         * Same path as a person tapping, so there is one way in. If the probe says no, nothing
+         * happens: the tap screen and its 5-second muted fallback carry on exactly as without the
+         * parameter.
+         */
+        if (autoplayAudioRequested()) {
+          setTimeout(() => {
+            autoplayAudioAllowed(2000).then((allowed) => {
+              if (!allowed) {
+                console.warn('[audio] autoplay_audio=1, but this browser refused unmuted playback — keeping the tap screen (enable autoplay with sound in the kiosk browser)');
+                return;
+              }
+              // Tapped, or the 5s muted fallback already connected: just let the sound through.
+              if (!tapOverlay.parentNode) { unlockAudio(); return; }
+              console.log('[audio] autoplay_audio=1 and the browser allows sound — starting unmuted');
+              tapOverlay.onclick();
+            });
+          }, 0);
+        }
       }
     } else {
       // Auto-Continue after 5s if not configured. If user interacts with form (typing in the box), stop the timer.
