@@ -2338,11 +2338,27 @@ module.exports = function setupDeviceSocket(io) {
        * every single restart, filling the dashboard with dead screens. That is the exact failure
        * this feature exists to prevent, so a key that does not resolve ends the connection.
        *
-       * Only consulted when the player has no device_id of its own: stored credentials always win,
-       * so a screen that DOES have storage is completely unaffected by the key being in its URL.
+       * #630 — AND WHEN THE PLAYER ALSO HAS A STORED IDENTITY. The player used to send the key
+       * only when it had no device_id, so a browser that keeps its storage ignored a NEW link: a
+       * UniFi Cast whose server had been rebuilt presented its dead stored id, re-paired, and became
+       * a new display while the one its link named stayed offline. The player now sends the key from
+       * its URL alongside a stored identity, and this decides:
+       *   - the key names the SAME display: nothing changes (the key's token is used, which also
+       *     heals a player holding a stale token for its own row);
+       *   - the key names a DIFFERENT display: the key wins. The link is the operator's latest
+       *     instruction and the key is a 256-bit credential for exactly that display, so this is no
+       *     more than the same player would get by clearing its storage first;
+       *   - the key names NOTHING: it is ignored and the stored identity decides, so a working
+       *     screen still holding an old link after a key roll keeps working.
        */
-      if (!device_id && data.enrol_key) {
-        const resolved = enrolKey.resolveEnrolKey(db, data.enrol_key);
+      const presentedKey = data.enrol_key;
+      const resolvedKey = presentedKey && device_id ? enrolKey.resolveEnrolKey(db, presentedKey) : null;
+      if (resolvedKey && resolvedKey.id !== device_id) {
+        console.log(`[enrol] ${resolvedKey.id} identified by enrolment key, replacing the player's stored identity ${String(device_id).slice(0, 36)}`);
+      }
+      if (resolvedKey) device_id = null;   // re-enter the exchange below with the key's identity
+      if (!device_id && presentedKey) {
+        const resolved = resolvedKey || enrolKey.resolveEnrolKey(db, presentedKey);
         /*
          * ⚠️ AN UNKNOWN KEY IS A STALE URL, NOT AN ATTACK — AND IT MUST NOT FEED THE PAIRING
          * LOCKOUT.
@@ -2398,7 +2414,7 @@ module.exports = function setupDeviceSocket(io) {
             db.prepare('UPDATE devices SET device_token = ? WHERE id = ?').run(device_token, resolved.id);
             console.log(`[enrol] ${resolved.id} had no device token — issued one`);
           }
-          console.log(`[enrol] ${resolved.id} identified by enrolment key`);
+          if (!resolvedKey) console.log(`[enrol] ${resolved.id} identified by enrolment key`);
         }
       }
 

@@ -288,6 +288,7 @@
       <p>Pairing Code</p>
       <div class="pairing-code" id="pairingCode">------</div>
       <p class="pairing-hint">Enter this code in the dashboard to pair this display</p>
+      <p class="pairing-hint" id="enrolKeyNotice" style="display:none;color:#fbbf24;max-width:40rem;margin:1.2rem auto 0"></p>
     </div>
     <div class="spinner" id="setupSpinner" style="display:none"></div>
     <div class="status-msg" id="setupStatus"></div>
@@ -400,7 +401,8 @@ const PLAYER_I18N = {
     info_na: "N/A",
     info_sw: "Service Worker",
     nothing_scheduled: "Nothing scheduled right now",
-    preview_webpage_blocked: "If this area is blank, the site blocks being embedded and won\u2019t display on the device either. Try a page that allows embedding."
+    preview_webpage_blocked: "If this area is blank, the site blocks being embedded and won\u2019t display on the device either. Try a page that allows embedding.",
+    enrol_key_refused: "This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display\u2019s current link from the dashboard."
   },
   es: {
     web_player: "Reproductor web",
@@ -778,6 +780,15 @@ function resumeAfterVegaHost() {
   }
   return false;
 }
+function showEnrolKeyRefused() {
+  try {
+    const el = document.getElementById("enrolKeyNotice");
+    if (!el) return;
+    el.textContent = _t("enrol_key_refused");
+    el.style.display = "block";
+  } catch (e) {
+  }
+}
 function getConfig() {
   let cfg = {};
   try {
@@ -805,12 +816,10 @@ function getConfig() {
       cfg.paired = true;
     }
   }
-  if (!cfg.deviceId) {
-    const k = urlEnrolKey();
-    if (k) {
-      cfg.enrolKey = k;
-      cfg.paired = true;
-    }
+  const k = urlEnrolKey();
+  if (k) {
+    cfg.enrolKey = k;
+    cfg.paired = true;
   }
   return cfg;
 }
@@ -1839,6 +1848,74 @@ function unlockAudioContext() {
   } catch (e) {
   }
 }
+function autoplayAudioRequested() {
+  try {
+    const v = new URLSearchParams(location.search).get("autoplay_audio");
+    return v === "1" || v === "true";
+  } catch (e) {
+    return false;
+  }
+}
+function autoplayAudioAllowed(timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let url = null;
+    let el = null;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      try {
+        if (el) {
+          el.pause();
+          el.removeAttribute("src");
+          el.load();
+        }
+      } catch (e) {
+      }
+      try {
+        if (url) URL.revokeObjectURL(url);
+      } catch (e) {
+      }
+      resolve(!!ok);
+    };
+    try {
+      if (navigator.getAutoplayPolicy) {
+        const policy = navigator.getAutoplayPolicy("mediaelement");
+        if (policy !== "allowed") return finish(false);
+      }
+      const n = 800;
+      const buf = new ArrayBuffer(44 + n);
+      const dv = new DataView(buf);
+      const str = (o, t) => {
+        for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i));
+      };
+      str(0, "RIFF");
+      dv.setUint32(4, 36 + n, true);
+      str(8, "WAVE");
+      str(12, "fmt ");
+      dv.setUint32(16, 16, true);
+      dv.setUint16(20, 1, true);
+      dv.setUint16(22, 1, true);
+      dv.setUint32(24, 8e3, true);
+      dv.setUint32(28, 8e3, true);
+      dv.setUint16(32, 1, true);
+      dv.setUint16(34, 8, true);
+      str(36, "data");
+      dv.setUint32(40, n, true);
+      for (let i = 0; i < n; i++) dv.setUint8(44 + i, 128);
+      url = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+      el = document.createElement("audio");
+      el.muted = false;
+      el.src = url;
+      const p = el.play();
+      if (!p || typeof p.then !== "function") return finish(false);
+      p.then(() => finish(!el.muted), () => finish(false));
+      setTimeout(() => finish(false), timeoutMs || 2e3);
+    } catch (e) {
+      finish(false);
+    }
+  });
+}
 function tryUnmuteLeader() {
   const video = document.querySelector("#playerContainer video");
   if (!video) return false;
@@ -2108,6 +2185,22 @@ if (VIEWER_MODE) {
           connect(config.serverUrl);
         }
       }, 5e3);
+      if (autoplayAudioRequested()) {
+        setTimeout(() => {
+          autoplayAudioAllowed(2e3).then((allowed) => {
+            if (!allowed) {
+              console.warn("[audio] autoplay_audio=1, but this browser refused unmuted playback \u2014 keeping the tap screen (enable autoplay with sound in the kiosk browser)");
+              return;
+            }
+            if (!tapOverlay.parentNode) {
+              unlockAudio();
+              return;
+            }
+            console.log("[audio] autoplay_audio=1 and the browser allows sound \u2014 starting unmuted");
+            tapOverlay.onclick();
+          });
+        }, 0);
+      }
     }
   } else {
     startAutoContinue(5);
@@ -2686,6 +2779,7 @@ function connect(serverUrl) {
       console.warn("[enrol] this player URL key is no longer valid \u2014 falling back to pairing");
       config.enrolKey = null;
       config.paired = false;
+      showEnrolKeyRefused();
     }
     console.warn("Device auth rejected:", (data == null ? void 0 : data.error) || "unknown");
     enterRepairMode("This device needs to be re-paired. Getting a new code\u2026");
@@ -3950,6 +4044,7 @@ function register() {
   data.fingerprint = generateBrowserFingerprint();
   data.hw_fingerprint = generateHardwareFingerprint();
   if (!data.device_id && config.enrolKey) data.enrol_key = config.enrolKey;
+  else if (data.device_id && config.enrolKey && config.enrolKey === urlEnrolKey()) data.enrol_key = config.enrolKey;
   console.log("[register] device_id=".concat(data.device_id || "none", ", has_token=").concat(!!data.device_token, ", token_len=").concat(((_a = data.device_token) == null ? void 0 : _a.length) || 0, ", paired=").concat(config.paired, ", pairing_code=").concat(data.pairing_code || "none", ", enrol_key=").concat(data.enrol_key ? "yes" : "no"));
   socket.emit("device:register", data);
 }
@@ -4624,7 +4719,9 @@ function handlePlaylistUpdate(data) {
       if (newItem && newItem.widget_id && oldItem && (oldItem.widget_rev || 0) !== (newItem.widget_rev || 0)) {
         console.log("Widget edited - re-rendering in place");
         renderContent(newItem);
+        return;
       }
+      if (oldPlaylist.length <= 1 && playlist.length > 1) releaseSingleItemHold(newItem);
       return;
     }
   }
@@ -5203,6 +5300,33 @@ function reevaluateHeldWidget() {
     return;
   }
   nextItem();
+}
+function releaseSingleItemHold(item) {
+  try {
+    if (!item || isWallFollower() || groupSync) return;
+    if (typeof kioskHeld !== "undefined" && kioskHeld) return;
+    if (layout && layout.zones && layout.zones.length > 1 && !wallConfig) return;
+    const v = currentVideoEl;
+    if (v && v.loop && document.contains(v)) {
+      v.loop = false;
+      console.log("[playlist] items added to a one-item playlist \u2014 the looping clip ends this pass, then rotates");
+      return;
+    }
+    if (item.mime_type === "video/youtube" && activeYtPlayer) {
+      let remaining = 0;
+      try {
+        remaining = activeYtPlayer.getDuration() - activeYtPlayer.getCurrentTime();
+      } catch (e) {
+        remaining = 0;
+      }
+      const ms = remaining > 0 ? (remaining + 0.5) * 1e3 : Math.max(1, Number(item.duration_sec) || 10) * 1e3;
+      scheduleAdvance(nextItem, ms);
+      console.log("[playlist] items added to a one-item playlist \u2014 the looping YouTube item rotates in " + Math.round(ms / 1e3) + "s");
+      return;
+    }
+    if (item.widget_id) scheduleAdvance(nextItem, Math.max(1, Number(item.duration_sec) || 30) * 1e3);
+  } catch (e) {
+  }
 }
 function imgSrcFor(it) {
   return mediaUrl(it);

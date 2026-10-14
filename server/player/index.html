@@ -288,6 +288,7 @@
       <p>Pairing Code</p>
       <div class="pairing-code" id="pairingCode">------</div>
       <p class="pairing-hint">Enter this code in the dashboard to pair this display</p>
+      <p class="pairing-hint" id="enrolKeyNotice" style="display:none;color:#fbbf24;max-width:40rem;margin:1.2rem auto 0"></p>
     </div>
     <div class="spinner" id="setupSpinner" style="display:none"></div>
     <div class="status-msg" id="setupStatus"></div>
@@ -369,6 +370,7 @@
         info_sw: 'Service Worker',
         nothing_scheduled: 'Nothing scheduled right now',
         preview_webpage_blocked: 'If this area is blank, the site blocks being embedded and won’t display on the device either. Try a page that allows embedding.',
+        enrol_key_refused: 'This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display’s current link from the dashboard.',
       },
       es: {
         web_player: 'Reproductor web', server_url: 'URL del servidor', server_url_placeholder: 'https://signage.tudominio.com', connect: 'Conectar', pairing_code: 'Código de vinculación', pairing_hint: 'Ingresa este código en el panel para vincular esta pantalla', connecting: 'Conectando...', connecting_muted: 'Conectando (audio silenciado)...', info_title: 'Reproductor web ScreenTinker', info_close_hint: 'Presiona Atrás de nuevo o haz clic para cerrar', info_device_id: 'ID del dispositivo', info_device_name: 'Nombre del dispositivo', info_server: 'Servidor', info_status: 'Estado', info_now_playing: 'Reproduciendo', info_resolution: 'Resolución', info_uptime: 'Tiempo activo', info_platform: 'Plataforma', info_cache: 'Caché', info_connected: 'Conectado', info_disconnected: 'Desconectado', info_active: 'Activo', info_inactive: 'Inactivo', info_nothing: 'Nada', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'No hay nada programado en este momento', preview_webpage_blocked: 'Si esta área está en blanco, el sitio bloquea la inserción y tampoco se mostrará en el dispositivo. Prueba con una página que permita la inserción.',
@@ -682,6 +684,16 @@
       return false;
     }
 
+    // #630: shown under the pairing code when the server refused this page's ?k= key.
+    function showEnrolKeyRefused() {
+      try {
+        const el = document.getElementById('enrolKeyNotice');
+        if (!el) return;
+        el.textContent = _t('enrol_key_refused');
+        el.style.display = 'block';
+      } catch (e) { /* a missing notice must never block re-pairing */ }
+    }
+
     function getConfig() {
       let cfg = {};
       try { cfg = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch { cfg = {}; }
@@ -714,15 +726,23 @@
         }
       }
       /*
-       * ⚠️ STORED CREDENTIALS ALWAYS WIN. The key is only carried when this player has no deviceId
-       * of its own, so a screen whose storage IS working is completely unaffected by a key sitting
-       * in its URL — it keeps using the identity it already has, and the server never sees the key.
-       * That also means a working display cannot be quietly re-pointed by editing its URL.
+       * #630 — THE KEY IN THE URL IS CARRIED EVEN WHEN STORAGE HAS AN IDENTITY.
+       *
+       * It used to be carried only when there was no stored deviceId ("stored credentials always
+       * win"). That broke the other half of the feature: a browser that KEEPS its storage and is
+       * then given a NEW link. A UniFi Cast that had been a display on a server that was rebuilt
+       * from scratch opened its freshly made link, presented the dead id from its storage, was
+       * told "not found", re-paired — and showed a pairing code, becoming a new display, while the
+       * display the link was made for stayed offline. Only a browser with clean storage worked.
+       *
+       * Now the URL's key is always carried and the SERVER decides (ws/deviceSocket.js): a key that
+       * names this same display changes nothing, a key that names another display wins (the link is
+       * the operator's latest instruction), and a key it does not know is ignored in favour of the
+       * stored identity. A stored key from an OLD url is not sent alongside a stored id — see the
+       * register emitter.
        */
-      if (!cfg.deviceId) {
-        const k = urlEnrolKey();
-        if (k) { cfg.enrolKey = k; cfg.paired = true; }   // paired: we know who we are, so skip the code screen
-      }
+      const k = urlEnrolKey();
+      if (k) { cfg.enrolKey = k; cfg.paired = true; }   // paired: we know who we are, so skip the code screen
       return cfg;
     }
     function saveConfig(cfg) {
@@ -2122,6 +2142,66 @@
       } catch (e) { /* harmless */ }
     }
 
+    /*
+     * #627 — `?autoplay_audio=1`: start with sound on a kiosk browser that allows it.
+     *
+     * Kiosk shells such as Fully Kiosk Browser ("Autoplay Audio") lift the WebView's user-gesture
+     * requirement for media, but the player cannot know that, so it showed the tap screen and then
+     * carried on MUTED — an unattended screen stayed silent after every reboot or power cut until
+     * someone walked up and tapped it. The operator opts in with this parameter in the kiosk's start
+     * URL; a normal browser opening /player behaves exactly as before.
+     *
+     * The parameter is a request, not a promise: autoplayAudioAllowed() asks the browser by actually
+     * starting a short silent clip UNMUTED. Only a resolved play() counts. Refused (the kiosk setting
+     * is off, or this is an ordinary browser) and the tap screen stays, exactly as without it.
+     */
+    function autoplayAudioRequested() {
+      try {
+        const v = new URLSearchParams(location.search).get('autoplay_audio');
+        return v === '1' || v === 'true';
+      } catch (e) { return false; }
+    }
+    function autoplayAudioAllowed(timeoutMs) {
+      return new Promise((resolve) => {
+        let settled = false;
+        let url = null;
+        let el = null;
+        const finish = (ok) => {
+          if (settled) return;
+          settled = true;
+          try { if (el) { el.pause(); el.removeAttribute('src'); el.load(); } } catch (e) {}
+          try { if (url) URL.revokeObjectURL(url); } catch (e) {}
+          resolve(!!ok);
+        };
+        try {
+          // Firefox can answer without playing anything. 'allowed-muted' is a refusal for this purpose.
+          if (navigator.getAutoplayPolicy) {
+            const policy = navigator.getAutoplayPolicy('mediaelement');
+            if (policy !== 'allowed') return finish(false);
+          }
+          // A tenth of a second of 8-bit silence, built here so the probe needs no file and no network.
+          const n = 800;
+          const buf = new ArrayBuffer(44 + n);
+          const dv = new DataView(buf);
+          const str = (o, t) => { for (let i = 0; i < t.length; i++) dv.setUint8(o + i, t.charCodeAt(i)); };
+          str(0, 'RIFF'); dv.setUint32(4, 36 + n, true); str(8, 'WAVE'); str(12, 'fmt ');
+          dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+          dv.setUint32(24, 8000, true); dv.setUint32(28, 8000, true); dv.setUint16(32, 1, true);
+          dv.setUint16(34, 8, true); str(36, 'data'); dv.setUint32(40, n, true);
+          for (let i = 0; i < n; i++) dv.setUint8(44 + i, 128);
+          url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+          el = document.createElement('audio');
+          el.muted = false;
+          el.src = url;
+          const p = el.play();
+          if (!p || typeof p.then !== 'function') return finish(false);   // no promise: cannot tell, so no
+          p.then(() => finish(!el.muted), () => finish(false));
+          // A WebView that never settles the promise is a refusal, not a hang on the tap screen.
+          setTimeout(() => finish(false), timeoutMs || 2000);
+        } catch (e) { finish(false); }
+      });
+    }
+
     // Try to unmute and play the leader video. MUST be called synchronously
     // from inside a real user-gesture handler — any preceding await would
     // throw away the gesture's user-activation in stricter browsers (Firefox).
@@ -2469,6 +2549,36 @@
             connect(config.serverUrl);
           }
         }, 5000);
+
+        /*
+         * #627: ?autoplay_audio=1 — take the tap ourselves when the browser allows sound.
+         *
+         * ⚠️ DEFERRED, AND THAT IS LOAD-BEARING. This block runs during the initial script pass, and
+         * the tap handler reaches connect() and the socket/playback state behind it, much of which
+         * is `let` declared further down this script. Called synchronously from here it reads those
+         * bindings in their temporal dead zone: a ReferenceError, and the screen never connects
+         * (seen in the field on the first version of this). setTimeout(…, 0) runs it after the
+         * whole script has executed. test/web-player-autoplay-audio.test.js guards both the
+         * deferral and the behaviour in a real browser.
+         *
+         * Same path as a person tapping, so there is one way in. If the probe says no, nothing
+         * happens: the tap screen and its 5-second muted fallback carry on exactly as without the
+         * parameter.
+         */
+        if (autoplayAudioRequested()) {
+          setTimeout(() => {
+            autoplayAudioAllowed(2000).then((allowed) => {
+              if (!allowed) {
+                console.warn('[audio] autoplay_audio=1, but this browser refused unmuted playback — keeping the tap screen (enable autoplay with sound in the kiosk browser)');
+                return;
+              }
+              // Tapped, or the 5s muted fallback already connected: just let the sound through.
+              if (!tapOverlay.parentNode) { unlockAudio(); return; }
+              console.log('[audio] autoplay_audio=1 and the browser allows sound — starting unmuted');
+              tapOverlay.onclick();
+            });
+          }, 0);
+        }
       }
     } else {
       // Auto-Continue after 5s if not configured. If user interacts with form (typing in the box), stop the timer.
@@ -3219,6 +3329,9 @@
           console.warn('[enrol] this player URL key is no longer valid — falling back to pairing');
           config.enrolKey = null;
           config.paired = false;
+          // #630: say WHY a screen opened from a display link is asking for a code. Without it the
+          // operator sees an ordinary pairing screen and reasonably assumes the link never applied.
+          showEnrolKeyRefused();
         }
 
         console.warn('Device auth rejected:', data?.error || 'unknown');
@@ -4887,6 +5000,9 @@
        * it, because getConfig() only carries it when there is no stored identity to prefer.
        */
       if (!data.device_id && config.enrolKey) data.enrol_key = config.enrolKey;
+      // #630: with a stored identity, only the key in THIS page's URL goes along (never one left in
+      // storage by an older URL), and not after the server has said it does not know it.
+      else if (data.device_id && config.enrolKey && config.enrolKey === urlEnrolKey()) data.enrol_key = config.enrolKey;
       console.log(`[register] device_id=${data.device_id || 'none'}, has_token=${!!data.device_token}, token_len=${data.device_token?.length || 0}, paired=${config.paired}, pairing_code=${data.pairing_code || 'none'}, enrol_key=${data.enrol_key ? 'yes' : 'no'}`);
       socket.emit('device:register', data);
     }
@@ -5768,7 +5884,12 @@
           if (newItem && newItem.widget_id && oldItem && (oldItem.widget_rev || 0) !== (newItem.widget_rev || 0)) {
             console.log('Widget edited - re-rendering in place');
             renderContent(newItem);
+            return;
           }
+          // #632: a one-item playlist that just gained items. The item on screen was rendered to
+          // HOLD (a video loops, a YouTube embed loops), so "advance naturally" never comes — the
+          // added item never played, for an hour in the report, until the browser was restarted.
+          if (oldPlaylist.length <= 1 && playlist.length > 1) releaseSingleItemHold(newItem);
           return;
         }
       }
@@ -6486,6 +6607,51 @@
         return;
       }
       nextItem();
+    }
+
+    /*
+     * #632 — A ONE-ITEM PLAYLIST HOLDS ITS ITEM, AND NOTHING USED TO LET GO WHEN ITEMS WERE ADDED.
+     *
+     * Single-item rendering never advances, deliberately: a video gets `loop = (playlist.length ===
+     * 1)` and so never fires `ended`, and a YouTube embed loops inside the IFrame player with its
+     * ENDED handler disabled. That decision is made ONCE, at render time. When the playlist then
+     * grows, the continuity branch of handlePlaylistUpdate keeps the surviving item playing and
+     * waits for its natural advance — which, for a held item, never comes. The report: an item
+     * added to the playlist, an hour later still not shown, a browser restart fixed it (because
+     * the restart rendered the clip with the NEW length and so without loop).
+     *
+     * Let go in place rather than restarting: the clip finishes its current pass and the playlist
+     * rotates on, exactly as if it had been rendered into a multi-item playlist. Same "never yank
+     * a live item mid-play" rule as #157.
+     *   - <video> (solo, or a wall leader): drop `loop`. Its onended was wired with the right
+     *     mayAdvance for its role, so it calls nextItem() at the end of this pass.
+     *   - YouTube: its loop is baked into the embed, so arm the advance for the end of this pass.
+     *   - A held widget re-checks every WIDGET_SOLO_REFRESH_MS and hands off on its own; arming its
+     *     ordinary dwell instead makes the new item show after the usual duration, not up to 60s.
+     *   - Images arm their dwell on every render already, and schedule-driven members (a wall
+     *     follower, a synced group) and zone layouts advance through their own clocks.
+     */
+    function releaseSingleItemHold(item) {
+      try {
+        if (!item || isWallFollower() || groupSync) return;
+        if (typeof kioskHeld !== 'undefined' && kioskHeld) return;   // kioskRelease() advances
+        if (layout && layout.zones && layout.zones.length > 1 && !wallConfig) return;
+        const v = currentVideoEl;
+        if (v && v.loop && document.contains(v)) {
+          v.loop = false;
+          console.log('[playlist] items added to a one-item playlist — the looping clip ends this pass, then rotates');
+          return;
+        }
+        if (item.mime_type === 'video/youtube' && activeYtPlayer) {
+          let remaining = 0;
+          try { remaining = activeYtPlayer.getDuration() - activeYtPlayer.getCurrentTime(); } catch (e) { remaining = 0; }
+          const ms = remaining > 0 ? (remaining + 0.5) * 1000 : Math.max(1, Number(item.duration_sec) || 10) * 1000;
+          scheduleAdvance(nextItem, ms);
+          console.log('[playlist] items added to a one-item playlist — the looping YouTube item rotates in ' + Math.round(ms / 1000) + 's');
+          return;
+        }
+        if (item.widget_id) scheduleAdvance(nextItem, Math.max(1, Number(item.duration_sec) || 30) * 1000);
+      } catch (e) { /* never let this break a playlist update; the held widget's own re-check still runs */ }
     }
 
     // feat/player-image-preload: warm the NEXT scheduled image (decoded) during the current dwell,
