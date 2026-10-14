@@ -1942,6 +1942,9 @@ app.use('/api/widgets/preview-session', rateLimit(60000, 30)); // preview sessio
 // workspace cannot fan out unbounded requests to third-party URLs.
 app.use('/api/data-sources/test', rateLimit(60000, 10));
 app.use('/api/cap-feeds/test', rateLimit(60000, 10));   // fetches an arbitrary public URL, like the data-source test
+// Free stock search/import (routes/stock-media.js): every miss spends the instance's provider quota.
+// Per IP here; lib/stock-media.js also limits per person and per workspace.
+app.use('/api/stock', rateLimit(60000, 90));
 app.post('/api/plugin-submissions', rateLimit(3600000, 10)); // 10 plugin zips per hour per IP
 app.post('/api/admin/plugins/submissions', rateLimit(3600000, 20));
 app.get('/api/kiosk/:id/render', (req, res, next) => { req._skipAuth = true; next(); });

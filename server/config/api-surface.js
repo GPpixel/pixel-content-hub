@@ -125,6 +125,11 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/m365', mod: './routes/m365', tenancy: true },
   /*
+   * Free stock photos and videos (lib/stock-media.js). JWT only: the provider keys and their quota
+   * are the operator's, and the pickers that use this are dashboard pages, not integrations.
+   */
+  { path: '/api/stock', mod: './routes/stock-media', tenancy: true },
+  /*
    * BI connections (lib/bi/connections.js): an organization's Grafana / Power BI / Tableau
    * credentials. JWT only for the same reason as alert channels — they reach into someone else's
    * systems. The dashboard widget's public endpoints are on /api/widgets.

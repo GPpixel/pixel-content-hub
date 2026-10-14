@@ -3,6 +3,7 @@ import { api, browserTimezone } from '../api.js';
 import { t } from '../i18n.js';
 import { esc, isTouchFirst } from '../utils.js';
 import { publishOrSubmit } from '../components/release.js';
+import { mountStockPicker } from '../components/stock-picker.js';
 
 // 3.0: the sample a first-run user can show instead of hunting for a file (brand-neutral on purpose).
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
@@ -129,6 +130,8 @@ function getSteps(addMode = false) {
           <span style="color:var(--text-muted);font-size:12px;margin-right:8px">${t('onboarding.step.upload.or')}</span>
           <button type="button" class="btn btn-secondary btn-sm" id="onboardUseSample">${t('onboarding.step.upload.use_sample')}</button>
         </div>
+        <!-- 3.0 free stock photos (components/stock-picker.js); hidden when the server has no key. -->
+        <div id="onboardStock" class="onboard-stock" hidden></div>
         <!-- 3.0 Add screen: a second screen usually shows what the first one does. Filled in by
              populateSameAs() from the workspace's playlists; hidden when there are none. -->
         <div id="onboardSameAsBlock" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
@@ -349,6 +352,8 @@ export function render(container, { mode = 'first' } = {}) {
       area?.addEventListener('dragleave', () => { area.style.borderColor = ''; });
       area?.addEventListener('drop', (e) => { e.preventDefault(); area.style.borderColor = ''; uploadFiles([...(e.dataTransfer?.files || [])]); });
       document.getElementById('onboardUseSample')?.addEventListener('click', useSample);
+      // Free stock photos land in the library like an upload; then the same assign-and-publish.
+      mountStockPicker(document.getElementById('onboardStock'), { collapsed: true, onAdded: (rows) => placeItems(rows) });
       populateSameAs();
     }
 
@@ -587,8 +592,23 @@ export function render(container, { mode = 'first' } = {}) {
     } catch (err) {
       return fail(err.message || t('onboarding.toast.upload_failed'));
     }
-    const items = Array.isArray(uploaded) ? uploaded : [uploaded];
     if (bar) bar.style.width = '100%';
+    return placeItems(Array.isArray(uploaded) ? uploaded : [uploaded]);
+  }
+
+  /*
+   * Put library items (just uploaded, or just added from free stock photos) on the screen in the
+   * order given, and publish ONCE at the end, so the screen restarts once, not per photo.
+   */
+  async function placeItems(items) {
+    const progress = document.getElementById('onboardUploadProgress');
+    const text = document.getElementById('onboardUploadText');
+    const area = document.getElementById('onboardUploadArea');
+    if (progress) progress.style.display = 'block';
+    const fail = (msg) => {
+      if (text) text.textContent = msg;
+      if (area) area.style.pointerEvents = '';
+    };
     if (text) text.textContent = t('onboarding.toast.uploaded_assigning');
 
     if (pairedDeviceId) {

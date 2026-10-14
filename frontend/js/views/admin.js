@@ -179,8 +179,9 @@ ${section(t('admin.orgs.title'), t('admin.orgs.desc'), `
       <div id="diagBody"><p style="color:var(--text-muted)">${t('common.loading')}</p></div>
     </div>
       ${section(esc(t('platform.system.status_endpoint')), '', `<div id="statusDebugForm">${loading()}</div>`)}
+      <div id="stockKeysSection">${section(esc(t('stock.admin.title')), esc(t('stock.admin.desc')), `<div id="stockKeysForm">${loading()}</div>`)}</div>
       ${section(esc(t('platform.system.player_debug')), esc(t('platform.system.player_debug_desc')), `<a class="btn btn-secondary" href="#/admin/player-debug">${esc(t('platform.system.player_debug_open'))} &rarr;</a>`)}`,
-    load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); },
+    load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); loadStockKeys(); },
   },
   cleanup: {
     tab: 'platform.tab.cleanup', title: 'platform.cleanup.title', subtitle: 'platform.cleanup.subtitle',
@@ -776,6 +777,69 @@ async function loadStatusDebug() {
     catch (err) { showToast(err.message, 'error'); chk.checked = !chk.checked; }
     finally { chk.disabled = false; }
   };
+}
+
+/*
+ * 3.0 free stock photos (server/routes/stock-media.js): the instance's Pexels / Pixabay keys. A key
+ * is never sent back, only whether one is set and where from; one set in the environment is shown
+ * as such and cannot be changed here. Platform admins only (the server enforces it): for anyone
+ * else the section is removed rather than shown broken.
+ */
+const STOCK_KEY_PAGES = { pexels: 'https://www.pexels.com/api/', pixabay: 'https://pixabay.com/api/docs/' };
+async function loadStockKeys() {
+  const el = document.getElementById('stockKeysForm');
+  if (!el) return;
+  let data;
+  try { data = await api.adminGetStockKeys(); }
+  catch (e) {
+    if (e.status === 403) { document.getElementById('stockKeysSection')?.remove(); return; }
+    el.innerHTML = `<p style="color:var(--danger)">${esc(e.message || 'Failed to load')}</p>`;
+    return;
+  }
+  const stateText = (p) => p.source === 'env' ? t('stock.admin.from_env', { env: p.env })
+    : p.source === 'settings' ? t('stock.admin.saved') : t('stock.admin.not_set');
+  el.innerHTML = (data.providers || []).map((p) => `
+    <div class="stock-admin-row" data-stock-provider="${esc(p.id)}">
+      <div class="stock-admin-head">
+        <strong>${esc(p.name)}</strong>
+        <span class="stock-admin-state ${p.configured ? 'on' : ''}">${esc(stateText(p))}</span>
+        <a href="${esc(STOCK_KEY_PAGES[p.id] || '#')}" target="_blank" rel="noopener noreferrer">${esc(t('stock.admin.get_key'))}</a>
+      </div>
+      ${p.env_locked ? '' : `<form class="stock-admin-form" data-stock-form>
+        <label class="lib-visually-hidden" for="stockKey-${esc(p.id)}">${esc(t('stock.admin.key_label', { provider: p.name }))}</label>
+        <input id="stockKey-${esc(p.id)}" class="input" type="password" autocomplete="off" spellcheck="false" maxlength="200"
+          placeholder="${esc(t(p.configured ? 'stock.admin.key_ph_replace' : 'stock.admin.key_ph'))}">
+        <button type="submit" class="btn btn-primary btn-sm">${esc(t('common.save'))}</button>
+        ${p.configured ? `<button type="button" class="btn btn-secondary btn-sm" data-stock-remove>${esc(t('stock.admin.remove'))}</button>` : ''}
+      </form>`}
+      ${p.configured ? `<button type="button" class="btn btn-secondary btn-sm" data-stock-test>${esc(t('stock.admin.test'))}</button>` : ''}
+      <span class="stock-admin-result" data-stock-result role="status"></span>
+    </div>`).join('') + `<p style="color:var(--text-muted);font-size:12px;margin-top:8px">${esc(t('stock.admin.note'))}</p>`;
+  el.querySelectorAll('[data-stock-provider]').forEach((row) => {
+    const id = row.dataset.stockProvider;
+    const result = row.querySelector('[data-stock-result]');
+    row.querySelector('[data-stock-form]')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = row.querySelector('input');
+      const key = input.value.trim();
+      if (!key) return;
+      try { await api.adminSetStockKey(id, key); input.value = ''; showToast(t('stock.admin.saved_toast'), 'success'); loadStockKeys(); }
+      catch (err) { result.textContent = err.message; }
+    });
+    row.querySelector('[data-stock-remove]')?.addEventListener('click', async () => {
+      try { await api.adminSetStockKey(id, ''); loadStockKeys(); }
+      catch (err) { result.textContent = err.message; }
+    });
+    row.querySelector('[data-stock-test]')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      result.textContent = t('stock.admin.testing');
+      try {
+        const r = await api.adminTestStockKey(id);
+        result.textContent = r.ok ? t('stock.admin.test_ok') : (r.error || t('stock.admin.test_failed'));
+      } catch (err) { result.textContent = err.message; }
+      finally { e.target.disabled = false; }
+    });
+  });
 }
 
 async function loadPlans() {
