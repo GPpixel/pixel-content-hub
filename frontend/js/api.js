@@ -796,6 +796,8 @@ export const api = {
   submitForReview: (resource_type, resource_id, note) => request('/approvals/submit', { method: 'POST', body: JSON.stringify({ resource_type, resource_id, note }) }),
   // 3.0 Make a sign (routes/signs.js) and the workspace brand kit (routes/brand-kit.js).
   getSignTemplates: () => request('/signs/templates'),
+  // Community templates a platform admin has installed from a catalog (views/templates.js).
+  getInstalledTemplates: () => request('/templates/installed'),
   previewSigns: (body) => request('/signs/preview', { method: 'POST', body: JSON.stringify(body ?? {}) }),
   createSign: (body) => request('/signs', { method: 'POST', body: JSON.stringify(body ?? {}) }),
   getBrandKit: () => request('/brand-kit'),

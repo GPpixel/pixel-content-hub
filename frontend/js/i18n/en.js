@@ -6698,4 +6698,10 @@ export default {
   'simple.req.make_link': 'Make the link',
   'simple.req.new_done': 'Your link is ready',
   'simple.req.new_done_body': 'Share it with the people who should be able to send you things. You approve everything before it shows.',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'Community templates',
+  'signs.community_none': 'No community templates fit this shape yet.',
+  'signs.community_browse': 'Browse community templates',
+  'templates.builtin_note': 'Built-in designs are always available, offline:',
+  'signs.done.edit_later_widget': 'It is saved under Widgets, where you can change it later.',
 };

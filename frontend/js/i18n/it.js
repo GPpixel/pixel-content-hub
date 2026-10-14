@@ -2704,4 +2704,10 @@ export default {
   'simple.req.make_link': 'Crea il link',
   'simple.req.new_done': 'Il tuo link è pronto',
   'simple.req.new_done_body': 'Condividilo con chi deve poterti inviare contenuti. Approvi tutto prima che venga mostrato.',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'Modelli della community',
+  'signs.community_none': 'Nessun modello della community adatto a questo formato.',
+  'signs.community_browse': 'Sfoglia i modelli della community',
+  'templates.builtin_note': 'I design integrati sono sempre disponibili, anche offline:',
+  'signs.done.edit_later_widget': 'È salvato in Widget, dove potrai modificarlo in seguito.',
 };

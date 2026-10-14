@@ -20,7 +20,8 @@
  */
 import { api } from '../api.js';
 import { t, tn } from '../i18n.js';
-import { esc } from '../utils.js';
+import { esc, isPlatformAdmin } from '../utils.js';
+import { openUseModal } from './templates.js';
 import { shell, guideFrame, showOnScreen, simpleCanChange } from './simple-home.js';
 import { mountBrandKit } from '../components/brand-kit-editor.js';
 
@@ -197,11 +198,15 @@ export async function renderSign(container, { simple = false, device: presetId =
   let cat = null;
   let devices = [];
   let playlists = [];
+  let installed = [];
   try {
-    [cat, devices, playlists] = await Promise.all([
+    [cat, devices, playlists, installed] = await Promise.all([
       api.getSignTemplates(),
       api.getDevices().catch(() => []),
       api.getPlaylists().catch(() => []),
+      // Community templates installed from a catalog: offered next to the built-in designs. A
+      // server with none (the catalog is off by default) simply shows the built-in ones.
+      api.getInstalledTemplates().then((r) => (r && r.templates) || []).catch(() => []),
     ]);
   } catch (err) {
     if (run !== alive) return;
@@ -221,6 +226,13 @@ export async function renderSign(container, { simple = false, device: presetId =
 
   let aspect = '16:9';
   let tplId = null;
+  let communityWidget = null;  // a community template, already created by its own dialog
+  const community = (installed || []).filter((x) => x && x.usable && (!x.status || x.status === 'active'));
+  const fitsAspect = (x) => !Array.isArray(x.orientation) || !x.orientation.length
+    || x.orientation.includes(aspect === '9:16' ? 'portrait' : 'landscape');
+  let me = null;
+  try { me = JSON.parse(localStorage.getItem('user') || 'null'); } catch { me = null; }
+  const canInstall = isPlatformAdmin(me);
   const values = {};       // per template, once touched
   const gallery = {};      // aspect -> { id: html }
 
@@ -260,13 +272,44 @@ export async function renderSign(container, { simple = false, device: presetId =
               <span class="sign-card-name">${esc(tplName(tp))}</span>
             </button>`).join('')}
         </div>
-        ${brandNote()}` }));
+        ${brandNote()}
+        ${communityHtml()}` }));
     wireAspect(pickStep);
     container.querySelectorAll('[data-tpl]').forEach((b) => b.addEventListener('click', () => {
       tplId = b.dataset.tpl;
+      communityWidget = null;
       fillStep();
     }));
+    container.querySelectorAll('[data-community]').forEach((b) => b.addEventListener('click', () => {
+      const tpl = community.find((x) => x.key === b.dataset.community);
+      if (!tpl) return;
+      // The template's own fill-in dialog (its parameters, its preview); then the same screens step.
+      openUseModal({ tpl, onCreated: (w) => {
+        if (run !== alive) return;
+        communityWidget = w;
+        if (withScreens) screensStep();
+        else make(preset ? [preset.id] : [], 'add', container.querySelector('[data-status]') || document.createElement('p'));
+      } });
+    }));
+    container.querySelectorAll('img[data-community-thumb]').forEach((img) => img.addEventListener('error', () => { img.replaceWith(document.createTextNode('\u{1F5BC}\uFE0F')); }));
     loadGallery();
+  }
+
+  /** Installed community templates (and, for a platform admin, where to get more). */
+  function communityHtml() {
+    const list = community.filter(fitsAspect);
+    if (!list.length && !canInstall) return '';
+    const thumb = (x) => (typeof x.thumbnail === 'string' && /^\/api\/templates\/thumb\/[0-9a-f]{64}$/.test(x.thumbnail))
+      ? `<img data-community-thumb src="${esc(x.thumbnail)}" alt="" loading="lazy">` : '&#128444;&#65039;';
+    return `
+      <h3 class="sign-section-title">${esc(t('signs.community_title'))}</h3>
+      ${list.length ? `<div class="sign-grid sign-grid--community">${list.map((x) => `
+        <button type="button" class="sign-card" data-community="${esc(x.key)}">
+          <span class="sign-community-thumb">${thumb(x)}</span>
+          <span class="sign-card-name">${esc(x.name || x.id)}</span>
+        </button>`).join('')}</div>` : `<p class="simple-muted">${esc(t('signs.community_none'))}</p>`}
+      ${canInstall ? `<p class="simple-muted"><a href="#/templates">${esc(t('signs.community_browse'))} &rarr;</a></p>` : ''}
+      <p class="simple-status" data-status role="status"></p>`;
   }
 
   async function loadGallery() {
@@ -404,7 +447,7 @@ export async function renderSign(container, { simple = false, device: presetId =
         </div>
         <p class="simple-muted">${esc(t('signs.where_hint'))}</p>
         <p class="simple-status" data-status role="status"></p>` }));
-    wireBack(fillStep);
+    wireBack(communityWidget ? pickStep : fillStep);
     container.querySelectorAll('input[name="signHow"]').forEach((r) => r.addEventListener('change', () => { how = r.value; }));
     container.querySelector('[data-guide-next]').addEventListener('click', () => {
       const ids = [...container.querySelectorAll('.simple-checks input:checked')].map((i) => i.value);
@@ -420,7 +463,10 @@ export async function renderSign(container, { simple = false, device: presetId =
     status.textContent = t('simple.working');
     let sign;
     try {
-      sign = await api.createSign({ template: tp.id, aspect, values: payload(tp) });
+      sign = communityWidget
+        // Already created by the template's own dialog; it plays for the playlist's usual time.
+        ? { widget_id: communityWidget.id, dwell_sec: 15, name: communityWidget.name }
+        : await api.createSign({ template: tp.id, aspect, values: payload(tp) });
     } catch (err) {
       buttons.forEach((b) => { b.disabled = false; });
       const first = err && err.body && Array.isArray(err.body.errors) ? err.body.errors[0] : null;
@@ -467,7 +513,7 @@ export async function renderSign(container, { simple = false, device: presetId =
     const hint = saved ? (devices.length ? '' : t('signs.done.no_screens')) : t(review ? 'simple.done.review_hint' : 'simple.done.seconds');
     paint(guideFrame({ step: total - 1, total, icon: saved ? '&#9989;' : review ? '&#9203;' : '&#127881;', title, back: false, cancelHref: home,
       body: `<p class="simple-lead">${esc(lead)}</p>${hint ? `<p class="simple-muted">${esc(hint)}</p>` : ''}
-        <p class="simple-muted">${esc(t('signs.done.edit_later'))}</p>
+        <p class="simple-muted">${esc(t(communityWidget ? 'signs.done.edit_later_widget' : 'signs.done.edit_later'))}</p>
         <div class="simple-done-actions">
           <a class="btn btn-primary" href="${esc(fromGuide || fromSlides ? (fromSlides ? '#/slides' : '#/') : home)}">${esc(fromGuide ? t('onboarding.go_to_dashboard') : fromSlides ? t('signs.done.back_slides') : t('simple.done.home'))}</a>
           <a class="btn btn-secondary" href="${esc(again)}">${esc(t('signs.done.another'))}</a>

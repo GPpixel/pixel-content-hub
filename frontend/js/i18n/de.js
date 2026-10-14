@@ -2829,4 +2829,10 @@ export default {
   'simple.req.make_link': 'Link erstellen',
   'simple.req.new_done': 'Ihr Link ist bereit',
   'simple.req.new_done_body': 'Teilen Sie ihn mit den Personen, die Ihnen etwas schicken dürfen. Sie geben alles frei, bevor es erscheint.',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'Community-Vorlagen',
+  'signs.community_none': 'Noch keine Community-Vorlage passt zu diesem Format.',
+  'signs.community_browse': 'Community-Vorlagen durchsuchen',
+  'templates.builtin_note': 'Die integrierten Designs sind immer verfügbar, auch offline:',
+  'signs.done.edit_later_widget': 'Es ist unter Widgets gespeichert, wo Sie es später ändern können.',
 };

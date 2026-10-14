@@ -4427,4 +4427,10 @@ export default {
   'simple.req.make_link': 'Link maken',
   'simple.req.new_done': 'Je link is klaar',
   'simple.req.new_done_body': 'Deel hem met de mensen die je dingen moeten kunnen sturen. Jij keurt alles goed voordat het wordt getoond.',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'Communitysjablonen',
+  'signs.community_none': 'Er zijn nog geen communitysjablonen voor deze vorm.',
+  'signs.community_browse': 'Communitysjablonen bekijken',
+  'templates.builtin_note': 'De ingebouwde ontwerpen zijn altijd beschikbaar, ook offline:',
+  'signs.done.edit_later_widget': 'Het staat onder Widgets, waar je het later kunt aanpassen.',
 };

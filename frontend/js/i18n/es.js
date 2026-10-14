@@ -2780,4 +2780,10 @@ export default {
   'simple.req.make_link': 'Crear el enlace',
   'simple.req.new_done': 'Tu enlace está listo',
   'simple.req.new_done_body': 'Compártelo con las personas que deben poder enviarte cosas. Tú apruebas todo antes de que se muestre.',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'Plantillas de la comunidad',
+  'signs.community_none': 'Todavía no hay plantillas de la comunidad para esta forma.',
+  'signs.community_browse': 'Explorar plantillas de la comunidad',
+  'templates.builtin_note': 'Los diseños integrados están siempre disponibles, sin conexión:',
+  'signs.done.edit_later_widget': 'Se guarda en Widgets, donde puedes cambiarlo más tarde.',
 };

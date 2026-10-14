@@ -3166,3 +3166,11 @@ a.stock-credit:hover { text-decoration: underline; color: var(--text-secondary);
 .simple-coming summary { cursor: pointer; color: var(--text-secondary); padding: 4px 0; }
 .simple-coming ul { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 4px; }
 .simple-coming-now { margin: 4px 0; color: var(--text-primary); }
+
+/* 3.0 Make a sign: installed community templates under the built-in designs (views/make-sign.js) */
+.sign-section-title { font-size: 15px; margin: 26px 0 10px; }
+.sign-community-thumb {
+  display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; overflow: hidden;
+  border-radius: 8px; background: var(--bg-card); font-size: 32px;
+}
+.sign-community-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }

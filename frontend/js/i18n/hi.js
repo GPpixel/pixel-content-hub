@@ -1558,4 +1558,10 @@ export default {
   'simple.req.make_link': 'लिंक बनाएँ',
   'simple.req.new_done': 'आपका लिंक तैयार है',
   'simple.req.new_done_body': 'इसे उन लोगों के साथ शेयर करें जो आपको चीज़ें भेज सकें। दिखने से पहले आप सब कुछ मंज़ूर करते हैं।',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'कम्युनिटी टेम्पलेट',
+  'signs.community_none': 'इस आकार के लिए अभी कोई कम्युनिटी टेम्पलेट नहीं है।',
+  'signs.community_browse': 'कम्युनिटी टेम्पलेट देखें',
+  'templates.builtin_note': 'बिल्ट-इन डिज़ाइन हमेशा उपलब्ध हैं, ऑफ़लाइन भी:',
+  'signs.done.edit_later_widget': 'यह विजेट में सहेजा गया है, जहाँ आप इसे बाद में बदल सकते हैं।',
 };

@@ -3462,4 +3462,10 @@ export default {
   'simple.req.make_link': 'リンクを作成',
   'simple.req.new_done': 'リンクの準備ができました',
   'simple.req.new_done_body': '送ってほしい人にこのリンクを共有してください。表示される前に、すべてあなたが承認します。',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': 'コミュニティのテンプレート',
+  'signs.community_none': 'この向きに合うコミュニティのテンプレートはまだありません。',
+  'signs.community_browse': 'コミュニティのテンプレートを見る',
+  'templates.builtin_note': '組み込みのデザインはオフラインでもいつでも使えます：',
+  'signs.done.edit_later_widget': 'ウィジェットに保存されます。後からそこで変更できます。',
 };

@@ -2373,4 +2373,10 @@ export default {
   'simple.req.make_link': '创建链接',
   'simple.req.new_done': '链接已就绪',
   'simple.req.new_done_body': '把它分享给需要向您发送内容的人。所有内容都须经您批准后才会显示。',
+  // 3.0: community templates in Make a sign
+  'signs.community_title': '社区模板',
+  'signs.community_none': '暂无适合此方向的社区模板。',
+  'signs.community_browse': '浏览社区模板',
+  'templates.builtin_note': '内置设计随时可用，无需联网：',
+  'signs.done.edit_later_widget': '已保存在“小部件”中，之后可以在那里修改。',
 };
