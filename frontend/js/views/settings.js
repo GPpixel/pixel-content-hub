@@ -876,11 +876,15 @@ export async function render(container) {
     try { me = await api.getMe(); }
     catch (e) { paint(`<p style="${muted}">${esc(e.message)}</p>`); return; }
 
+    // The page may have been left while this was loading: draw nothing into a detached card.
+    if (!document.contains(block)) return;
+
     let providers = [];
     try {
       const res = await fetch('/api/auth/providers');
       if (res.ok) providers = (await res.json()).providers || [];
     } catch { /* offline: fall through to the no-providers copy */ }
+    if (!document.contains(block)) return;
 
     if (me.auth_provider && me.auth_provider !== 'local') {
       const name = providers.find((p) => p.slug === me.auth_provider)?.name || me.auth_provider;
@@ -953,6 +957,9 @@ export async function render(container) {
     let status;
     try { status = await api.totpStatus(); }
     catch (e) { paint(`<p style="${muted}">${esc(e.message)}</p>`); return; }
+
+    // The page may have been left while this was loading: draw nothing into a detached card.
+    if (!document.contains(block)) return;
 
     if (!status.eligible) {
       const provider = (JSON.parse(localStorage.getItem('user') || '{}').auth_provider) || 'SSO';
@@ -1087,6 +1094,9 @@ export async function render(container) {
     let st;
     try { st = await api.passkeysList(); }
     catch (e) { paint(`<p style="${muted}">${esc(e.message)}</p>`); return; }
+
+    // The page may have been left while this was loading: draw nothing into a detached card.
+    if (!document.contains(block)) return;
 
     if (!st.available) {
       // Never silently bound to whatever address this page happens to be on: say why it is off,
