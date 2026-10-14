@@ -217,6 +217,24 @@ All of these are under **Menu options** on the data source.
 
 ---
 
+## Using the same connection for Experiments (sales)
+
+[Experiments](experiments.md) can judge a test by what sold. They reuse a Square or Shopify data
+source from this page; no second credential is stored. Reading sales needs **one more read
+permission**:
+
+| Provider | Extra permission | What is read |
+|---|---|---|
+| Square | `ORDERS_READ` (a personal access token already has it) | `POST /v2/orders/search` — completed orders by location and closing time. `POST` because Square's order search takes its query as a body; it changes nothing. |
+| Shopify | `read_orders` (add it to the app's scopes and reinstall) | GraphQL `orders` by processed time. Without `read_all_orders` Shopify returns only the last 60 days. Optional `read_locations` lets the Experiments page list your locations by name. |
+
+Write permissions are still refused, for orders as for products. Every order is reduced, as it
+arrives, to totals per location, hour and item; no customer, card, receipt or order id is read
+into storage. The same encryption, same-store rule and fixed hosts described under **Security**
+apply. See [docs/experiments.md](experiments.md).
+
+---
+
 ## For administrators and self-hosters
 
 - **Nothing to configure.** There's no ScreenTinker API key, no environment variable and no

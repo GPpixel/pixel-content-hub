@@ -21,6 +21,7 @@ import * as servers from './views/servers.js';
 import * as noc from './views/noc.js';
 import * as triggers from './views/triggers.js';
 import * as qrCodes from './views/qr-codes.js';
+import * as experiments from './views/experiments.js';
 import * as socialFeeds from './views/social.js';
 import * as alerts from './views/alerts.js';
 import * as capFeeds from './views/cap-feeds.js';
@@ -256,6 +257,7 @@ const NAV_LABEL_KEYS = {
   walls: 'nav.walls',
   reports: 'nav.reports',
   audience: 'nav.audience',
+  experiments: 'nav.experiments',
   servers: 'nav.servers',
   triggers: 'nav.triggers',
   'qr-codes': 'nav.qr_codes',
@@ -635,6 +637,7 @@ function route() {
     else if ((hash.startsWith('#/wall') || hash === '#/walls') && link.dataset.view === 'walls') link.classList.add('active');
     else if (hash === '#/reports' && link.dataset.view === 'reports') link.classList.add('active');
     else if (hash === '#/audience' && link.dataset.view === 'audience') link.classList.add('active');
+    else if ((hash === '#/experiments' || hash.startsWith('#/experiments/')) && link.dataset.view === 'experiments') link.classList.add('active');
     else if (hash === '#/activity' && link.dataset.view === 'activity') link.classList.add('active');
     else if ((hash === '#/freshness' || hash.startsWith('#/freshness?')) && link.dataset.view === 'freshness') link.classList.add('active');
     else if ((hash === '#/designer' || hash.startsWith('#/designer/')) && link.dataset.view === 'designer') link.classList.add('active');
@@ -740,6 +743,10 @@ function route() {
   } else if (hash === '#/audience') {
     currentView = audience;
     audience.render(app);
+  } else if (hash === '#/experiments' || hash.startsWith('#/experiments/')) {
+    // 3.0 Experiments: list, #/experiments/new(?id=…) and #/experiments/<id> (views/experiments.js).
+    currentView = experiments;
+    experiments.render(app);
   } else if (hash === '#/kiosk' || hash.startsWith('#/kiosk/')) {
     currentView = kiosk;
     kiosk.render(app);

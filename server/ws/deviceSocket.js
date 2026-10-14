@@ -602,7 +602,8 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
    * matched the JavaScript text, not the SQL; device-background-colour.test.js now runs this
    * query.
    */
-  const device = db.prepare(`SELECT r.playlist_id AS playlist_id, r.source AS playlist_source,
+  // d.id: an experiment's per-screen variant condition (lib/local-conditions 'screens') needs it.
+  const device = db.prepare(`SELECT d.id, r.playlist_id AS playlist_id, r.source AS playlist_source,
       r.layout_id AS layout_id, d.orientation, d.background_color, d.wall_id, d.timezone, d.reported_timezone,
       d.triggers_accept_http, d.triggers_accept_udp, d.trigger_secret, d.trigger_http_port,
       d.trigger_udp_port, d.trigger_multicast_group, d.trigger_clear_all_token,

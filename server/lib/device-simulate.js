@@ -444,7 +444,7 @@ function simulate(deviceId, atMs, opts = {}) {
     if (!it || !localConditions.isLocal(it.play_when)) continue;
     if (localConditions.passes(it.play_when, ctx.device, ctx.weather || undefined)) continue;
     const w = it.play_when;
-    skipped.push({ label: itemLabel(it), reason: w.type === 'geo' ? 'geo' : 'weather', condition: w });
+    skipped.push({ label: itemLabel(it), reason: w.type === 'geo' ? 'geo' : w.type === 'screens' ? 'experiment' : 'weather', condition: w });
   }
 
   const playing = items.filter((x) => x.plays).length;

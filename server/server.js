@@ -2011,6 +2011,9 @@ app.use('/api/widgets/preview-session', rateLimit(60000, 30)); // preview sessio
 // workspace cannot fan out unbounded requests to third-party URLs.
 app.use('/api/data-sources/test', rateLimit(60000, 10));
 app.use('/api/cap-feeds/test', rateLimit(60000, 10));   // fetches an arbitrary public URL, like the data-source test
+// 3.0 Experiments: a sales import or a location lookup calls Square/Shopify with a store's token.
+app.use('/api/experiments/:id/import-sales', rateLimit(60000, 6));
+app.use('/api/experiments/:id/pos-locations', rateLimit(60000, 10));
 // Free stock search/import (routes/stock-media.js): every miss spends the instance's provider quota.
 // Per IP here; lib/stock-media.js also limits per person and per workspace.
 app.use('/api/stock', rateLimit(60000, 90));
@@ -2659,6 +2662,7 @@ require('./lib/corporate/emergency-live').init(io);
 require('./lib/smart-playlist').start(io);
 require('./lib/ota-rollout').start();   // player rollouts: waves, automatic halt and rollback
 require('./lib/local-conditions').start(io);   // local weather for weather conditions
+require('./lib/experiments/sweep').start(io);   // experiments: end dates, exposure copies, hourly sales import
 // Dynamic device groups: a backstop for membership inputs changed by a path that does not reconcile
 // (an import, a mesh sync, a direct fix-up). A sweep that finds nothing to change writes nothing.
 {
