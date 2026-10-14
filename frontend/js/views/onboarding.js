@@ -3,6 +3,7 @@ import { api, browserTimezone } from '../api.js';
 import { t } from '../i18n.js';
 import { esc, isTouchFirst } from '../utils.js';
 import { publishOrSubmit } from '../components/release.js';
+import { isSimpleMode } from '../components/ui-mode.js';
 
 // 3.0: the sample a first-run user can show instead of hunting for a file (brand-neutral on purpose).
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
@@ -128,6 +129,9 @@ function getSteps(addMode = false) {
         <div style="text-align:center;margin-top:12px">
           <span style="color:var(--text-muted);font-size:12px;margin-right:8px">${t('onboarding.step.upload.or')}</span>
           <button type="button" class="btn btn-secondary btn-sm" id="onboardUseSample">${t('onboarding.step.upload.use_sample')}</button>
+          <!-- 3.0 Make a sign: no photos needed — a real sign from a built-in template, in a minute. -->
+          <button type="button" class="btn btn-secondary btn-sm" id="onboardMakeSign" style="margin-left:4px">&#127991;&#65039; ${esc(t('signs.onboarding_btn'))}</button>
+          <p style="color:var(--text-muted);font-size:12px;margin-top:8px">${esc(t('signs.onboarding_hint'))}</p>
         </div>
         <!-- 3.0 Add screen: a second screen usually shows what the first one does. Filled in by
              populateSameAs() from the workspace's playlists; hidden when there are none. -->
@@ -349,6 +353,7 @@ export function render(container, { mode = 'first' } = {}) {
       area?.addEventListener('dragleave', () => { area.style.borderColor = ''; });
       area?.addEventListener('drop', (e) => { e.preventDefault(); area.style.borderColor = ''; uploadFiles([...(e.dataTransfer?.files || [])]); });
       document.getElementById('onboardUseSample')?.addEventListener('click', useSample);
+      document.getElementById('onboardMakeSign')?.addEventListener('click', makeSign);
       populateSameAs();
     }
 
@@ -554,6 +559,24 @@ export function render(container, { mode = 'first' } = {}) {
       showToast(t('onboarding.toast.sample_failed'), 'error');
       if (btn) btn.disabled = false;
     }
+  }
+
+  /*
+   * 3.0: "Make a sign" instead of a photo. The sign task (views/make-sign.js) takes it from here with
+   * this screen preset, so the first thing on it is a real sign rather than a sample picture.
+   *
+   * ⚠️ THE GUIDE IS RECORDED AS FINISHED ON THE WAY OUT. The screen is paired, which is what the guide
+   * is for; the sign task ends at the dashboard, not back here, and leaving the flag unset would send
+   * this person through the whole guide again on their next sign-in.
+   */
+  async function makeSign() {
+    if (!addMode) {
+      localStorage.setItem('rd_onboarded', 'true');
+      api.trackEvent('onboarding_completed', { step: currentStep, via: 'sign' });
+      try { await api.updateMe({ onboarded: true }); } catch { /* the local flag still holds */ }
+    }
+    const q = `device=${encodeURIComponent(pairedDeviceId || '')}&from=${addMode ? 'add' : 'onboarding'}`;
+    window.location.hash = isSimpleMode() ? `#/simple/sign?${q}` : `#/signs?${q}`;
   }
 
   /*

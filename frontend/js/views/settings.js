@@ -12,6 +12,7 @@ import { mountM365Settings } from '../components/m365-settings.js';
 import { mountBiConnections } from '../components/bi-connections-settings.js';
 import { mountSocialConnections } from '../components/social-connections-settings.js';
 import { mountRoomSettings } from '../components/room-settings.js';
+import { mountBrandKit } from '../components/brand-kit-editor.js';
 import { formatRow, buyPack, usd } from '../components/ai-hosted-picker.js';
 
 export async function render(container) {
@@ -103,6 +104,14 @@ export async function render(container) {
     <!-- Head office (corporate) playlists and emergency alerts. Org owners and admins only;
          components/corporate-settings.js fills it, and leaves it hidden for everyone else. -->
     <div class="settings-section" id="corporateCard" style="display:none"></div>
+
+    <!-- 3.0 The workspace brand kit Make a sign uses (components/brand-kit-editor.js). Every member
+         sees it; a view-only member sees it read-only, and the server refuses their writes. -->
+    <div class="settings-section" id="brandKitCard">
+      <h3>${esc(t('signs.brand.title'))}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">${esc(t('signs.brand.intro'))} <a href="#/signs">${esc(t('signs.task'))} &rarr;</a></p>
+      <div id="brandKitHost" class="bk-settings"></div>
+    </div>
 
     <!-- Where media is stored (org owners/admins). Mounted only for them; the server enforces it. -->
     <div class="settings-section" id="storageCard" style="display:none"></div>
@@ -1548,6 +1557,8 @@ export async function render(container) {
   loadSso();
   if (canManageOrgSecurity) mountCanvaSettings(document.getElementById('canvaSettingsCard'));
   mountCorporateSettings(document.getElementById('corporateCard'));
+  if (user.current_workspace_id) mountBrandKit(document.getElementById('brandKitHost'));
+  else document.getElementById('brandKitCard')?.remove();
   // Org admins always; a workspace admin too, because the org may let workspaces choose their own
   // storage — when it does not, the server answers 403 and the card stays hidden.
   if (canManageOrgSecurity || user.current_workspace_role === 'workspace_admin') mountStorageSettings(document.getElementById('storageCard'));

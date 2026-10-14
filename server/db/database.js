@@ -2515,6 +2515,22 @@ const migrations = [
      workspace_id TEXT,
      challenge TEXT NOT NULL,
      expires_at INTEGER NOT NULL)`,
+  /*
+   * 3.0 Make a sign: a workspace's brand kit (lib/brand-kit.js) — the business name, logo, colours
+   * and headline font every built-in sign template is pre-filled and themed with. One row per
+   * workspace, created on first save; no row means "no brand kit yet" and templates use their own
+   * palettes. colors is a JSON array of up to three #RRGGBB strings. logo_content_id points at an
+   * image in the same workspace's library and is re-checked on every read, so deleting the image
+   * simply drops the logo rather than leaving a dangling reference anything renders.
+   */
+  `CREATE TABLE IF NOT EXISTS brand_kits (
+     workspace_id TEXT PRIMARY KEY,
+     business_name TEXT,
+     logo_content_id TEXT,
+     colors TEXT NOT NULL DEFAULT '[]',
+     font TEXT,
+     updated_by TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
