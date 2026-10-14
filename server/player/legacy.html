@@ -288,6 +288,7 @@
       <p>Pairing Code</p>
       <div class="pairing-code" id="pairingCode">------</div>
       <p class="pairing-hint">Enter this code in the dashboard to pair this display</p>
+      <p class="pairing-hint" id="enrolKeyNotice" style="display:none;color:#fbbf24;max-width:40rem;margin:1.2rem auto 0"></p>
     </div>
     <div class="spinner" id="setupSpinner" style="display:none"></div>
     <div class="status-msg" id="setupStatus"></div>
@@ -400,7 +401,8 @@ const PLAYER_I18N = {
     info_na: "N/A",
     info_sw: "Service Worker",
     nothing_scheduled: "Nothing scheduled right now",
-    preview_webpage_blocked: "If this area is blank, the site blocks being embedded and won\u2019t display on the device either. Try a page that allows embedding."
+    preview_webpage_blocked: "If this area is blank, the site blocks being embedded and won\u2019t display on the device either. Try a page that allows embedding.",
+    enrol_key_refused: "This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display\u2019s current link from the dashboard."
   },
   es: {
     web_player: "Reproductor web",
@@ -778,6 +780,15 @@ function resumeAfterVegaHost() {
   }
   return false;
 }
+function showEnrolKeyRefused() {
+  try {
+    const el = document.getElementById("enrolKeyNotice");
+    if (!el) return;
+    el.textContent = _t("enrol_key_refused");
+    el.style.display = "block";
+  } catch (e) {
+  }
+}
 function getConfig() {
   let cfg = {};
   try {
@@ -805,12 +816,10 @@ function getConfig() {
       cfg.paired = true;
     }
   }
-  if (!cfg.deviceId) {
-    const k = urlEnrolKey();
-    if (k) {
-      cfg.enrolKey = k;
-      cfg.paired = true;
-    }
+  const k = urlEnrolKey();
+  if (k) {
+    cfg.enrolKey = k;
+    cfg.paired = true;
   }
   return cfg;
 }
@@ -2686,6 +2695,7 @@ function connect(serverUrl) {
       console.warn("[enrol] this player URL key is no longer valid \u2014 falling back to pairing");
       config.enrolKey = null;
       config.paired = false;
+      showEnrolKeyRefused();
     }
     console.warn("Device auth rejected:", (data == null ? void 0 : data.error) || "unknown");
     enterRepairMode("This device needs to be re-paired. Getting a new code\u2026");
@@ -3950,6 +3960,7 @@ function register() {
   data.fingerprint = generateBrowserFingerprint();
   data.hw_fingerprint = generateHardwareFingerprint();
   if (!data.device_id && config.enrolKey) data.enrol_key = config.enrolKey;
+  else if (data.device_id && config.enrolKey && config.enrolKey === urlEnrolKey()) data.enrol_key = config.enrolKey;
   console.log("[register] device_id=".concat(data.device_id || "none", ", has_token=").concat(!!data.device_token, ", token_len=").concat(((_a = data.device_token) == null ? void 0 : _a.length) || 0, ", paired=").concat(config.paired, ", pairing_code=").concat(data.pairing_code || "none", ", enrol_key=").concat(data.enrol_key ? "yes" : "no"));
   socket.emit("device:register", data);
 }
