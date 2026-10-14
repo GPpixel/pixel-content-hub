@@ -149,6 +149,22 @@ real hardware.
 
 ### 2.2 Progressive disclosure
 
+**Simple view is guide-style, with no sidebar** (`views/simple-home.js`, routes `#/` and
+`#/simple/*`):
+- Home is "What would you like to do?" with four big tasks:
+  - **Add a screen** (`#/add-screen`).
+  - **Change what a screen shows**: pick the screen, then *replace* or *add*, using upload (several
+    files), the sample, or "same as another screen". Replace detaches the screen from its old list,
+    so other screens using that list are untouched. Add warns when another screen shares the list.
+  - **Upload photos**: files first, then tick the screens.
+  - **Get help.**
+- Your screens are listed below the tasks; tapping one opens "Change what it shows".
+- A top bar carries the Simple | Advanced switch and an account menu (plan, settings, help, sign out).
+- Every write goes through the same endpoints as the full product, so review gates and plan limits
+  apply.
+
+The menu rules below apply wherever the sidebar is shown in Simple view (pages opened from a link).
+
 A per-account `users.ui_mode` (`simple` | `advanced`):
 - New accounts start `simple`; pre-3.0 accounts are migrated to `advanced`.
 - A **Simple | Advanced** switch sits at the top of the menu, under the workspace name. Simple also hides

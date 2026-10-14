@@ -73,7 +73,8 @@ them. The one effect: sessions revoked under 3.0 become valid again until they e
   change stays signed in. An admin resetting someone's password ends that person's sessions.
   Sessions issued by 2.x keep working until the first such change. Settings → Security also has
   "Sign out everywhere else" (`POST /api/auth/sessions/revoke-others`).
-- **New accounts start in the simple menu.** It shows Screens, Content, Playlists, Schedule,
+- **New accounts start in Simple view**: a guide-style home (add a screen, change what a screen
+  shows, upload photos, get help) with no sidebar. In Simple view, pages opened from links show the simple menu. It shows Screens, Content, Playlists, Schedule,
   Templates, Slides, Reports, Members, Settings and Subscription. The **Simple | Advanced** switch at the top
   of the menu shows everything (video walls, layouts, reviews, widgets, kiosk, automation, data
   sources, audience…). The choice is saved per account. Every page still opens from a link or

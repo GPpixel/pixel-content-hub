@@ -47,19 +47,9 @@ export function applyUiMode(user) {
   paintSwitch(sw, mode);
   if (bound) return;
   bound = true;
-  sw.addEventListener('click', async (e) => {
+  sw.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-ui-mode]');
-    if (!btn) return;
-    const next = btn.dataset.uiMode;
-    if (next === (isSimpleMode() ? 'simple' : 'advanced')) return;
-    setBodyMode(next); // optimistic: the view answers the click, the server catches up
-    paintSwitch(sw, next);
-    try {
-      const cached = JSON.parse(localStorage.getItem('user') || '{}');
-      localStorage.setItem('user', JSON.stringify({ ...cached, ui_mode: next }));
-    } catch { /* cache is a convenience */ }
-    showToast(t(next === 'advanced' ? 'nav.view_advanced_on' : 'nav.view_simple_on'), 'info');
-    try { await api.updateMe({ ui_mode: next }); } catch { /* kept locally until the next /me */ }
+    if (btn) setUiMode(btn.dataset.uiMode);
   });
   // Arrow keys move between the two options, as a radiogroup should.
   sw.addEventListener('keydown', (e) => {
@@ -68,6 +58,25 @@ export function applyUiMode(user) {
     const other = sw.querySelector('[aria-checked="false"]');
     if (other) { other.click(); other.focus(); }
   });
+}
+
+/**
+ * Switch view for this account: the page answers at once (optimistic), the server catches up.
+ * setBodyMode dispatches st:ui-mode, which app.js re-routes on — Simple's guide-style home and the
+ * full dashboard are different views of #/.
+ */
+export async function setUiMode(next) {
+  if (next !== 'simple' && next !== 'advanced') return;
+  if (next === (isSimpleMode() ? 'simple' : 'advanced')) return;
+  try {
+    const cached = JSON.parse(localStorage.getItem('user') || '{}');
+    localStorage.setItem('user', JSON.stringify({ ...cached, ui_mode: next }));
+  } catch { /* cache is a convenience */ }
+  setBodyMode(next);
+  const sw = document.getElementById('uiModeSwitch');
+  if (sw) paintSwitch(sw, next);
+  showToast(t(next === 'advanced' ? 'nav.view_advanced_on' : 'nav.view_simple_on'), 'info');
+  try { await api.updateMe({ ui_mode: next }); } catch { /* kept locally until the next /me */ }
 }
 
 function paintSwitch(sw, mode) {

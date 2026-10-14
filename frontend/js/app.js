@@ -40,7 +40,8 @@ import { applyBranding } from './branding.js';
 import { t } from './i18n.js';
 import { isPlatformAdmin } from './utils.js';
 import { initNavGroups } from './components/nav-groups.js';
-import { applyUiMode } from './components/ui-mode.js';
+import { applyUiMode, isSimpleMode } from './components/ui-mode.js';
+import * as simpleHome from './views/simple-home.js';
 import { installPlanNudges, updateTrialBanner } from './components/plan-nudges.js';
 import { renderWorkspaceSwitcher, selectedRemoteOrg, clearRemoteOrg } from './components/workspace-switcher.js';
 import { corporateSettings, renderHqContextBar } from './components/corporate-ui.js';
@@ -561,6 +562,22 @@ function route() {
     if (mb) mb.style.display = 'none';
     currentView = login;
     login.render(app);
+    return;
+  }
+
+  /*
+   * 3.0 Simple view: guide-style home and tasks, no sidebar (views/simple-home.js). Only these
+   * routes; every other page — a bookmark, a link from Help — opens with the full shell as before.
+   */
+  if (isSimpleMode() && simpleHome.isSimpleRoute(hash)) {
+    document.documentElement.classList.remove('nav-pending');
+    sidebar.style.display = 'none';
+    if (mainWrapper) mainWrapper.style.marginLeft = '0';
+    const smb = document.getElementById('mobileMenuBtn');
+    if (smb) smb.style.display = 'none';
+    updateSidebarUser(); // banners (trial, billing, verify) and the view switch stay in step
+    currentView = simpleHome;
+    simpleHome.render(app, hash);
     return;
   }
 
@@ -1143,6 +1160,8 @@ if (isAuthenticated()) {
   }, 60000);
 }
 window.addEventListener('hashchange', route);
+// 3.0: Simple and Advanced render #/ differently, so a view switch re-routes the current page.
+window.addEventListener('st:ui-mode', () => { if (isAuthenticated()) route(); });
 enableHelpTips();
 route();
 

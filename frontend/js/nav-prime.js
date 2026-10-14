@@ -25,6 +25,9 @@
       || hash === '#/change-password' || (user && user.must_change_password)
       || hash === '#/no-workspace'
       || hash.indexOf('#/accept-invite/') === 0;
+    // 3.0: Simple view's home and tasks have no sidebar either (views/simple-home.js).
+    var simple = user && user.ui_mode === 'simple';
+    if (simple && (hash === '#/' || hash === '#' || hash.indexOf('#/simple/') === 0)) hidden = true;
     if (hidden) document.documentElement.classList.add('nav-pending');
     // 3.0: the simple menu (components/ui-mode.js), from the cached account, before first paint.
     if (user && user.ui_mode === 'simple') document.documentElement.classList.add('ui-simple');

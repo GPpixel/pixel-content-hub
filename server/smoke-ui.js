@@ -116,6 +116,15 @@ const check = (name, ok, detail) => {
   await new Promise(r => setTimeout(r, 1500));
   check('skipping the guide is remembered by the account, not just this browser',
     skipped && await page.evaluate(() => location.hash === '#/' || location.hash === ''));
+  // A new account is in Simple view: guide-style home, no sidebar.
+  check('a new account lands on the Simple home', await page.evaluate(() =>
+    !!document.querySelector('.simple-tasks') && getComputedStyle(document.getElementById('sidebar')).display === 'none'));
+  // Everything below exercises the full product, so switch this account to Advanced view.
+  await page.evaluate(async () => {
+    await fetch('/api/auth/me', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + localStorage.getItem('token') },
+      body: JSON.stringify({ ui_mode: 'advanced' }) });
+    const u = JSON.parse(localStorage.getItem('user') || '{}'); u.ui_mode = 'advanced'; localStorage.setItem('user', JSON.stringify(u));
+  });
 
   // ---- every view: renders, no raw keys, no uncaught errors ----------------------------------
   const rawKeyOffenders = [];
