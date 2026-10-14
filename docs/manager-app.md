@@ -75,6 +75,8 @@ MANAGER_KEY_ALIAS=upload MANAGER_KEY_PASSWORD=… \
 ## Play Store submission checklist
 
 - **App name:** ScreenTinker Manager.
+- **Listing text:** `android-admin/store/listing.md` (name, short and full description). The
+  GitHub Sponsors link lives there, not in the app: Play's payments policy covers in-app asks.
 - **Icons:** `android-admin/store/icon-512.png` is the store icon. The launcher icons are generated
   in `res/mipmap-*`. They use the player's TV plus a green edit badge, so the two apps are told apart.
 - **Data safety:** the app sends the user's sign-in and the photos and videos they choose to the
