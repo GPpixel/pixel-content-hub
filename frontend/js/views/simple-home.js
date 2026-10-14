@@ -141,6 +141,7 @@ async function renderHome(container) {
     <h1 class="simple-h1">${esc(t(canChange ? 'simple.home.title' : 'simple.home.title_viewer'))}</h1>
     ${multiWs && currentWorkspace() ? `<p class="simple-where">${esc(t('simple.home.in_workspace', { name: workspaceLabel(currentWorkspace()) }))}</p>` : ''}
     ${canChange ? '' : `<p class="simple-muted simple-viewer-note">${esc(t('simple.home.viewer_note'))}</p>`}
+    <div id="simpleFreshness"></div>
     <div class="simple-tasks">
       ${canChange ? `<a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
@@ -152,6 +153,7 @@ async function renderHome(container) {
     <div id="simpleScreens" class="simple-screens"><p class="simple-muted">${esc(t('common.loading'))}</p></div>`);
 
   adminNotices(document.getElementById('simpleAdminNotices'));
+  if (canChange) freshnessLine(document.getElementById('simpleFreshness'));
   const host = document.getElementById('simpleScreens');
   let devices = [];
   try { devices = await api.getDevices(); } catch { devices = []; }
@@ -169,6 +171,44 @@ async function renderHome(container) {
       <span class="simple-screen-name">${esc(d.name)}</span>
       <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
     </${tag}>`).join('');
+}
+
+/*
+ * 3.0 content freshness: one gentle line when screens have been showing the same thing for a long
+ * time ("2 screens haven't changed in 3 months — freshen them up?"), linking into the Change task —
+ * straight to the screen when there is only one. Server: lib/freshness.js (GET /api/freshness/chips).
+ * "Not now" hides it for a week on this browser; nothing is stored on the server.
+ */
+const FRESH_DISMISS_KEY = 'st_fresh_simple_dismissed';
+async function freshnessLine(host) {
+  if (!host) return;
+  try {
+    const until = Number(localStorage.getItem(FRESH_DISMISS_KEY) || 0);
+    if (until > Date.now()) return;
+  } catch { /* storage blocked: show it */ }
+  let chips;
+  try { chips = await api.getFreshnessChips(); } catch { return; }
+  if (!chips || Array.isArray(chips) || !document.contains(host)) return;
+  const stale = Object.entries(chips.devices || {})
+    .filter(([, d]) => (d.status === 'stale' || d.status === 'very_stale') && d.age_days != null);
+  if (!stale.length) return;
+  const n = stale.length;
+  const minDays = Math.floor(Math.min(...stale.map(([, d]) => d.age_days)));
+  const text = minDays >= 60
+    ? tn('simple.fresh.line_months', n, { months: Math.floor(minDays / 30) })
+    : tn('simple.fresh.line_days', n, { days: minDays });
+  const href = n === 1 ? `#/simple/change?device=${encodeURIComponent(stale[0][0])}` : '#/simple/change';
+  host.innerHTML = `<div class="simple-notice simple-fresh">
+    <span>&#127807; ${esc(text)}</span>
+    <span style="display:flex;gap:8px">
+      <button type="button" class="btn btn-secondary btn-sm" data-fresh-later>${esc(t('simple.fresh.later'))}</button>
+      <a class="btn btn-primary btn-sm" href="${href}">${esc(tn('simple.fresh.cta', n))}</a>
+    </span>
+  </div>`;
+  host.querySelector('[data-fresh-later]').addEventListener('click', () => {
+    try { localStorage.setItem(FRESH_DISMISS_KEY, String(Date.now() + 7 * 86400000)); } catch { /* fine */ }
+    host.innerHTML = '';
+  });
 }
 
 /*

@@ -2559,6 +2559,39 @@ const migrations = [
      origin TEXT NOT NULL,
      expires_at INTEGER NOT NULL)`,
   "CREATE INDEX IF NOT EXISTS idx_webauthn_challenges_expires ON webauthn_challenges(expires_at)",
+  /*
+   * 3.0 content freshness (lib/freshness.js, docs/content-freshness.md). All three are node-local and
+   * NOT replicated: a replica serving a copied workspace reads the defaults, and any write to one is
+   * forwarded to the primary by resolveTenancy like every other write.
+   *
+   * freshness_settings: a workspace's thresholds. No row = the defaults (30 / 90 days, a 7-day play
+   * window, digest on), so an install that never opens the page carries no rows at all.
+   * freshness_snoozes: "I know, leave it" for one item, screen or playlist, until a time.
+   * freshness_digest_prefs: per PERSON, not per workspace: one weekly email covers every workspace
+   * they edit. No row = opted in (the default for admins and editors); last_sent_at is the weekly
+   * once-only marker.
+   */
+  `CREATE TABLE IF NOT EXISTS freshness_settings (
+     workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+     stale_days INTEGER NOT NULL DEFAULT 30,
+     very_stale_days INTEGER NOT NULL DEFAULT 90,
+     window_days INTEGER NOT NULL DEFAULT 7,
+     digest_enabled INTEGER NOT NULL DEFAULT 1,
+     updated_by TEXT,
+     updated_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS freshness_snoozes (
+     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+     resource_type TEXT NOT NULL CHECK (resource_type IN ('content','widget','device','playlist')),
+     resource_id TEXT NOT NULL,
+     until INTEGER NOT NULL,
+     created_by TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     PRIMARY KEY (workspace_id, resource_type, resource_id))`,
+  `CREATE TABLE IF NOT EXISTS freshness_digest_prefs (
+     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     opted_out INTEGER NOT NULL DEFAULT 0,
+     opted_out_at INTEGER,
+     last_sent_at INTEGER)`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
