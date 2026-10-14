@@ -72,6 +72,11 @@ export function livenessBadge(data, opts = {}) {
  * "ScreenTinkerManager/<version>" to its WebView user agent and exposes window.STManager. Inside
  * the app the dashboard is always the Simple view; everything else opens in the phone's browser.
  */
+/** A phone or tablet (touch, no hover): "tap" rather than "click", and no drag-and-drop to offer. */
+export function isTouchFirst() {
+  try { return window.matchMedia('(hover: none) and (pointer: coarse)').matches; } catch { return false; }
+}
+
 export function inManagerApp() {
   return typeof navigator !== 'undefined' && /\bScreenTinkerManager\//.test(navigator.userAgent || '');
 }

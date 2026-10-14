@@ -2455,4 +2455,5 @@ export default {
   'simple.home.title_viewer': '画面の一覧',
   'simple.home.no_screens_viewer': '利用できる画面はありません。',
   'simple.home.viewer_note': 'このワークスペースは閲覧のみ可能です。画面の表示内容を変更するには、ワークスペースの管理者に編集権限を依頼してください。',
+  'onboarding.step.upload.tap_to_select': 'タップして写真や動画を選びます。いくつでも選べます',
 };

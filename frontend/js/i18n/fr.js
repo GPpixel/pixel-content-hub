@@ -2455,4 +2455,5 @@ export default {
   'simple.home.title_viewer': 'Vos écrans en un coup d’œil',
   'simple.home.no_screens_viewer': 'Aucun écran disponible.',
   'simple.home.viewer_note': 'Vous pouvez consulter cet espace de travail. Pour changer ce qu’affichent les écrans, demandez un accès en modification à un administrateur de l’espace.',
+  'onboarding.step.upload.tap_to_select': 'Touchez pour choisir des photos ou des vidéos, autant que vous voulez',
 };

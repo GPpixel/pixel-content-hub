@@ -3420,4 +3420,5 @@ export default {
   'simple.home.title_viewer': 'Je schermen in één oogopslag',
   'simple.home.no_screens_viewer': 'Geen schermen beschikbaar.',
   'simple.home.viewer_note': 'Je kunt deze werkruimte bekijken. Vraag een beheerder van de werkruimte om bewerkrechten om te wijzigen wat schermen tonen.',
+  'onboarding.step.upload.tap_to_select': 'Tik om foto’s of video’s te kiezen, zoveel als je wilt',
 };

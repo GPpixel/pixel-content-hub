@@ -1697,4 +1697,5 @@ export default {
   'simple.home.title_viewer': 'I tuoi schermi a colpo d’occhio',
   'simple.home.no_screens_viewer': 'Nessuno schermo disponibile.',
   'simple.home.viewer_note': 'Puoi visualizzare quest’area di lavoro. Per cambiare cosa mostrano gli schermi, chiedi a un amministratore dell’area l’accesso in modifica.',
+  'onboarding.step.upload.tap_to_select': 'Tocca per scegliere foto o video, quanti ne vuoi',
 };

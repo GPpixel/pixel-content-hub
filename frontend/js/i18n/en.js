@@ -5681,4 +5681,5 @@ export default {
   'simple.home.title_viewer': 'Your screens at a glance',
   'simple.home.no_screens_viewer': 'No screens available.',
   'simple.home.viewer_note': 'You can view this workspace. To change what screens show, ask a workspace admin for edit access.',
+  'onboarding.step.upload.tap_to_select': 'Tap to choose photos or videos — pick as many as you like',
 };

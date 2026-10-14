@@ -1366,4 +1366,5 @@ export default {
   'simple.home.title_viewer': '屏幕一览',
   'simple.home.no_screens_viewer': '没有可用的屏幕。',
   'simple.home.viewer_note': '您可以查看此工作区。如需更改屏幕显示的内容，请向工作区管理员申请编辑权限。',
+  'onboarding.step.upload.tap_to_select': '点按选择照片或视频，数量不限',
 };

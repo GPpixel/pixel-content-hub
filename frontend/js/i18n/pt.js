@@ -1739,4 +1739,5 @@ export default {
   'simple.home.title_viewer': 'Suas telas num relance',
   'simple.home.no_screens_viewer': 'Nenhuma tela disponível.',
   'simple.home.viewer_note': 'Você pode ver este espaço de trabalho. Para mudar o que as telas mostram, peça acesso de edição a um administrador do espaço.',
+  'onboarding.step.upload.tap_to_select': 'Toque para escolher fotos ou vídeos, quantos quiser',
 };

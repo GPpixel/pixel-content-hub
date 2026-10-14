@@ -20,7 +20,7 @@ import { esc, screenshotUrl, hydrateAuthImages } from '../utils.js';
 import { showToast } from '../components/toast.js';
 import { setUiMode } from '../components/ui-mode.js';
 import { plansVisible } from '../components/plan-nudges.js';
-import { isPlatformAdmin, inManagerApp, openOutsideApp } from '../utils.js';
+import { isPlatformAdmin, inManagerApp, openOutsideApp, isTouchFirst } from '../utils.js';
 import { renderStatsPrompt } from './dashboard.js';
 import { publishOrSubmit } from '../components/release.js';
 import { switchWorkspaceTo } from '../components/corporate-ui.js';
@@ -490,7 +490,7 @@ async function renderChange(container, presetId) {
         </div>
         <div class="simple-drop" data-drop>
           <div class="simple-drop-icon">&#128193;</div>
-          <p>${esc(t('onboarding.step.upload.click_to_select'))}</p>
+          <p>${esc(t(isTouchFirst() ? 'onboarding.step.upload.tap_to_select' : 'onboarding.step.upload.click_to_select'))}</p>
           <input type="file" data-file multiple accept="${ACCEPT}" hidden>
         </div>
         <div class="simple-or"><span>${esc(t('onboarding.step.upload.or'))}</span> <button type="button" class="btn btn-secondary btn-sm" data-sample>${esc(t('onboarding.step.upload.use_sample'))}</button></div>
@@ -574,7 +574,7 @@ async function renderUpload(container, presetIds = []) {
       body: `
         <div class="simple-drop" data-drop>
           <div class="simple-drop-icon">&#128193;</div>
-          <p>${esc(t('onboarding.step.upload.click_to_select'))}</p>
+          <p>${esc(t(isTouchFirst() ? 'onboarding.step.upload.tap_to_select' : 'onboarding.step.upload.click_to_select'))}</p>
           <input type="file" data-file multiple accept="${ACCEPT}" hidden>
         </div>
         <p class="simple-status" data-status></p>` }));

@@ -1822,4 +1822,5 @@ export default {
   'simple.home.title_viewer': 'Ihre Bildschirme im Überblick',
   'simple.home.no_screens_viewer': 'Keine Bildschirme verfügbar.',
   'simple.home.viewer_note': 'Sie können diesen Arbeitsbereich ansehen. Um zu ändern, was Bildschirme zeigen, bitten Sie einen Admin des Arbeitsbereichs um Bearbeitungsrechte.',
+  'onboarding.step.upload.tap_to_select': 'Tippen Sie, um Fotos oder Videos auszuwählen – so viele Sie möchten',
 };

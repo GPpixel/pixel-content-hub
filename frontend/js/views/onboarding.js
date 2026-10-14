@@ -1,7 +1,7 @@
 import { showToast } from '../components/toast.js';
 import { api, browserTimezone } from '../api.js';
 import { t } from '../i18n.js';
-import { esc } from '../utils.js';
+import { esc, isTouchFirst } from '../utils.js';
 import { publishOrSubmit } from '../components/release.js';
 
 // 3.0: the sample a first-run user can show instead of hunting for a file (brand-neutral on purpose).
@@ -48,13 +48,13 @@ function getSteps(addMode = false) {
       icon: '&#128229;',
       content: `<p style="color:var(--text-secondary);margin-bottom:16px">${t('onboarding.step.player.intro')}</p>
         <!-- 3.0: the fastest path to "a screen is playing something I chose" needs no hardware at all. -->
-        <div style="display:flex;gap:12px;align-items:center;background:var(--bg-input);border:1px solid var(--accent);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;background:var(--bg-input);border:1px solid var(--accent);border-radius:8px;padding:14px 16px;margin-bottom:12px">
           <div style="font-size:28px">&#128187;</div>
-          <div style="flex:1;min-width:0">
+          <div style="flex:1 1 200px;min-width:0">
             <div style="font-weight:600;font-size:14px">${t('onboarding.step.player.try_browser_title')}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${t('onboarding.step.player.try_browser_desc')}</div>
           </div>
-          <a href="/player" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="white-space:nowrap">${t('onboarding.step.player.try_browser_btn')}</a>
+          <a href="/player" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="white-space:nowrap;margin-left:auto">${t('onboarding.step.player.try_browser_btn')}</a>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
           <a href="/download/apk" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;text-decoration:none;color:var(--text-primary)">
@@ -121,7 +121,7 @@ function getSteps(addMode = false) {
       content: `<p style="color:var(--text-secondary);margin-bottom:16px">${t('onboarding.step.upload.intro')}</p>
         <div style="border:2px dashed var(--border);border-radius:12px;padding:32px;text-align:center;cursor:pointer" id="onboardUploadArea">
           <div style="font-size:32px;margin-bottom:8px">&#128193;</div>
-          <p style="color:var(--text-secondary)">${t('onboarding.step.upload.click_to_select')}</p>
+          <p style="color:var(--text-secondary)">${t(isTouchFirst() ? 'onboarding.step.upload.tap_to_select' : 'onboarding.step.upload.click_to_select')}</p>
           <p style="color:var(--text-muted);font-size:12px;margin-top:4px">${t('onboarding.step.upload.formats')}</p>
           <input type="file" id="onboardFileInput" style="display:none" accept="video/*,image/*,audio/*" multiple>
         </div>
