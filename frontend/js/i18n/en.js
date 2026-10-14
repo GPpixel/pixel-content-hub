@@ -832,6 +832,7 @@ export default {
   'simple.help.more': 'Need schedules, layouts, widgets, video walls or reports? They are in Advanced view, with a full guide for each.',
   'simple.help.more_btn': 'Open the full guides in Advanced view',
   'simple.menu.admin': 'Admin',
+  'simple.menu.change_server': 'Switch server',
   'simple.admin.update': 'ScreenTinker {latest} is available (this server runs {current}).',
   'simple.admin.update_how': 'How to update',
   'simple.menu.plan': 'Plan & billing',

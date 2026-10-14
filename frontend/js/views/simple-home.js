@@ -20,7 +20,7 @@ import { esc, screenshotUrl, hydrateAuthImages } from '../utils.js';
 import { showToast } from '../components/toast.js';
 import { setUiMode } from '../components/ui-mode.js';
 import { plansVisible } from '../components/plan-nudges.js';
-import { isPlatformAdmin } from '../utils.js';
+import { isPlatformAdmin, inManagerApp, openOutsideApp } from '../utils.js';
 import { renderStatsPrompt } from './dashboard.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
@@ -53,9 +53,14 @@ function shell(container, inner) {
         <details class="simple-account">
           <summary>${esc(u.name || u.email || '')}</summary>
           <div class="simple-account-menu">
-            ${isPlatformAdmin(u) ? `<a href="#/platform/overview">${esc(t('simple.menu.admin'))}</a>` : ''}
+            ${isPlatformAdmin(u) ? (inManagerApp()
+              ? `<button type="button" data-outside="/app#/platform/overview">${esc(t('simple.menu.admin'))} &#8599;</button>`
+              : `<a href="#/platform/overview">${esc(t('simple.menu.admin'))}</a>`) : ''}
             ${showPlan ? `<a href="#/billing">${esc(t('simple.menu.plan'))}</a>` : ''}
-            <a href="#/settings">${esc(t('simple.menu.settings'))}</a>
+            ${inManagerApp()
+              ? `<button type="button" data-outside="/app#/settings">${esc(t('simple.menu.settings'))} &#8599;</button>`
+              : `<a href="#/settings">${esc(t('simple.menu.settings'))}</a>`}
+            ${inManagerApp() && window.STManager ? `<button type="button" data-change-server>${esc(t('simple.menu.change_server'))}</button>` : ''}
             <a href="#/simple/help">${esc(t('simple.menu.help'))}</a>
             <button type="button" data-simple-signout>${esc(t('auth.sign_out'))}</button>
           </div>
@@ -64,6 +69,8 @@ function shell(container, inner) {
     </div>
     <div class="simple-page">${inner}</div>`;
   container.querySelector('[data-simple-mode="advanced"]').addEventListener('click', () => setUiMode('advanced'));
+  container.querySelectorAll('[data-outside]').forEach((b) => b.addEventListener('click', () => openOutsideApp(b.dataset.outside)));
+  container.querySelector('[data-change-server]')?.addEventListener('click', () => window.STManager.changeServer());
   container.querySelector('[data-simple-signout]').addEventListener('click', () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -396,7 +403,7 @@ async function renderChange(container, presetId) {
 // Task: upload photos (then choose screens)
 // ---------------------------------------------------------------------------------------------
 
-async function renderUpload(container) {
+async function renderUpload(container, presetIds = []) {
   let devices = [];
   let playlists = [];
   try { [devices, playlists] = await Promise.all([api.getDevices(), api.getPlaylists()]); } catch { devices = devices || []; }
@@ -473,6 +480,13 @@ async function renderUpload(container) {
         ${devices.length ? '' : `<a class="btn btn-secondary" href="#/add-screen">${esc(t('simple.task.add'))}</a>`}</div>` }));
   }
 
+  // Shared from the phone's Gallery (Manager app): the files are already uploaded; go straight to
+  // "which screens?".
+  if (presetIds.length) {
+    uploaded = presetIds.map((id) => ({ id }));
+    if (devices.length) screensStep(); else doneOnly(tn('simple.upload.saved', uploaded.length));
+    return;
+  }
   filesStep();
 }
 
@@ -537,6 +551,7 @@ function renderHelp(container) {
       <button type="button" class="btn btn-secondary" data-help-advanced>${esc(t('simple.help.more_btn'))}</button>
     </div>`);
   container.querySelector('[data-help-advanced]').addEventListener('click', async () => {
+    if (inManagerApp()) { openOutsideApp('/app#/switch-advanced?next=help'); return; }
     await setUiMode('advanced');
     window.location.hash = '#/help';
   });
@@ -580,7 +595,7 @@ export function render(container, hash = window.location.hash || '#/') {
   document.documentElement.classList.add('simple-shell');
   const q = new URLSearchParams(hash.split('?')[1] || '');
   if (hash.startsWith('#/simple/change')) return renderChange(container, q.get('device'));
-  if (hash.startsWith('#/simple/upload')) return renderUpload(container);
+  if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
   return renderHome(container);
 }

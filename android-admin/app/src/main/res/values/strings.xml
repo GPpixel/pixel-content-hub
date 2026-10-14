@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">Show on a screen</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">Change what your screens show, from your phone.</string>
+    <string name="server_question">Where is your ScreenTinker?</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">My own server</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">Connect</string>
+    <string name="server_checking">Checking %1$s…</string>
+    <string name="server_bad_url">Enter your server\'s address, like https://signage.example.com</string>
+    <string name="server_unreachable">Could not reach %1$s. Check the address and that this phone is on a network that can reach it.</string>
+    <string name="server_not_screentinker">%1$s did not answer like a ScreenTinker server.</string>
+    <string name="server_too_old">%1$s runs ScreenTinker %2$s. This app needs 3.0 or newer: ask whoever runs it to update.</string>
+    <string name="servers_title">Your servers</string>
+    <string name="servers_add">Add another server</string>
+    <string name="servers_in_use">In use</string>
+    <string name="servers_switch">Switch</string>
+    <string name="servers_remove">Remove</string>
+    <string name="servers_remove_confirm">Remove %1$s from this phone? Your account and screens there are not affected; you can add it again any time.</string>
+    <string name="cancel">Cancel</string>
+    <string name="server_already_added">%1$s is already in your list.</string>
+    <string name="uploading">Uploading %1$d file(s)…</string>
+    <string name="share_sign_in_first">Sign in first, then share your photos again.</string>
+    <string name="share_failed">Upload failed: %1$s</string>
+    <string name="offline">Can\'t reach your server. Check your connection and try again.</string>
+    <string name="retry">Try again</string>
+</resources>

@@ -17,8 +17,11 @@
 import { api } from '../api.js';
 import { t } from '../i18n.js';
 import { showToast } from './toast.js';
+import { inManagerApp, openOutsideApp } from '../utils.js';
 
 export function uiModeOf(user) {
+  // The Manager app is the Simple view by definition; the account's setting governs the browser.
+  if (inManagerApp()) return 'simple';
   return user && user.ui_mode === 'simple' ? 'simple' : 'advanced';
 }
 
@@ -67,6 +70,9 @@ export function applyUiMode(user) {
  */
 export async function setUiMode(next) {
   if (next !== 'simple' && next !== 'advanced') return;
+  // In the Manager app, Advanced is the full dashboard in the phone's browser (#/switch-advanced
+  // turns Advanced on for this account there, then lands on the dashboard).
+  if (inManagerApp()) { if (next === 'advanced') openOutsideApp('/app#/switch-advanced'); return; }
   if (next === (isSimpleMode() ? 'simple' : 'advanced')) return;
   try {
     const cached = JSON.parse(localStorage.getItem('user') || '{}');

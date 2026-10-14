@@ -26,7 +26,7 @@
       || hash === '#/no-workspace'
       || hash.indexOf('#/accept-invite/') === 0;
     // 3.0: Simple view's home and tasks have no sidebar either (views/simple-home.js).
-    var simple = user && user.ui_mode === 'simple';
+    var simple = (user && user.ui_mode === 'simple') || /\bScreenTinkerManager\//.test(navigator.userAgent || '');
     // Simple view never shows the sidebar (other pages get a back bar instead).
     if (simple && token) hidden = true;
     if (hidden) document.documentElement.classList.add('nav-pending');

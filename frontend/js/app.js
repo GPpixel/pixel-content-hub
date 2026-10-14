@@ -542,6 +542,14 @@ function route() {
     }
   }
 
+  // 3.0: the Manager app's "Advanced" lands here in the phone's browser: turn Advanced on for this
+  // account and go to the dashboard (or ?next=help). Never inside the app itself.
+  if (hash.startsWith('#/switch-advanced') && isAuthenticated()) {
+    const next = new URLSearchParams(hash.split('?')[1] || '').get('next') === 'help' ? '#/help' : '#/';
+    import('./components/ui-mode.js').then(({ setUiMode }) => setUiMode('advanced')).finally(() => { window.location.hash = next; });
+    return;
+  }
+
   // Onboarding for new users
   // 3.0: #/add-screen is the same guide, for every later screen (Simple view's Add screen).
   if ((hash === '#/onboarding' || hash === '#/add-screen') && isAuthenticated()) {

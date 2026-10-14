@@ -18,7 +18,7 @@
  */
 import { api } from '../api.js';
 import { t, tn } from '../i18n.js';
-import { isPlatformAdmin } from '../utils.js';
+import { isPlatformAdmin, inManagerApp } from '../utils.js';
 
 const BANNER_ID = 'trialBanner';
 const DISMISS_KEY = 'st.trialBanner.dismissed';
@@ -30,6 +30,9 @@ function cachedUser() {
 /** True when conversion UI may appear for this user at all. */
 export function plansVisible(user = cachedUser()) {
   if (!user || user.self_hosted || user.hide_billing) return false;
+  // Google Play's payments policy: no plan sales or upgrade prompts inside the Manager app. The
+  // same account sees them in a browser.
+  if (inManagerApp()) return false;
   if (String(user.id || '').includes(':')) return false; // support / recovery identities
   return true;
 }
@@ -127,6 +130,7 @@ function sponsorSnoozed() {
 
 export function sponsorBannerVisible(user) {
   if (!user || !user.self_hosted || !user.sponsor_prompt) return false;
+  if (inManagerApp()) return false; // Play policy: no donation asks in the app (Settings > About in a browser)
   if (!isPlatformAdmin(user) || String(user.id || '').includes(':')) return false;
   if (!user.onboarded_at) return false;
   if (/^#\/(onboarding|add-screen)/.test(window.location.hash || '')) return false;
