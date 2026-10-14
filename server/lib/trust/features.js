@@ -36,6 +36,8 @@ const FEATURES = {
   sso:              { category: 'identity' },
   storage:          { category: 'infrastructure' },
   mesh:             { category: 'infrastructure' },
+  site_cache:       { category: 'infrastructure' },
+  migrate:          { category: 'integrations' },
   scale_out:        { category: 'infrastructure' },
   live_video:       { category: 'infrastructure' },
   telemetry:        { category: 'platform' },
@@ -83,7 +85,7 @@ const PREFIXES = [
   ['lib/data-sources/', 'data_sources'], ['lib/plugins/', 'plugins'], ['lib/social/', 'social'],
   ['lib/rooms/', 'rooms'], ['lib/cap/', 'cap_feeds'], ['lib/bi/', 'bi'], ['lib/alerts/', 'alert_channels'],
   ['lib/screen-verify/', 'alert_channels'], ['lib/automation/', 'automation'], ['lib/templates/', 'template_catalog'],
-  ['lib/mesh/', 'mesh'], ['lib/storage/', 'storage'], ['lib/mcp/', 'mcp'],
+  ['lib/mesh/', 'mesh'], ['lib/site-cache/', 'site_cache'], ['lib/migrate/', 'migrate'], ['lib/storage/', 'storage'], ['lib/mcp/', 'mcp'],
 ];
 
 // SDKs that make their own requests from their own promise chains.

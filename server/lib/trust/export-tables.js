@@ -182,6 +182,8 @@ const EXPORTED = {
   experiment_units: { category: 'playlists', scope: via('experiment_id', 'experiments') },
   experiment_exposure: { category: 'proof_of_play', scope: via('experiment_id', 'experiments') },
   experiment_outcomes: { category: 'proof_of_play', scope: via('experiment_id', 'experiments') },
+  // switch to ScreenTinker (3.0): screens imported from another system, waiting to be paired
+  migration_screens: { category: 'devices', scope: ws() },
   // the audit trail
   activity_log: { category: 'audit', scope: { audit: true } },
   // what the server contacted on the organization's behalf (host level, lib/outbound-ledger.js)
@@ -192,6 +194,10 @@ const EXPORTED = {
 // at all (transient state a restart would rebuild). Each one says why.
 const EXCLUDED = {
   app_settings: 'instance configuration, not an organization\'s',
+  site_caches: 'a site cache box and the credential it signs in with: set the box up again on the new server (docs/site-cache.md)',
+  site_cache_assignments: 'which screens use a site cache box: follows site_caches',
+  migration_jobs: 'import jobs from another signage system: transient, and may still hold an encrypted source credential',
+  migration_items: 'an import\'s source-to-ScreenTinker id map, only used to make re-running an import safe',
   schema_migrations: 'database bookkeeping',
   plans: 'the instance\'s plan catalog',
   promotions: 'the instance\'s promotions',

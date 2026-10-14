@@ -184,6 +184,23 @@ const INTEGRATIONS = [
     },
   },
   {
+    // 3.0 site cache: a box on the customer's own network holds copies of their media.
+    id: 'site_cache', level: 'org', customerData: true,
+    status(ctx) {
+      const sc = wsScope(ctx);
+      const n = count(ctx, 'site_caches', 'enabled = 1', sc);
+      return { enabled: n > 0, count: n, hosts: hostsFrom(ctx, 'SELECT lan_url AS u FROM site_caches WHERE enabled = 1', sc) };
+    },
+  },
+  {
+    // 3.0 switch to ScreenTinker: an import pulls from the other vendor with the key the person pasted.
+    id: 'migrate', level: 'org', customerData: false,
+    status(ctx) {
+      const n = count(ctx, 'migration_jobs', "status NOT IN ('done','failed','cancelled')", wsScope(ctx));
+      return { enabled: n > 0, count: n, hosts: [] };
+    },
+  },
+  {
     id: 'weather', level: 'org', customerData: false,
     status(ctx) {
       const n = count(ctx, 'data_sources', "type = 'weather'", wsScope(ctx));
