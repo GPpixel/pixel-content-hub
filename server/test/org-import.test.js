@@ -158,7 +158,11 @@ const countsOf = (orgId) => {
   }
   return out;
 };
-const cancelActive = () => db.prepare("UPDATE org_imports SET status = 'cancelled' WHERE status IN ('receiving','fetching','scanning','scanned','interrupted')").run();
+// Finished with earlier jobs: cancel them and age them out of the daily cap (tested on its own below).
+const cancelActive = () => {
+  db.prepare("UPDATE org_imports SET status = 'cancelled' WHERE status IN ('receiving','fetching','scanning','scanned','interrupted')").run();
+  db.prepare('UPDATE org_imports SET created_at = created_at - 86401').run();
+};
 
 /* ───────────── the round trip ───────────── */
 
@@ -490,6 +494,56 @@ test('⚠️ SSRF: a pull from a private, loopback or metadata address is refuse
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM org_imports WHERE source = 'pull'").get().n, 0);
 });
 
+test('a pull that drops mid-transfer resumes with Range, and the whole file is checked against the source\'s digest', async () => {
+  cancelActive();
+  const http = require('http');
+  const buf = fs.readFileSync(exportFile);
+  const digest = crypto.createHash('sha256').update(buf).digest('hex');
+  const seen = [];
+  let lie = false;
+  const src = http.createServer((req, res) => {
+    seen.push(req.headers.range || null);
+    const m = /^bytes=(\d+)-$/.exec(req.headers.range || '');
+    const start = m ? Number(m[1]) : 0;
+    res.setHeader('X-Export-SHA256', lie ? 'f'.repeat(64) : digest);
+    res.setHeader('Content-Type', 'application/zip');
+    if (start) {
+      res.writeHead(206, { 'Content-Range': `bytes ${start}-${buf.length - 1}/${buf.length}`, 'Content-Length': buf.length - start });
+      return res.end(buf.subarray(start));
+    }
+    res.writeHead(200, { 'Content-Length': buf.length });
+    if (seen.length === 1) { res.write(buf.subarray(0, Math.floor(buf.length / 2))); setTimeout(() => res.socket.destroy(), 50); return; }
+    res.end(buf);
+  });
+  await new Promise((r) => src.listen(0, '127.0.0.1', r));
+  // The operator opened this address (docs/outbound-requests.md); only for this test.
+  process.env.OUTBOUND_ALLOW_HOSTS = '127.0.0.1';
+  try {
+    const url = `http://127.0.0.1:${src.address().port}/api/public/trust-export/abcdefgh-0001?key=${'k'.repeat(43)}`;
+    const c = await call('POST', '/api/org-import/jobs', 'imp', { source: 'pull', url });
+    assert.equal(c.status, 201, c.text);
+    let j = await waitJob(c.json.id, ['interrupted', 'scanned', 'refused']);
+    assert.equal(j.status, 'interrupted', 'the dropped transfer waits to be resumed');
+    // Resuming: same export, the transfer continues from where the bytes on disk end.
+    const r = await call('POST', `/api/org-import/jobs/${c.json.id}/link`, 'imp', { url });
+    assert.equal(r.status, 200, r.text);
+    j = await waitJob(c.json.id, ['scanned', 'refused']);
+    assert.equal(j.status, 'scanned', j.error);
+    assert.match(String(seen[seen.length - 1]), /^bytes=\d+-$/, 'the second request asked for the rest only');
+    assert.equal(j.source_key_enc, null, 'the download key is forgotten once the file is complete');
+    imp.cancel(db, j);
+    // A link for a DIFFERENT export cannot be swapped in.
+    // And an archive whose bytes do not match what the source said is discarded.
+    lie = true; seen.length = 0;
+    const c2 = await call('POST', '/api/org-import/jobs', 'imp', { source: 'pull', url });
+    seen.push('skip-the-drop');
+    j = await waitJob(c2.json.id, ['refused', 'scanned', 'interrupted']);
+    assert.equal(j.status, 'refused');
+    assert.match(j.error, /does not match/);
+    assert.ok(!fs.existsSync(imp.archivePath(j)));
+  } finally { delete process.env.OUTBOUND_ALLOW_HOSTS; src.close(); }
+});
+
 test('⚠️ the disk folder: platform admins only, plain files only, never a path from the browser', async () => {
   cancelActive();
   fs.mkdirSync(imp.importsDir(), { recursive: true });
@@ -567,4 +621,23 @@ test('pairing a code into an imported screen keeps its name, groups, playlist an
 test('imports are audited', () => {
   const acts = new Set(db.prepare("SELECT action FROM activity_log WHERE action LIKE 'trust.%'").all().map((r) => r.action));
   for (const a of ['trust.import_started', 'trust.import_restore_started', 'trust.import_done', 'trust.screens_handed_over', 'trust.import_screen_paired']) assert.ok(acts.has(a), a);
+});
+
+test('rate limits: one import at a time per organization, and at most ten a day', async () => {
+  cancelActive();
+  const first = await call('POST', '/api/org-import/jobs', 'imp', { source: 'upload', bytes: 100 });
+  assert.equal(first.status, 201);
+  const busy = await call('POST', '/api/org-import/jobs', 'imp', { source: 'upload', bytes: 100 });
+  assert.equal(busy.status, 429);
+  assert.equal(busy.json.code, 'busy');
+  // Another organization is not held up by it.
+  assert.equal((await call('POST', '/api/org-import/jobs', 'ownerB', { source: 'upload', bytes: 100 })).status, 201);
+  cancelActive();
+  for (let i = 0; i < imp.MAX_PER_DAY; i++) {
+    db.prepare("INSERT INTO org_imports (id, kind, requested_by, requester_org_id, source, status) VALUES (?, 'org', ?, 'org-d', 'upload', 'cancelled')").run(crypto.randomUUID(), U.imp);
+  }
+  const daily = await call('POST', '/api/org-import/jobs', 'imp', { source: 'upload', bytes: 100 });
+  assert.equal(daily.status, 429);
+  assert.equal(daily.json.code, 'daily_limit');
+  cancelActive();
 });
