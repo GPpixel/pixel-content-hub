@@ -103,6 +103,37 @@ test('⚠️ every table in the database is either exported (with a category) or
   for (const [t, why] of Object.entries(tables.EXCLUDED)) assert.ok(typeof why === 'string' && why.length > 5, `${t}: give a reason`);
 });
 
+test('⚠️ import side: every exported table is restored by an organization import or not restored with a reason', () => {
+  const importTables = require('../lib/trust/import-tables');
+  for (const t of Object.keys(tables.EXPORTED)) {
+    const d = importTables.decision(t, { instance: false });
+    assert.ok(d, `Decide in lib/trust/import-tables.js whether an import restores ${t} (RESTORED) or not, and why (NOT_RESTORED / ORG_IMPORT_SKIPS)`);
+    if (!d.restore) assert.ok(typeof d.reason === 'string' && d.reason.length > 10, `${t}: give the reason it is not restored`);
+    const w = importTables.decision(t, { instance: true });
+    assert.ok(w, `${t}: undecided for a whole-server restore`);
+  }
+  for (const t of [...Object.keys(importTables.RESTORED), ...Object.keys(importTables.ORG_IMPORT_SKIPS), ...Object.keys(importTables.NOT_RESTORED)]) {
+    assert.ok(tables.EXPORTED[t], `${t} is in lib/trust/import-tables.js but the export does not carry it`);
+  }
+});
+
+test('⚠️ import side: every id-like column of a restored table is a scope, a reference, an external id or a person', () => {
+  const importTables = require('../lib/trust/import-tables');
+  const unclassified = [];
+  for (const t of Object.keys(tables.EXPORTED)) {
+    const d = importTables.decision(t, { instance: true });
+    if (!d || !d.restore) continue;
+    const fks = new Set(db.prepare(`PRAGMA foreign_key_list(${t})`).all().map((f) => f.from));
+    const refs = importTables.REFS[t] || {};
+    for (const c of db.prepare(`PRAGMA table_info(${t})`).all()) {
+      if (!/_id$|_ref$/.test(c.name)) continue;
+      if (importTables.SCOPE_COLUMNS.has(c.name) || importTables.USER_COLUMNS.has(c.name) || fks.has(c.name) || c.name in refs || importTables.INT_REFS[`${t}.${c.name}`]) continue;
+      unclassified.push(`${t}.${c.name}`);
+    }
+  }
+  assert.deepEqual(unclassified, [], `Classify these in lib/trust/import-tables.js REFS (a table, '*', 'external' or null): ${unclassified.join(', ')}`);
+});
+
 test('every exported table\'s scope builds a query that runs', () => {
   for (const t of Object.keys(tables.EXPORTED)) {
     const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(t);
@@ -263,4 +294,28 @@ test('the export list shows a person their own jobs, and the org\'s only to its 
   const admin = await call('GET', '/api/trust/exports', 'ownerA');
   assert.ok(admin.json.organization.length >= 0);
   assert.ok(admin.json.limits.per_day === exporter.MAX_PER_DAY);
+});
+
+test('the org export lists the SHA-256 of every entry, and the download sends the whole archive\'s', async () => {
+  resetExports();
+  const r = await call('POST', '/api/trust/exports', 'ownerA', { kind: 'org' });
+  assert.equal(await waitReady(r.json.id), 'ready');
+  const l = await call('POST', `/api/trust/exports/${r.json.id}/link`, 'ownerA');
+  const d = await call('GET', l.json.url, null);
+  const crypto = require('crypto');
+  assert.equal(d.headers.get('x-export-sha256'), crypto.createHash('sha256').update(d.buf).digest('hex'));
+  assert.equal(d.headers.get('accept-ranges'), 'bytes');
+  const z = await unzip(d.buf);
+  const m = JSON.parse(z['manifest.json']);
+  assert.equal(m.integrity.algorithm, 'sha256');
+  for (const name of Object.keys(z)) {
+    if (name === 'manifest.json') continue;
+    assert.ok(m.integrity.entries[name], `${name} has no digest`);
+    assert.equal(m.integrity.entries[name].sha256, crypto.createHash('sha256').update(Buffer.from(z[name], 'utf8')).digest('hex'), `${name} digest`);
+  }
+  // A ranged request resumes from the middle.
+  const headers = { Range: 'bytes=10-' };
+  const part = await fetch(`http://127.0.0.1:${server.address().port}${l.json.url}`, { headers });
+  assert.equal(part.status, 206);
+  assert.equal(Buffer.from(await part.arrayBuffer()).compare(d.buf.subarray(10)), 0);
 });

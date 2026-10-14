@@ -3247,6 +3247,67 @@ const migrations = [
   'ALTER TABLE ai_settings ADD COLUMN stt_base_url TEXT',
   'ALTER TABLE ai_settings ADD COLUMN stt_model TEXT',
   'ALTER TABLE ai_settings ADD COLUMN stt_api_key_enc TEXT',
+  /*
+   * 3.0: move an organization to another server (lib/trust/import.js, docs/move-server.md).
+   *
+   * data_exports.sha256: the whole archive's digest, sent with the download so a server pulling it
+   * can check every byte arrived.
+   * org_imports: one import job — receiving the archive (pulled, uploaded or picked from
+   *   DATA_DIR/imports), its scan, and the restore's cursor (`progress`), which is written in the
+   *   same transaction as each batch of rows, so a restart resumes exactly where it stopped.
+   * org_import_ids: the job's old-to-new id map. Resuming needs every id the earlier batches chose.
+   * instance_exports: the platform admin's whole-server bundles (data_exports' kind is fixed to
+   *   org/user by its CHECK, so they have their own table with the same rules).
+   */
+  'ALTER TABLE data_exports ADD COLUMN sha256 TEXT',
+  `CREATE TABLE IF NOT EXISTS org_imports (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL DEFAULT 'org',
+     parent_id TEXT,
+     organization_id TEXT,
+     requested_by TEXT NOT NULL,
+     requester_org_id TEXT,
+     source TEXT NOT NULL,
+     source_url TEXT,
+     source_key_enc TEXT,
+     source_sha256 TEXT,
+     file_name TEXT,
+     declared_bytes INTEGER,
+     status TEXT NOT NULL,
+     progress TEXT,
+     scan TEXT,
+     options TEXT,
+     result TEXT,
+     error TEXT,
+     created_org INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     finished_at INTEGER)`,
+  'CREATE INDEX IF NOT EXISTS idx_org_imports_org ON org_imports(organization_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_org_imports_requester ON org_imports(requested_by, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_org_imports_parent ON org_imports(parent_id)',
+  `CREATE TABLE IF NOT EXISTS org_import_ids (
+     job_id TEXT NOT NULL,
+     tbl TEXT NOT NULL,
+     old_id TEXT NOT NULL,
+     new_id TEXT NOT NULL,
+     PRIMARY KEY (job_id, tbl, old_id))`,
+  `CREATE TABLE IF NOT EXISTS instance_exports (
+     id TEXT PRIMARY KEY,
+     user_id TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'queued',
+     options TEXT,
+     file_name TEXT,
+     bytes INTEGER,
+     sha256 TEXT,
+     manifest TEXT,
+     error TEXT,
+     download_hash TEXT,
+     downloads INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     started_at INTEGER,
+     finished_at INTEGER,
+     expires_at INTEGER)`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
@@ -4846,6 +4907,19 @@ migrationStep('version history baseline', () => {
     }
     db.prepare('INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)').run(BASELINE_ID);
   }
+});
+
+/*
+ * 3.0 move an organization to another server (lib/trust/import.js): an imported member arrives as a
+ * pending invite. workspace_invites is created by the multitenancy phase, after the migrations
+ * array, so its columns are added here. org_role: the organization role accepting the invite also
+ * grants (routes/auth.js accept-invite); org_only: they had no workspace membership of their own,
+ * so accepting adds only the organization role; import_job_id: which import created it.
+ */
+migrationStep('organization import invites', () => {
+  try { db.prepare('ALTER TABLE workspace_invites ADD COLUMN org_role TEXT').run(); } catch (_) { /* present */ }
+  try { db.prepare('ALTER TABLE workspace_invites ADD COLUMN org_only INTEGER NOT NULL DEFAULT 0').run(); } catch (_) { /* present */ }
+  try { db.prepare('ALTER TABLE workspace_invites ADD COLUMN import_job_id TEXT').run(); } catch (_) { /* present */ }
 });
 
 // De-duplicate built-in template zones. A prior layout-editor save regenerated

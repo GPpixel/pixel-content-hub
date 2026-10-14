@@ -1459,6 +1459,8 @@ app.use('/api/public/requests', rateLimit(60000, 1500), require('./routes/reques
     res.sendFile(path.join(config.frontendDir, 'trust.html'));
   }));
   app.get('/api/public/trust-export/:id', rateLimit(60000, 20), trustRoutes.download);
+  // 3.0 whole-server export (routes/org-import.js): the same rules, for a platform admin's bundle.
+  app.get('/api/public/instance-export/:id', rateLimit(60000, 20), require('./routes/org-import').instanceDownload);
 }
 /*
  * View-only display access (lib/view-access.js, routes/view.js): /view/<token> and the network-only
@@ -1549,6 +1551,22 @@ app.use('/api/status/import', rateLimit(60000, 3)); // 3 imports per minute
 // database (lib/trust/export.js); these only stop a client hammering the endpoints.
 app.use('/api/trust/exports', rateLimit(60000, 20));
 app.use('/api/trust/org-deletion', rateLimit(60000, 10));
+/*
+ * 3.0 organization import (routes/org-import.js). An uploaded archive arrives as many chunk PATCHes
+ * (8 MB each), so those get the upload-session budget; everything else — starting jobs, restoring,
+ * the screen handover, pairing into an imported screen — stays tight. The per-day cap per
+ * organization lives in the database (lib/trust/import.js).
+ */
+{
+  const importChunks = rateLimit(60000, 600);
+  const importOps = rateLimit(60000, 30);
+  app.use('/api/org-import', (req, res, next) => {
+    const p = (req.originalUrl || req.url || '').split('?')[0].replace(/\/+$/, '');
+    if (req.method === 'PATCH' && /^\/api\/org-import\/jobs\/[^/]+\/upload$/.test(p)) return importChunks(req, res, next);
+    if (req.method === 'GET' || req.method === 'HEAD') return next();
+    return importOps(req, res, next);
+  });
+}
 /*
  * ⚠️ A CHUNKED UPLOAD IS MANY REQUESTS BY CONSTRUCTION, so it cannot share the general content
  * budget. At the 1 MiB chunk size (lib/upload-session) a 500 MB file is ~500 PATCHes, and on a
@@ -2883,6 +2901,9 @@ try { require('./services/freshness-digest').startFreshnessDigest(); } catch (e)
 // 3.0 complete exports and scheduled organization deletions (lib/trust): resume queued exports,
 // expire old archives, carry out deletions whose grace period has passed. Hourly or slower.
 try { require('./lib/trust/export').start(); require('./lib/trust/org-deletion').start(); } catch (e) { console.warn(`[trust] background jobs not scheduled: ${e && e.message}`); }
+// 3.0 organization imports and whole-server exports (lib/trust/import.js, instance-export.js): a
+// restart resumes a pull, a scan or a restore where it stopped.
+try { require('./lib/trust/import').start(); require('./lib/trust/instance-export').start(); } catch (e) { console.warn(`[import] background jobs not scheduled: ${e && e.message}`); }
 
 // Off-main-thread WAL checkpointer: disables inline auto-checkpoint on the main connection
 // (the ~60s p99 spike = a synchronous fsync-heavy checkpoint on the loop) and runs PASSIVE

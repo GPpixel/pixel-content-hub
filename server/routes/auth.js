@@ -1224,12 +1224,23 @@ router.post('/accept-invite/:inviteId', requireAuth, (req, res) => {
   const existing = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
     .get(ws.id, req.user.id);
 
+  /*
+   * 3.0 organization import (lib/trust/import.js): a member of the imported organization carries the
+   * organization role they had (org_role), and one who had no workspace of their own (org_only)
+   * gets only that. Never a promotion: an existing organization membership is left as it is, the
+   * same rule as the workspace membership above. Nothing else about the account changes.
+   */
+  const orgRole = ['org_owner', 'org_admin', 'org_member'].includes(invite.org_role) ? invite.org_role : null;
   const txn = db.transaction(() => {
-    if (!existing) {
+    if (!existing && !(orgRole && invite.org_only)) {
       db.prepare(`
         INSERT INTO workspace_members (workspace_id, user_id, role, invited_by)
         VALUES (?, ?, ?, ?)
       `).run(ws.id, req.user.id, invite.role, invite.invited_by);
+    }
+    if (orgRole) {
+      db.prepare('INSERT OR IGNORE INTO organization_members (organization_id, user_id, role, invited_by) VALUES (?, ?, ?, ?)')
+        .run(ws.organization_id, req.user.id, orgRole, invite.invited_by);
     }
     db.prepare('DELETE FROM workspace_invites WHERE id = ?').run(invite.id);
   });
