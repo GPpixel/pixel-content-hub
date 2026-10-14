@@ -2883,3 +2883,44 @@ html.simple-shell .trial-banner { padding-left: 16px; justify-content: center; }
   .simple-person { grid-template-columns: 1fr auto; }
   .simple-person-role { grid-column: 1; grid-row: 2; }
 }
+
+/* 3.0 content freshness: chips on cards (js/components/freshness-chips.js) and the report page (js/views/freshness.js) */
+.fresh-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 6px; vertical-align: middle; }
+.fresh-chip {
+  display: inline-flex; align-items: center; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 10px;
+  white-space: nowrap; cursor: help; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-secondary);
+}
+.fresh-chip-stale, .fresh-chip-out_of_season { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.fresh-chip-very_stale, .fresh-chip-past_date, .fresh-chip-expired_assigned {
+  color: #fca5a5; background: color-mix(in srgb, var(--danger) 14%, transparent); border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.lib-card-meta .fresh-chips, .lib-col-name .fresh-chips { margin-left: 0; margin-top: 3px; display: flex; }
+.fresh-chips-row { display: flex; margin: -4px 0 10px; }
+.fresh-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.fresh-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; }
+.fresh-tile-value { font-size: 24px; font-weight: 700; color: var(--text-primary); }
+.fresh-tile-label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.fresh-tile-warn .fresh-tile-value { color: var(--warning); }
+.fresh-tile-bad .fresh-tile-value { color: var(--danger); }
+.fresh-h2 { font-size: 16px; margin: 24px 0 10px; }
+.fresh-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 16px; margin-bottom: 10px; }
+.fresh-row-main { min-width: 0; flex: 1 1 320px; }
+.fresh-row-main strong { word-break: break-word; }
+.fresh-why { margin: 6px 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
+.fresh-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-start; }
+.fresh-snooze { width: auto; padding: 4px 8px; font-size: 12px; min-height: 30px; }
+.fresh-expiry { flex-basis: 100%; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.fresh-expiry[hidden] { display: none; }
+.fresh-expiry .input { width: auto; margin-left: 6px; }
+.fresh-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.fresh-line:last-child { border-bottom: 0; }
+.fresh-status { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--bg-input); color: var(--text-secondary); }
+.fresh-status-stale { color: var(--warning); }
+.fresh-status-very_stale { color: var(--danger); }
+.fresh-status-fresh { color: var(--success); }
+.fresh-snoozed { margin-top: 18px; }
+.fresh-snoozed summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; margin-bottom: 8px; }
+.fresh-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: end; }
+.fresh-settings label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.fresh-settings label.fresh-check, .fresh-check { flex-direction: row; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); }
+.simple-fresh { margin-bottom: 18px; border-color: color-mix(in srgb, var(--success) 40%, transparent); }

@@ -487,6 +487,19 @@ export const api = {
   getContentItem: (id) => request(`/content/${id}`),
   deleteContent: (id) => request(`/content/${id}`, { method: 'DELETE' }),
   updateContent: (id, data) => request(`/content/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  /*
+   * 3.0 content freshness (routes/freshness.js). The page's one-click actions (replace, remove, set
+   * an expiry) are NOT here: they use updateContent and the library's own replace, so approval and
+   * publishing apply exactly as they do from the library.
+   */
+  getFreshness: () => request('/freshness'),
+  getFreshnessChips: () => request('/freshness/chips'),
+  updateFreshnessSettings: (data) => request('/freshness/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  snoozeFreshness: (type, id, days) => request('/freshness/snooze', { method: 'POST', body: JSON.stringify({ type, id, days }) }),
+  unsnoozeFreshness: (type, id) => request(`/freshness/snooze/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getFreshnessDigest: () => request('/freshness/digest'),
+  setFreshnessDigest: (enabled) => request('/freshness/digest', { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
   moveContent: (id, folderId) => request(`/content/${id}`, {
     method: 'PUT',
     body: JSON.stringify({ folder_id: folderId })

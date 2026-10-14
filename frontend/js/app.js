@@ -25,6 +25,8 @@ import * as capFeeds from './views/cap-feeds.js';
 import * as automation from './views/automation.js';
 import * as corporate from './views/corporate.js';
 import * as activity from './views/activity.js';
+import * as freshness from './views/freshness.js';
+import { installFreshnessChips } from './components/freshness-chips.js';
 import * as kiosk from './views/kiosk.js';
 import * as onboarding from './views/onboarding.js';
 import * as help from './views/help.js';
@@ -262,6 +264,7 @@ const NAV_LABEL_KEYS = {
   kiosk: 'nav.kiosk',
   designer: 'nav.designer',
   activity: 'nav.activity',
+  freshness: 'nav.freshness',
   teams: 'nav.teams',
   members: 'nav.members',
   help: 'nav.help',
@@ -630,6 +633,7 @@ function route() {
     else if (hash === '#/reports' && link.dataset.view === 'reports') link.classList.add('active');
     else if (hash === '#/audience' && link.dataset.view === 'audience') link.classList.add('active');
     else if (hash === '#/activity' && link.dataset.view === 'activity') link.classList.add('active');
+    else if ((hash === '#/freshness' || hash.startsWith('#/freshness?')) && link.dataset.view === 'freshness') link.classList.add('active');
     else if ((hash === '#/designer' || hash.startsWith('#/designer/')) && link.dataset.view === 'designer') link.classList.add('active');
     else if ((hash === '#/kiosk' || hash.startsWith('#/kiosk/')) && link.dataset.view === 'kiosk') link.classList.add('active');
     else if (hash === '#/help' && link.dataset.view === 'help') link.classList.add('active');
@@ -719,6 +723,10 @@ function route() {
   } else if (hash === '#/reports') {
     currentView = reports;
     reports.render(app);
+  } else if (hash === '#/freshness' || hash.startsWith('#/freshness?')) {
+    // 3.0 content freshness: what is going stale, worst first (?ws= from the weekly digest).
+    currentView = freshness;
+    freshness.render(app);
   } else if (hash === '#/audience') {
     currentView = audience;
     audience.render(app);
@@ -1180,6 +1188,8 @@ if (isAuthenticated()) {
   }, 60000);
 }
 window.addEventListener('hashchange', route);
+// 3.0 content freshness: "Stale" / "Mentions a past date" chips on screen, playlist and content cards.
+installFreshnessChips(app);
 // 3.0: Simple and Advanced render #/ differently, so a view switch re-routes the current page.
 window.addEventListener('st:ui-mode', () => { if (isAuthenticated()) route(); });
 enableHelpTips();

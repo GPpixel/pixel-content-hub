@@ -2718,6 +2718,9 @@ startDunning(io);
 // #73: agency-upload digest flush (batched draft/published notifications to admins + owner)
 const { startAgencyDigest } = require('./services/agency-digest');
 startAgencyDigest();
+// 3.0 content freshness: the weekly "what is going stale" digest. Daily check at 09:00 UTC, once a
+// week per person; does nothing without a mail transport and APP_URL (services/freshness-digest.js).
+try { require('./services/freshness-digest').startFreshnessDigest(); } catch (e) { console.warn(`[freshness] digest not scheduled: ${e && e.message}`); }
 
 // Off-main-thread WAL checkpointer: disables inline auto-checkpoint on the main connection
 // (the ~60s p99 spike = a synchronous fsync-heavy checkpoint on the loop) and runs PASSIVE

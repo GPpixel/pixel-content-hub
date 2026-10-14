@@ -244,6 +244,10 @@ export function render(container) {
   });
   document.getElementById('libAddBtn').addEventListener('click', () => openAdd());
 
+  // #/content?open=<id> opens that item in the inspector (the Freshness page's "Replace" lands here).
+  const openParam = new URLSearchParams(window.location.hash.split('?')[1] || '').get('open');
+  if (openParam && /^[\w-]{1,64}$/.test(openParam)) state.openId = openParam;
+
   renderNav();
   renderChrome();
   loadContent();

@@ -171,6 +171,12 @@ const JWT_ONLY_ROUTERS = [
    * repoint every store's screens. Authoring is a signed-in human action.
    */
   { path: '/api/corporate',   mod: './routes/corporate',    tenancy: true },
+  /*
+   * Content freshness (lib/freshness.js): the stale-content report, thresholds, snoozes and the
+   * caller's own weekly-digest preference. JWT only: the digest preference is a person's, and the
+   * report is a dashboard surface, not an integration one.
+   */
+  { path: '/api/freshness',   mod: './routes/freshness',    tenancy: true },
 ];
 
 // #73: AGENCY_ROUTERS - capability-restricted ('agency' scope) surface. Mounted with
