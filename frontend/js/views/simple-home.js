@@ -24,6 +24,7 @@ import { isPlatformAdmin, inManagerApp, openOutsideApp, isTouchFirst } from '../
 import { renderStatsPrompt } from './dashboard.js';
 import { publishOrSubmit } from '../components/release.js';
 import { switchWorkspaceTo } from '../components/corporate-ui.js';
+import { mountStockPicker } from '../components/stock-picker.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -502,6 +503,8 @@ async function renderChange(container, presetId) {
           </div>
           <div class="simple-library-grid" data-library-grid></div>
         </div>
+        <!-- Free stock photos (components/stock-picker.js): hidden when the server has no provider key. -->
+        <div class="simple-stock" data-stock hidden></div>
         ${others.length ? `
         <div class="simple-sameas">
           <label for="simpleSameAs">${esc(t('onboarding.step.upload.same_as_label'))}</label>
@@ -534,6 +537,18 @@ async function renderChange(container, presetId) {
     });
     container.querySelector('[data-sample]').addEventListener('click', async () => {
       try { go([await sampleFile()]); } catch { fail(new Error(t('onboarding.toast.sample_failed'))); }
+    });
+    mountStockPicker(container.querySelector('[data-stock]'), {
+      collapsed: true,
+      addLabel: (n) => (n ? tn('simple.library.use_n', n) : t('simple.library.use')),
+      onAdded: async (rows) => {
+        busy(t('simple.working'));
+        try {
+          const ids = rows.map((c) => c.id);
+          const r = await showOnScreen(device, ids, how, { devices, playlists });
+          doneStep(r.review ? t('simple.done.review', { name: device.name }) : tn('simple.done.shown', ids.length, { name: device.name }), r.review);
+        } catch (err) { fail(err); }
+      },
     });
     container.querySelector('[data-sameas]')?.addEventListener('click', async () => {
       const p = others.find((x) => x.id === container.querySelector('#simpleSameAs').value);
@@ -577,8 +592,18 @@ async function renderUpload(container, presetIds = []) {
           <p>${esc(t(isTouchFirst() ? 'onboarding.step.upload.tap_to_select' : 'onboarding.step.upload.click_to_select'))}</p>
           <input type="file" data-file multiple accept="${ACCEPT}" hidden>
         </div>
+        <div class="simple-stock" data-stock hidden></div>
         <p class="simple-status" data-status></p>` }));
     const status = container.querySelector('[data-status]');
+    // Free stock photos: added to the library like an upload, then the same "which screens?" step.
+    mountStockPicker(container.querySelector('[data-stock]'), {
+      collapsed: true,
+      onAdded: (rows) => {
+        uploaded = rows.filter((c) => c && c.id);
+        if (devices.length) screensStep();
+        else doneOnly(tn('simple.upload.saved', uploaded.length));
+      },
+    });
     wireDrop(container.querySelector('[data-drop]'), container.querySelector('[data-file]'), async (files) => {
       status.textContent = tn('simple.uploading', files.length);
       try {

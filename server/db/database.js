@@ -2515,6 +2515,13 @@ const migrations = [
      workspace_id TEXT,
      challenge TEXT NOT NULL,
      expires_at INTEGER NOT NULL)`,
+  /*
+   * 3.0: free stock photos and videos (lib/stock-media.js). Where a library item came from when it
+   * was added from Pexels or Pixabay: provider, item id, photographer, licence. JSON; NULL for every
+   * other item. A column of its own rather than `meta`, because meta is the operator's to edit and
+   * is copied to players, and a credit is neither.
+   */
+  'ALTER TABLE content ADD COLUMN attribution TEXT',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

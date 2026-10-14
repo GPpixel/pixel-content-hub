@@ -353,6 +353,21 @@ export const api = {
   get: (path) => request(path),
   post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
 
+  // Free stock photos and videos (server routes/stock-media.js). The provider keys stay on the
+  // server: the browser only ever sees results and the library items an import creates.
+  stockStatus: () => request('/stock/status'),
+  stockSearch: ({ provider = '', type = 'photo', q = '', page = 1, orientation = '' } = {}) => {
+    const p = new URLSearchParams({ type, q, page: String(page) });
+    if (provider) p.set('provider', provider);
+    if (orientation) p.set('orientation', orientation);
+    return request(`/stock/search?${p.toString()}`);
+  },
+  stockImport: ({ provider, type, id, folderId = null }) => request('/stock/import',
+    { method: 'POST', body: JSON.stringify({ provider, type, id, ...(folderId ? { folder_id: folderId } : {}) }) }),
+  adminGetStockKeys: () => request('/stock/settings'),
+  adminSetStockKey: (provider, key) => request('/stock/settings', { method: 'PUT', body: JSON.stringify({ provider, key }) }),
+  adminTestStockKey: (provider) => request('/stock/settings/test', { method: 'POST', body: JSON.stringify({ provider }) }),
+
   // Triggers: the listener settings, and the secret. Separate calls because they are separate
   // decisions — rotating the credential that lets a LAN datagram change a screen must not be a
   // side effect of editing a port number.
