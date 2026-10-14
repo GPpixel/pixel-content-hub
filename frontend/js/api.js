@@ -368,6 +368,20 @@ export const api = {
   adminSetStockKey: (provider, key) => request('/stock/settings', { method: 'PUT', body: JSON.stringify({ provider, key }) }),
   adminTestStockKey: (provider) => request('/stock/settings/test', { method: 'POST', body: JSON.stringify({ provider }) }),
 
+  // 3.0 switch to ScreenTinker (server routes/migrate.js). The other vendor's key goes up once, in
+  // the connect (or resume) body, and is never returned.
+  migrateVendors: () => request('/migrate/vendors'),
+  migrateJobs: () => request('/migrate/jobs'),
+  migrateJob: (id) => request(`/migrate/jobs/${encodeURIComponent(id)}`),
+  migrateConnect: (vendor, credentials) => request('/migrate/jobs', { method: 'POST', body: JSON.stringify({ vendor, credentials }) }),
+  migrateUpload: (formData) => api.postForm('/migrate/jobs/upload', formData),
+  migrateRun: (id, options, credentials = null) => request(`/migrate/jobs/${encodeURIComponent(id)}/run`,
+    { method: 'POST', body: JSON.stringify({ ...(options ? { options } : {}), ...(credentials ? { credentials } : {}) }) }),
+  migrateCancel: (id) => request(`/migrate/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
+  migratePlaceholders: () => request('/migrate/placeholders'),
+  migrateLinkPlaceholder: (id, deviceId) => request(`/migrate/placeholders/${encodeURIComponent(id)}/link`, { method: 'POST', body: JSON.stringify({ device_id: deviceId }) }),
+  migrateDeletePlaceholder: (id) => request(`/migrate/placeholders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   // Triggers: the listener settings, and the secret. Separate calls because they are separate
   // decisions — rotating the credential that lets a LAN datagram change a screen must not be a
   // side effect of editing a port number.

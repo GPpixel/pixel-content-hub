@@ -2872,6 +2872,67 @@ const migrations = [
   'CREATE INDEX IF NOT EXISTS idx_request_email_challenges ON request_email_challenges(form_id, email)',
   'ALTER TABLE submissions ADD COLUMN request_id TEXT',
   'CREATE INDEX IF NOT EXISTS idx_submissions_request ON submissions(request_id)',
+  /*
+   * 3.0: switch to ScreenTinker (lib/migrate, docs/migrate.md). Importing another CMS's media,
+   * playlists, layouts, schedules and screens.
+   *
+   * migration_jobs is one import: its scan (what was found and what cannot be mapped), the options
+   * chosen, progress and the final report. cred_enc holds the source credential (secretbox) ONLY
+   * while the job needs it — between connect and the end of the run — and cred_expires_at bounds
+   * even that: lib/migrate clears it on finish, fail, cancel and on expiry, whichever comes first.
+   * upload_path is a vendor export / zip waiting to be read, removed the same way.
+   *
+   * migration_items is what makes a re-run idempotent: one row per source object already brought
+   * over (keyed by vendor + source account + kind + source id, per workspace), naming the row it
+   * became. migration_screens are the source's displays as unpaired placeholders: a name and the
+   * groups it belonged to, linked to a real screen only when a person pairs one.
+   */
+  `CREATE TABLE IF NOT EXISTS migration_jobs (
+     id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL,
+     user_id TEXT,
+     vendor TEXT NOT NULL,
+     source_account TEXT NOT NULL DEFAULT '',
+     source_label TEXT NOT NULL DEFAULT '',
+     status TEXT NOT NULL DEFAULT 'scanning',
+     scan TEXT,
+     options TEXT,
+     progress TEXT,
+     report TEXT,
+     error TEXT,
+     cred_enc TEXT,
+     cred_expires_at INTEGER,
+     upload_path TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     finished_at INTEGER)`,
+  'CREATE INDEX IF NOT EXISTS idx_migration_jobs_ws ON migration_jobs(workspace_id, created_at)',
+  `CREATE TABLE IF NOT EXISTS migration_items (
+     workspace_id TEXT NOT NULL,
+     vendor TEXT NOT NULL,
+     source_account TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     source_id TEXT NOT NULL,
+     target_id TEXT,
+     job_id TEXT,
+     status TEXT NOT NULL DEFAULT 'done',
+     note TEXT,
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     PRIMARY KEY (workspace_id, vendor, source_account, kind, source_id))`,
+  `CREATE TABLE IF NOT EXISTS migration_screens (
+     id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL,
+     job_id TEXT,
+     vendor TEXT NOT NULL,
+     name TEXT NOT NULL,
+     group_ids TEXT NOT NULL DEFAULT '[]',
+     playlist_id TEXT,
+     layout_id TEXT,
+     note TEXT,
+     device_id TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     linked_at INTEGER)`,
+  'CREATE INDEX IF NOT EXISTS idx_migration_screens_ws ON migration_screens(workspace_id, device_id)',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

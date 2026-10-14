@@ -8,6 +8,8 @@
  *   #/simple/share[?device]  Share my screen (3.0): pick the screen → choose what to share → live, Stop
  *   #/simple/sign            Make a sign: pick a template → fill it in → choose screens (views/make-sign.js)
  *   #/simple/brand           The workspace brand kit the sign templates use (components/brand-kit-editor.js)
+ *   #/simple/import          Import from another app (3.0, views/migrate.js in guide mode): offered on the
+ *                            home and in Help only while the workspace has no screens yet
  *   (#/add-screen is the setup guide's add mode, views/onboarding.js)
  *
  * No sidebar here: a small top bar carries the Simple | Advanced switch and an account menu. Every
@@ -35,6 +37,7 @@ import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChan
 import { renderSign, renderBrand } from './make-sign.js';
 import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
 import { upcomingChanges } from '../components/preview-at-time.js';
+import { mountMigrate, cleanup as cleanupMigrate } from './migrate.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -170,8 +173,11 @@ async function renderHome(container) {
   try { devices = await api.getDevices(); } catch { devices = []; }
   if (!document.contains(host)) return;
   if (!devices.length) {
+    // 3.0: a workspace with no screens yet is new, and may be moving from another app. Once it has a
+    // screen this offer is gone; the import stays in Advanced (Content → Add content).
     host.innerHTML = `<div class="simple-empty"><p>${esc(t(canChange ? 'simple.home.no_screens' : 'simple.home.no_screens_viewer'))}</p>
-      ${canChange ? `<a class="btn btn-primary" href="#/add-screen">${esc(t('simple.task.add'))}</a>` : ''}</div>`;
+      ${canChange ? `<a class="btn btn-primary" href="#/add-screen">${esc(t('simple.task.add'))}</a>
+      <p class="simple-muted simple-import-offer">${esc(t('migrate.simple.offer'))} <a href="#/simple/import">${esc(t('migrate.simple.offer_link'))}</a></p>` : ''}</div>`;
     return;
   }
   // A view-only member gets the same cards, without the link into Change.
@@ -1112,6 +1118,17 @@ const SIMPLE_GUIDES = [
 
 const SIMPLE_FAQ = [1, 2, 3, 4, 5, 6];
 
+/*
+ * 3.0 Import from another app: the import wizard in guide mode (views/migrate.js), in the guide frame.
+ * Skip or finish goes home; an import keeps running on the server and this page shows its progress
+ * when it is opened again (the Manager app may be backgrounded for the whole import).
+ */
+function renderImport(container) {
+  shell(container, guideFrame({ step: 0, total: 1, icon: '&#128230;', title: t('migrate.guide.title'), body: '<div id="simpleImport"></div>', back: false }));
+  mountMigrate(document.getElementById('simpleImport'), { guide: true, onSkip: () => { window.location.hash = '#/'; }, onFinish: () => { window.location.hash = '#/'; } });
+  cleanupFns.push(cleanupMigrate);
+}
+
 function renderHelp(container) {
   const u = cachedUser() || {};
   const trial = plansVisible(u)
@@ -1130,10 +1147,20 @@ function renderHelp(container) {
     <div class="simple-card simple-faq">${[...SIMPLE_FAQ.map((n) => ({ q: t(`simple.help.q${n}`), a: t(`simple.help.a${n}`) })), ...trial].map((f) => `
       <details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}
     </div>
+    <div id="simpleHelpImport"></div>
     <div class="simple-card simple-help-more">
       <p>${esc(t('simple.help.more'))}</p>
       <button type="button" class="btn btn-secondary" data-help-advanced>${esc(t('simple.help.more_btn'))}</button>
     </div>`);
+  // 3.0: the import from another app, while the workspace is still new (no screens).
+  if (simpleCanChange()) {
+    api.getDevices().then((devices) => {
+      const el = document.getElementById('simpleHelpImport');
+      if (!el || (Array.isArray(devices) && devices.length)) return;
+      el.innerHTML = `<div class="simple-card"><h3>&#128230; ${esc(t('migrate.simple.help_title'))}</h3><p>${esc(t('migrate.simple.help_body'))}</p>
+        <a class="btn btn-primary" href="#/simple/import">${esc(t('migrate.simple.offer_link'))}</a></div>`;
+    }).catch(() => { /* no offer */ });
+  }
   container.querySelector('[data-help-advanced]').addEventListener('click', async () => {
     if (inManagerApp()) { openOutsideApp('/app#/switch-advanced?next=help'); return; }
     await setUiMode('advanced');
@@ -1193,7 +1220,7 @@ export function render(container, hash = window.location.hash || '#/') {
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/requests'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/import') || hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/requests'))) {
     window.location.replace('#/');
     return undefined;
   }
@@ -1202,6 +1229,7 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/sign')) return renderSign(container, { simple: true, device: q.get('device'), from: q.get('from') });
   if (hash.startsWith('#/simple/brand')) return renderBrand(container, { simple: true });
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
+  if (hash.startsWith('#/simple/import')) return renderImport(container);
   if (hash.startsWith('#/simple/passkey')) return renderPasskey(container);
   if (hash.startsWith('#/simple/team')) return renderTeam(container);
   if (hash.startsWith('#/simple/share')) return renderShare(container, q.get('device'));

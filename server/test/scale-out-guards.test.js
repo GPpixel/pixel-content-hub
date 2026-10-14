@@ -153,6 +153,8 @@ const INLINE_NOT_WORKSPACE_SCOPED = Object.freeze({
   '/api/trigger': 'LAN trigger from a player/sensor, device-authenticated',
   '/api/widgets/:id/telemetry': 'player-authenticated widget telemetry',
   '/api/plugin-submissions': 'rate-limit mount only; the handler is the tenancy router',
+  '/api/migrate/jobs': '3.0 switch to ScreenTinker: rate-limit mount only; the handler is the tenancy router (routes/migrate.js)',
+  '/api/migrate/jobs/upload': '3.0 switch to ScreenTinker: rate-limit mount only; the handler is the tenancy router (routes/migrate.js)',
   '/api/admin/plugins/submissions': 'platform-admin, node-local',
   '/api/device/exit': 'player exit beacon, device-authenticated',
   '/api/devices/:id/live/publish': 'device-authenticated live-video publish',

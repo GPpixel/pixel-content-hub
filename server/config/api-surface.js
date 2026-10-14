@@ -206,6 +206,12 @@ const JWT_ONLY_ROUTERS = [
    * is a signed-in person's call. The public side is /api/public/requests, mounted in server.js.
    */
   { path: '/api/content-requests', mod: './routes/content-requests', tenancy: true },
+  /*
+   * 3.0 switch to ScreenTinker (lib/migrate): import from another signage CMS. JWT only: the person
+   * pastes THEIR key for another vendor's account, and the server pulls with it; that is a signed-in
+   * human's act, never an API token's.
+   */
+  { path: '/api/migrate', mod: './routes/migrate', tenancy: true },
 ];
 
 // #73: AGENCY_ROUTERS - capability-restricted ('agency' scope) surface. Mounted with
