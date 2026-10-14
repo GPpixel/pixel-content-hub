@@ -453,6 +453,13 @@ router.post('/login', (req, res) => {
   // reset placed there would never fire for those accounts.
   loginLockout.reset(user.id);
 
+  // 3.0: deactivated by the organization's identity provider (SCIM). Said only AFTER the password
+  // is proven, so it tells nobody without the password that the account exists.
+  if (user.disabled_at) {
+    logFailedLogin(email, getClientIp(req), 'Account deactivated by its organization');
+    return res.status(403).json({ error: 'This account has been deactivated by your organization.', code: 'account_disabled' });
+  }
+
   // Email verification gate. Unverified LOCAL accounts are asked to confirm on login — this
   // covers both new signups AND existing users who predate the feature (grandfathered locals are
   // email_verified=0). Gated ONLY where we can actually send the mail (isConfigured), so an
@@ -1788,6 +1795,16 @@ router.get('/oidc/:slug/callback', asyncRoute(async (req, res) => {
  * cookie hand-off. `claims` is { sub, email, name, picture?, email_verified? }; `link` is the
  * account a "link" flow started from (OIDC only).
  */
+/** 3.0: is this person provisioned into the organization by SCIM and currently deactivated there? */
+function scimDeactivated(orgId, userId) {
+  try {
+    return !!db.prepare('SELECT 1 FROM scim_users WHERE organization_id = ? AND user_id = ? AND active = 0').get(orgId, userId);
+  } catch (e) {
+    if (/no such table/i.test(e.message)) return false;
+    throw e;
+  }
+}
+
 async function completeFederatedLogin(req, res, { provider, claims, link = null, tag = 'oidc', app = null }) {
   const email = String(claims.email || '').toLowerCase().trim();
   const linking = !!link;
@@ -1883,6 +1900,14 @@ async function completeFederatedLogin(req, res, { provider, claims, link = null,
     const result = upsertFederatedUser({ claims, email, provider, req });
     if (result.error) return backToApp(res, { sso_error: result.error });
     const { user, isNew } = result;
+    // 3.0: deactivated through SCIM. The identity provider normally refuses first; this is what
+    // holds when it does not (a different provider, a stale IdP session, provisioning lag).
+    if (user.disabled_at) return fail(res, { sso_error: 'account_disabled' });
+    // …and an organization's own SSO must not re-admit someone its provisioning deactivated: the
+    // join below would otherwise hand them a fresh membership the moment they signed in.
+    if (provider.organizationId && scimDeactivated(provider.organizationId, user.id)) {
+      return fail(res, { sso_error: 'account_disabled' });
+    }
 
     /*
      * A provider that belongs to an ORGANIZATION vouches for its own people, so anyone who signs in
@@ -2220,3 +2245,4 @@ module.exports = router;
 module.exports.emailAllowedForProvider = emailAllowedForProvider;
 module.exports.upsertFederatedUser = upsertFederatedUser;
 module.exports.isOrphanedFederated = isOrphanedFederated;
+module.exports.scimDeactivated = scimDeactivated;

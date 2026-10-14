@@ -1046,3 +1046,6 @@ router.delete('/:orgId/sso/:id', requireOrgAdmin, requireVerifiedAdmin, (req, re
 
 module.exports = router;
 module.exports.normaliseDomains = normaliseDomains;
+// Shared with routes/org-scim.js, so provisioning is gated exactly like sign-in configuration.
+module.exports.requireOrgAdmin = requireOrgAdmin;
+module.exports.requireVerifiedAdmin = requireVerifiedAdmin;

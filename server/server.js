@@ -345,7 +345,9 @@ const jsonBody = express.json({ limit: '12mb' });
  * limit never applied because this 12 MB parser had already consumed the body. routes/mcp.js has
  * the parser and the error handler both.
  */
-app.use((req, res, next) => (req.path === '/api/templates/import' || req.path.startsWith('/api/hooks/in/') || isMcpPath(req.path) ? next() : jsonBody(req, res, next)));
+// /scim parses its own body too (routes/scim.js): application/scim+json, a 1 MB limit, after the
+// bearer token is checked, and a parse failure answered in SCIM's error envelope.
+app.use((req, res, next) => (req.path === '/api/templates/import' || req.path.startsWith('/api/hooks/in/') || req.path.startsWith('/scim/') || isMcpPath(req.path) ? next() : jsonBody(req, res, next)));
 // Express 5 / body-parser 2 leave req.body undefined when no body was parsed (v4 gave {}).
 app.use((req, res, next) => { if (req.body === undefined) req.body = {}; next(); });
 const { sanitizeBody } = require('./middleware/sanitize');
@@ -1418,6 +1420,16 @@ app.use('/api/auth', require('./routes/auth'));
  * /api/auth/* already had a limit; this router was mounted without one.
  */
 app.use('/api/organizations', rateLimit(60000, 60), require('./routes/org-sso'));
+// 3.0: Settings > User provisioning (SCIM). Same mount, same org-admin gate, same limiter (above).
+app.use('/api/organizations', require('./routes/org-scim'));
+/*
+ * 3.0: SCIM 2.0 provisioning for an organization's identity provider (docs/scim.md). Bearer-token
+ * only, no cookies, so there is no CSRF surface. The per-IP limit here is a coarse ceiling: Okta and
+ * Entra call from shared egress addresses on behalf of many customers, so the real budget is per
+ * ORGANIZATION, inside the router (SCIM_RATE_LIMIT, default 600/min), with failed tokens counted
+ * per IP there too.
+ */
+app.use('/scim/v2', rateLimit(60000, 3000), require('./routes/scim'));
 // Rate limit pairing to prevent brute force (5 attempts per minute per IP).
 // #88: bind this to the whole /api/provision surface, not just /pair - the bare
 // POST /api/provision (routes/provisioning.js) is a second pairing endpoint that
