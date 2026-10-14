@@ -29,6 +29,7 @@ import androidx.core.content.IntentCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.concurrent.thread
 
 /**
@@ -85,6 +86,7 @@ class MainActivity : ComponentActivity() {
             web.loadUrl("$origin/app#/")
         }
         handleShareIntent(intent)
+        handleSsoReturn(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -96,6 +98,7 @@ class MainActivity : ComponentActivity() {
             web.loadUrl("$origin/app#/")
         }
         handleShareIntent(intent)
+        handleSsoReturn(intent)
     }
 
     override fun onResume() {
@@ -173,6 +176,13 @@ class MainActivity : ComponentActivity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
+                // A single sign-on START must never run in here: identity providers refuse WebViews,
+                // and a session begun here could not be finished in the browser. Hand it over.
+                if (ServerStore.sameOrigin(origin, url) && isSsoStart(url.path)) {
+                    val path = url.encodedPath + (url.encodedQuery?.let { "?$it" } ?: "")
+                    SsoHandoff.start(this@MainActivity, origin, path)?.let { ManagerBridge.openInCustomTab(this@MainActivity, it) }
+                    return true
+                }
                 if (ServerStore.sameOrigin(origin, url)) return false
                 if (url.scheme == "http" || url.scheme == "https") ManagerBridge.openInCustomTab(this@MainActivity, url)
                 else try { startActivity(Intent(Intent.ACTION_VIEW, url)) } catch (e: Exception) { /* nothing handles it */ }
@@ -182,6 +192,7 @@ class MainActivity : ComponentActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 pageReady = true
                 maybeUploadShare()
+                maybeFinishSso()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -211,9 +222,63 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isSsoStart(path: String?): Boolean =
+        path != null && Regex("^/api/auth/(oidc|saml)/[a-z0-9-]+/start$").matches(path)
+
     private fun deliver(uris: List<Uri>) {
         fileCallback?.onReceiveValue(if (uris.isEmpty()) null else uris.toTypedArray())
         fileCallback = null
+    }
+
+    // ---- Single sign-on coming back from the browser ---------------------------------------------
+
+    private var pendingSso: Uri? = null
+
+    private fun handleSsoReturn(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (!SsoHandoff.isReturn(data)) return
+        intent.data = null // consumed: a rotation must not replay it
+        pendingSso = data
+        // Started on a different saved server than the one showing? Go back to it first.
+        val started = SsoHandoff.pendingOrigin(this)
+        if (started != null && started != origin) {
+            ServerStore.set(this, started)
+            origin = started
+            pageReady = false
+            web.loadUrl("$origin/app#/login")
+            return
+        }
+        maybeFinishSso()
+    }
+
+    private fun maybeFinishSso() {
+        val data = pendingSso ?: return
+        if (!pageReady) return
+        pendingSso = null
+        val error = data.getQueryParameter("error") ?: data.getQueryParameter("sso_error")
+        if (error != null) {
+            Log.w(TAG, "sso: provider/server error $error")
+            web.loadUrl("$origin/app#/login?sso_error=${Uri.encode(error)}")
+            return
+        }
+        val code = data.getQueryParameter("code") ?: return
+        overlay.text = getString(R.string.signing_in)
+        overlay.visibility = View.VISIBLE
+        thread {
+            val result = try { Result.success(SsoHandoff.exchange(this, code)) } catch (e: Exception) { Result.failure(e) }
+            runOnUiThread {
+                overlay.visibility = View.GONE
+                result.onSuccess { token ->
+                    // The same place the web login keeps it; /api/auth/me fills in the user on load.
+                    web.evaluateJavascript(
+                        "localStorage.setItem('token', ${JSONObject.quote(token)}); localStorage.removeItem('user');" +
+                            " location.hash = '#/'; location.reload();", null)
+                }.onFailure { e ->
+                    Log.w(TAG, "sso: exchange failed", e)
+                    Toast.makeText(this, getString(R.string.sso_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     // ---- Share from the Gallery -------------------------------------------------------------------

@@ -2505,6 +2505,16 @@ const migrations = [
      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
   "CREATE INDEX IF NOT EXISTS idx_conversion_events_event ON conversion_events(event, created_at)",
   "CREATE INDEX IF NOT EXISTS idx_conversion_events_user ON conversion_events(user_id, event)",
+  /*
+   * 3.0: single-use codes handing a single sign-on session to the Manager app (routes/auth.js
+   * /sso/app-exchange). Stored hashed, live for 2 minutes, deleted on use and swept on each insert.
+   */
+  `CREATE TABLE IF NOT EXISTS app_sso_codes (
+     code_hash TEXT PRIMARY KEY,
+     token TEXT NOT NULL,
+     workspace_id TEXT,
+     challenge TEXT NOT NULL,
+     expires_at INTEGER NOT NULL)`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

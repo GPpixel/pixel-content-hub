@@ -20,6 +20,13 @@ class ManagerBridge(private val activity: Activity, private val origin: String) 
         activity.runOnUiThread { openInCustomTab(activity, uri) }
     }
 
+    /** Single sign-on in the phone's browser; the session comes back through SsoHandoff. */
+    @JavascriptInterface
+    fun startSso(path: String) {
+        val url = SsoHandoff.start(activity, origin, path) ?: return
+        activity.runOnUiThread { openInCustomTab(activity, url) }
+    }
+
     @JavascriptInterface
     fun changeServer() {
         activity.runOnUiThread {

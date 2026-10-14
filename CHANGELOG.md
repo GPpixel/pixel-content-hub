@@ -48,6 +48,8 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
   - invite links through the share sheet;
   - Advanced, Admin and Settings in the browser.
 
+  Single sign-on (Google, Microsoft, OIDC, SAML, organization SSO) runs in the phone's browser and
+  hands the session back through a PKCE-style, single-use code (`POST /api/auth/sso/app-exchange`).
   See `docs/manager-app.md`.
 - **Your team** (Simple view, workspace admins): invite someone as "can update screens", "can only
   look" or "can manage everything", see who is in the workspace, cancel invites, remove people.

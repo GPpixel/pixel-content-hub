@@ -40,7 +40,7 @@ import { applyBranding } from './branding.js';
 import { t } from './i18n.js';
 import { isPlatformAdmin } from './utils.js';
 import { initNavGroups } from './components/nav-groups.js';
-import { applyUiMode, isSimpleMode } from './components/ui-mode.js';
+import { applyUiMode, isSimpleMode, setUiMode } from './components/ui-mode.js';
 import * as simpleHome from './views/simple-home.js';
 import { installPlanNudges, updateTrialBanner } from './components/plan-nudges.js';
 import { renderWorkspaceSwitcher, selectedRemoteOrg, clearRemoteOrg } from './components/workspace-switcher.js';
@@ -546,7 +546,7 @@ function route() {
   // account and go to the dashboard (or ?next=help). Never inside the app itself.
   if (hash.startsWith('#/switch-advanced') && isAuthenticated()) {
     const next = new URLSearchParams(hash.split('?')[1] || '').get('next') === 'help' ? '#/help' : '#/';
-    import('./components/ui-mode.js').then(({ setUiMode }) => setUiMode('advanced')).finally(() => { window.location.hash = next; });
+    Promise.resolve(setUiMode('advanced')).finally(() => { window.location.hash = next; });
     return;
   }
 

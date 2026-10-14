@@ -1160,6 +1160,9 @@ router.get('/config', (req, res) => {
     localEnabled: true,
     needsSetup: userCount === 0,
     registration_enabled: !config.disableRegistration || userCount === 0,
+    // 3.0: whether new accounts here start on a trial (hosted only), so the login page does not
+    // advertise one on a self-hosted server that gives every account the full plan.
+    trial_offered: !config.selfHosted,
   });
 });
 
@@ -1332,6 +1335,8 @@ const redirectUriFor = (req, slug) => `${publicOrigin(req)}/api/auth/oidc/${slug
 // Send the browser back to the SPA. Errors travel as a code the login page can translate; the
 // token travels in the FRAGMENT, which browsers do not send to servers and proxies do not log.
 function backToApp(res, params) {
+  // The reason a sign-in was turned away, for the operator (an error code only, never a token).
+  if (params && params.sso_error) console.warn(`[sso] sign-in refused: ${params.sso_error}`);
   const qs = new URLSearchParams(params).toString();
   res.redirect(`/app#/login?${qs}`);
 }
@@ -1342,6 +1347,65 @@ function backToSettings(res, params) {
   const qs = new URLSearchParams(params).toString();
   res.redirect(`/app#/settings?${qs}`);
 }
+
+/*
+ * 3.0: single sign-on for the ScreenTinker Manager app (android-admin/).
+ *
+ * Google and most identity providers refuse to sign in inside an app's WebView, so the app runs the
+ * whole round trip in the phone's browser (a Custom Tab) and must get the session back across that
+ * boundary. The browser's cookie jar is not the app's, so the claim cookie below cannot do it.
+ *
+ * The app starts with ?app_challenge=<BASE64URL(SHA-256(verifier))> (the PKCE shape); it rides in
+ * the signed transaction. At the end, instead of the cookie, the browser is sent to
+ * screentinker-manager://sso?code=<random> — a single-use, 2-minute code that names a row here and
+ * carries nothing itself. The app swaps it at POST /sso/app-exchange together with the VERIFIER,
+ * which never left the app: another app that intercepts the redirect holds a code it cannot use.
+ */
+const APP_REDIRECT = 'screentinker-manager://sso';
+const APP_CODE_TTL_S = 120;
+const APP_CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/;
+
+function appChallengeOf(req) {
+  const c = String((req.query && req.query.app_challenge) || '');
+  return APP_CHALLENGE_RE.test(c) ? c : null;
+}
+
+function backToManagerApp(res, params) {
+  res.redirect(`${APP_REDIRECT}?${new URLSearchParams(params).toString()}`);
+}
+
+function issueAppCode({ token, workspaceId, challenge }) {
+  const code = crypto.randomBytes(32).toString('base64url');
+  const hash = crypto.createHash('sha256').update(code).digest('hex');
+  db.prepare("DELETE FROM app_sso_codes WHERE expires_at < strftime('%s','now')").run();
+  db.prepare('INSERT INTO app_sso_codes (code_hash, token, workspace_id, challenge, expires_at) VALUES (?, ?, ?, ?, ?)')
+    .run(hash, token, workspaceId || null, challenge, Math.floor(Date.now() / 1000) + APP_CODE_TTL_S);
+  return code;
+}
+
+router.post('/sso/app-exchange', (req, res) => {
+  const { code, verifier } = req.body || {};
+  if (typeof code !== 'string' || typeof verifier !== 'string' || code.length > 100 || verifier.length < 43 || verifier.length > 128) {
+    return res.status(400).json({ error: 'code and verifier are required' });
+  }
+  const expired = () => res.status(401).json({ error: 'That sign-in has expired. Try again.' });
+  const hash = crypto.createHash('sha256').update(code).digest('hex');
+  // Single use: the row is gone whatever happens next, so a code can never be tried twice.
+  const row = db.transaction(() => {
+    const r = db.prepare('SELECT * FROM app_sso_codes WHERE code_hash = ?').get(hash);
+    if (r) db.prepare('DELETE FROM app_sso_codes WHERE code_hash = ?').run(hash);
+    return r;
+  })();
+  if (!row || row.expires_at < Math.floor(Date.now() / 1000)) return expired();
+  const got = Buffer.from(crypto.createHash('sha256').update(verifier).digest('base64url'));
+  const want = Buffer.from(String(row.challenge));
+  if (got.length !== want.length || !crypto.timingSafeEqual(got, want)) return expired();
+  let session;
+  try { session = jwt.verify(row.token, config.jwtSecret, { algorithms: ['HS256'] }); } catch { return expired(); }
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(session.id);
+  if (!user) return expired();
+  res.json({ token: row.token, user: publicUser(user), current_workspace_id: row.workspace_id || null });
+});
 
 // Which providers this instance offers. Public: it is what draws the login buttons.
 router.get('/providers', (req, res) => {
@@ -1478,8 +1542,11 @@ async function beginOidc(req, res, provider, extra = {}, onError = backToApp, as
 router.get('/oidc/:slug/start', asyncRoute(async (req, res) => {
   const provider = oidcProviders.get(req.params.slug);
   if (!provider) return backToApp(res, { sso_error: 'unknown_provider' });
-  if (provider.kind === 'saml') return res.redirect(`/api/auth/saml/${encodeURIComponent(provider.slug)}/start`);
-  await beginOidc(req, res, provider);
+  const app = appChallengeOf(req);
+  if (provider.kind === 'saml') {
+    return res.redirect(`/api/auth/saml/${encodeURIComponent(provider.slug)}/start${app ? `?app_challenge=${app}` : ''}`);
+  }
+  await beginOidc(req, res, provider, app ? { app } : {});
 }));
 
 /*
@@ -1508,8 +1575,9 @@ router.get('/saml/:slug/start', asyncRoute(async (req, res) => {
     const requestId = saml.newRequestId();
     const url = await saml.samlFor(provider, publicOrigin(req), { generateUniqueId: () => requestId })
       .getAuthorizeUrlAsync('', undefined, {});
+    const app = appChallengeOf(req);
     const tx = jwt.sign(
-      { typ: 'saml-tx', slug: provider.slug, rid: requestId },
+      { typ: 'saml-tx', slug: provider.slug, rid: requestId, ...(app ? { app } : {}) },
       config.jwtSecret,
       { expiresIn: OIDC_TX_TTL_S, algorithm: 'HS256' },   // a typ no other verifier accepts
     );
@@ -1579,7 +1647,7 @@ router.post('/saml/:slug/acs', express.urlencoded({ extended: false, limit: '512
   const claims = saml.profileToClaims(profile);
   if (!claims.sub) return backToApp(res, { sso_error: 'verification_failed' });
   try {
-    return await completeFederatedLogin(req, res, { provider, claims, tag: 'saml' });
+    return await completeFederatedLogin(req, res, { provider, claims, tag: 'saml', app: tx.app || null });
   } catch (err) {
     console.error(`[saml] ${provider.slug} sign-in failed:`, err.message);
     return backToApp(res, { sso_error: 'server_error' });
@@ -1710,7 +1778,7 @@ router.get('/oidc/:slug/callback', asyncRoute(async (req, res) => {
     return backToApp(res, { sso_error: 'verification_failed' });
   }
 
-  return completeFederatedLogin(req, res, { provider, claims, link: tx.link || null });
+  return completeFederatedLogin(req, res, { provider, claims, link: tx.link || null, app: tx.app || null });
 }));
 
 /*
@@ -1720,10 +1788,13 @@ router.get('/oidc/:slug/callback', asyncRoute(async (req, res) => {
  * cookie hand-off. `claims` is { sub, email, name, picture?, email_verified? }; `link` is the
  * account a "link" flow started from (OIDC only).
  */
-async function completeFederatedLogin(req, res, { provider, claims, link = null, tag = 'oidc' }) {
+async function completeFederatedLogin(req, res, { provider, claims, link = null, tag = 'oidc', app = null }) {
   const email = String(claims.email || '').toLowerCase().trim();
   const linking = !!link;
-  const fail = linking ? backToSettings : backToApp;
+  // The Manager app (app = its challenge) hears about a failure too, rather than a browser tab
+  // showing the web login page.
+  const forApp = !linking && !!app && APP_CHALLENGE_RE.test(app);
+  const fail = linking ? backToSettings : (forApp ? backToManagerApp : backToApp);
   if (!email) return fail(res, { sso_error: 'no_email' });
 
   /*
@@ -1879,6 +1950,10 @@ async function completeFederatedLogin(req, res, { provider, claims, link = null,
      * and the session token lives for days, so a copy of it sitting in a Set-Cookie header is worth
      * stealing long after the login. This wrapper is good for 120 seconds and for nothing else.
      */
+    if (forApp) {
+      // The Manager app: a single-use code for the app to swap (see APP_REDIRECT above).
+      return backToManagerApp(res, { code: issueAppCode({ token, workspaceId, challenge: app }) });
+    }
     const claimToken = jwt.sign(
       { typ: 'sso-claim', tok: token, wsp: workspaceId || null },
       config.jwtSecret,
@@ -1894,7 +1969,7 @@ async function completeFederatedLogin(req, res, { provider, claims, link = null,
     backToApp(res, { sso: '1' });
   } catch (err) {
     console.error(`[${tag}] ${provider.slug} sign-in failed:`, err.message);
-    backToApp(res, { sso_error: 'server_error' });
+    fail(res, { sso_error: 'server_error' });
   }
 }
 

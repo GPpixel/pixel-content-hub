@@ -1,7 +1,7 @@
 import { showToast } from '../components/toast.js';
 import { loginFormState } from '../lib/login-form-state.js';
 import { t } from '../i18n.js';
-import { esc } from '../utils.js';
+import { esc, inManagerApp } from '../utils.js';
 import { applyAccent } from '../branding.js';
 
 
@@ -96,7 +96,7 @@ export async function render(container) {
           <p style="color:var(--text-secondary);font-size:13px;margin-top:4px">
             ${isSetup ? t('auth.subtitle_setup') : t('auth.subtitle_signin')}
           </p>
-          ${!isSetup && canRegister ? `<p style="color:var(--warning);font-size:12px;margin-top:8px">${t('auth.trial_notice')}</p>` : ''}
+          ${!isSetup && canRegister && config.trial_offered !== false && !inManagerApp() ? `<p style="color:var(--warning);font-size:12px;margin-top:8px">${t('auth.trial_notice')}</p>` : ''}
         </div>
 
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px">
@@ -569,6 +569,19 @@ function setupHandlers(config, isSetup) {
     }
   }
 
+  // Inside the Manager app the provider buttons hand their start URL to the app (startSso above).
+  // Delegated on the container, so it holds whenever the buttons render (they can arrive after this
+  // runs). The app also intercepts a start URL itself (MainActivity), so neither layer is load-bearing alone.
+  if (inManagerApp() && !container.dataset.ssoDelegated) {
+    container.dataset.ssoDelegated = '1';
+    container.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('a[href^="/api/auth/oidc/"], a[href^="/api/auth/saml/"]');
+      if (!a) return;
+      e.preventDefault();
+      startSso(a.getAttribute('href'));
+    }, true);
+  }
+
   /*
    * SSO is a link, not a script.
    *
@@ -740,7 +753,7 @@ function setupHandlers(config, isSetup) {
           });
           const body = await r.json().catch(() => ({}));
           if (!r.ok || !body.start_url) throw new Error(body.error || `start ${r.status}`);
-          window.location.assign(body.start_url);
+          startSso(body.start_url);
         } catch {
           btn.disabled = false;
           showError(t('auth.sso_err_provider_unavailable'));
@@ -813,6 +826,17 @@ function setupHandlers(config, isSetup) {
     const key = known.includes(ssoError) ? `auth.sso_err_${ssoError}` : 'auth.sso_failed';
     showToast(t(key), 'error');
   }
+}
+
+/*
+ * 3.0: begin single sign-on. On the web, a navigation. Inside the ScreenTinker Manager app, the app
+ * runs it in the phone's browser (Google and most providers refuse an embedded WebView) and takes
+ * the session back over its own hand-off (routes/auth.js /sso/app-exchange).
+ */
+function startSso(startUrl) {
+  const bridge = window.STManager;
+  if (inManagerApp() && bridge && typeof bridge.startSso === 'function') { bridge.startSso(startUrl); return; }
+  window.location.assign(startUrl);
 }
 
 function onAuthSuccess(data) {

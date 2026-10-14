@@ -1030,7 +1030,7 @@ export default {
   'auth.placeholder_name': 'Your name',
   'auth.placeholder_register_password': 'At least 6 characters',
   'auth.subtitle_setup': 'Create your admin account to get started',
-  'auth.subtitle_signin': 'Sign in to manage your displays',
+  'auth.subtitle_signin': 'Sign in to manage your screens',
   'auth.trial_notice': 'New accounts get a 14-day free Pro trial',
   'auth.divider_or': 'OR',
   'auth.signin_google': 'Sign in with Google',

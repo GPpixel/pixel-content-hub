@@ -30,6 +30,29 @@ without an app update.
 - **Review:** when a workspace requires review, the Simple flows submit changes for review and say
   "Sent for review". They never claim content is showing before a reviewer approves it.
 
+## Single sign-on
+
+Google and most identity providers refuse to sign in inside an app's web view (Google returns
+`disallowed_useragent`). So the app runs the whole sign-in in the phone's browser (a Custom Tab)
+and takes the session back securely:
+
+1. **Start.** An SSO button in the app (or any `/api/auth/(oidc|saml)/<slug>/start` the web view
+   tries to open, which the app intercepts) makes the app create a random **verifier**, kept in the
+   app. The browser opens the server's start URL with
+   `?app_challenge=BASE64URL(SHA-256(verifier))`. The challenge rides in the server's signed login
+   transaction.
+2. **Finish.** The provider returns to the server as usual. The server finishes the login but,
+   instead of the web claim cookie, redirects to `screentinker-manager://sso?code=…`. The code is
+   random, single-use, valid for 2 minutes, and stored hashed (`app_sso_codes`). It carries nothing
+   itself.
+3. **Swap.** The app posts `{code, verifier}` to `POST /api/auth/sso/app-exchange` (rate-limited)
+   and gets the session. Another app that intercepts the `screentinker-manager://` link holds a code
+   it cannot use without the verifier, and any wrong attempt burns the code.
+
+Nothing has to be registered with the identity provider for the app: the provider still returns to
+the server's normal callback URL. Tested on the Android 16 emulator with a standard OIDC provider,
+from the button in the app to signed in as the provider's user.
+
 ## Building
 
 The build needs JDK 17 and the Android SDK with `platforms;android-36`.
@@ -59,9 +82,8 @@ MANAGER_KEY_ALIAS=upload MANAGER_KEY_PASSWORD=… \
 - **Permissions:** `INTERNET` only.
 - **Cleartext traffic:** allowed for user-entered servers (self-hosted on a LAN is often
   `http://192.168…`), and forbidden for screentinker.com (`res/xml/network_security_config.xml`).
-- **Sign-in:** Google and other single sign-on providers refuse to run inside an app's web view
-  (Google returns `disallowed_useragent`). Email and password sign-in works. SSO-only accounts
-  should sign in on the web for now. Moving SSO to a Custom Tab is the follow-up.
+- **Sign-in:** email and password, plus every single sign-on provider the server offers (Google,
+  Microsoft, any OIDC provider, SAML, organization SSO). See below.
 - **screentinker.com must run 3.0** before the app is useful there: on 2.6 the server check says it
   is too old.
 

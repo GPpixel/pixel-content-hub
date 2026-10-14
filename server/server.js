@@ -1343,6 +1343,7 @@ app.use('/api/auth/oidc', rateLimit(60000, 120));
 // 32-byte-token guess, capped mostly to keep the bcrypt work bounded.
 app.use('/api/auth/forgot-password', rateLimit(60000, 5));
 app.use('/api/auth/reset-password', rateLimit(60000, 10));
+app.use('/api/auth/sso/app-exchange', rateLimit(60000, 20)); // 3.0: the Manager app's sign-in hand-off
 // Admin password-reset endpoint: even if an admin's session is compromised,
 // cap the blast radius to 20 resets/min/IP. Express matches the longest
 // path prefix first, so this fires before /api/auth catches the request.
