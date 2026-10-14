@@ -121,6 +121,10 @@ object PlayerCapabilities {
                 "sync.clock",
                 // Content is cached to local storage and survives a server outage.
                 "offline.cache",
+                // 3.0 site cache: DownloadCoordinator tries the site's LAN cache box first and keeps
+                // the bytes only if they hash to the origin's sha256 (ContentCache.fetchFromSiteCache),
+                // falling back to the origin on any failure. Declared so the payload carries the box.
+                "net.site_cache",
                 // A meeting-room display's buttons work here: PlaylistController passes the page its
                 // #panel capability. The server's no-show release waits for a screen with this.
                 "room.panel",

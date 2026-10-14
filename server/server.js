@@ -2,6 +2,17 @@
 require('./lib/node-guard').guardNode();
 
 /*
+ * 3.0 SITE CACHE MODE (docs/site-cache.md). With SITE_CACHE_FOR set, this process is not a server at
+ * all: it is the small LAN cache box that downloads a site's media once from that origin and serves it
+ * to the screens next to it. Checked BEFORE the dependency preflight, because the cache node uses Node
+ * built-ins only — a Pi with a bare checkout and no `npm install` runs it.
+ */
+if (process.env.SITE_CACHE_FOR) {
+  require('./lib/site-cache/node').main();
+  return;
+}
+
+/*
  * Then, before any dependency is required: make sure they are installed and loadable.
  *
  * A rollback restores an older package.json but not its packages, and a Node upgrade leaves the
@@ -849,15 +860,26 @@ app.get('/player/talk-legacy.js', (req, res) => {
  *
  * /player/sw.js keeps working for players still asking for it.
  */
+/*
+ * 3.0 site cache: a worker's fetches obey the CSP its OWN script was served with, and the dashboard
+ * policy helmet puts on every response allows connect-src 'self' https: only. That silently blocked
+ * the player's worker from reaching a site cache box at http://10.x on the LAN (docs/site-cache.md)
+ * — the player page itself (/player) is exempt from that policy, so the worker was the one place
+ * stricter than the page it serves. This policy keeps the worker to same-origin scripts and lets it
+ * connect over http(s); it runs only this file and the cache-policy module it imports.
+ */
+const SW_CSP = "default-src 'self'; script-src 'self'; connect-src 'self' http: https:; object-src 'none'; base-uri 'none'";
 app.get('/sw.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Service-Worker-Allowed', '/');   // belt: harmless, and correct where it survives
+  res.setHeader('Content-Security-Policy', SW_CSP);
   res.sendFile(path.join(__dirname, 'player', 'sw.js'));
 });
 
 app.get('/sw-legacy.js', (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Service-Worker-Allowed', '/');
+  res.setHeader('Content-Security-Policy', SW_CSP);
   res.sendFile(path.join(__dirname, 'player', 'sw-legacy.js'));
 });
 
@@ -1437,6 +1459,12 @@ app.use('/api/hooks/in', rateLimit(60000, 240), require('./routes/hooks-in'));
  * purpose — every panel in a building polls from one NAT address.
  */
 app.use('/api/room-panel', rateLimit(60000, 1200), require('./routes/room-panel'));
+/*
+ * 3.0 site cache: the door a site's cache BOX uses (manifest, bytes, status) — routes/site-cache-node.js.
+ * Its own token, no session, so it is outside the router loops. 1200/min per IP: a box pre-warming a
+ * new playlist asks for one blob after another, and a whole site sits behind one NAT address.
+ */
+app.use('/api/site-cache/node', rateLimit(60000, 1200), require('./routes/site-cache-node'));
 
 /*
  * 3.0: screen share, the meeting-room side (routes/screen-share-guest.js). No session by design —

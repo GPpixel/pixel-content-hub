@@ -44,6 +44,7 @@ import * as playlists from './views/playlists.js';
 import * as workspaceMembers from './views/workspace-members.js';
 import * as forcePasswordChange from './views/force-password-change.js';
 import * as noWorkspace from './views/no-workspace.js';
+import * as siteCaches from './views/site-caches.js';
 import { applyBranding } from './branding.js';
 import { t } from './i18n.js';
 import { isPlatformAdmin } from './utils.js';
@@ -266,6 +267,7 @@ const NAV_LABEL_KEYS = {
   'qr-codes': 'nav.qr_codes',
   social: 'nav.social',
   alerts: 'nav.alerts',
+  'site-caches': 'nav.site_caches',
   'emergency-feeds': 'nav.emergency_feeds',
   automation: 'nav.automation',
   // corporate is relabelled per viewer (Corporate / Head office) by syncCorporateNav.
@@ -639,6 +641,7 @@ function route() {
     else if (hash === '#/templates' && link.dataset.view === 'templates') link.classList.add('active');
     else if ((hash === '#/data-sources' || hash.startsWith('#/data-sources/')) && link.dataset.view === 'data-sources') link.classList.add('active');
     else if ((hash.startsWith('#/wall') || hash === '#/walls') && link.dataset.view === 'walls') link.classList.add('active');
+    else if (hash === '#/site-caches' && link.dataset.view === 'site-caches') link.classList.add('active');
     else if (hash === '#/reports' && link.dataset.view === 'reports') link.classList.add('active');
     else if (hash === '#/audience' && link.dataset.view === 'audience') link.classList.add('active');
     else if ((hash === '#/experiments' || hash.startsWith('#/experiments/')) && link.dataset.view === 'experiments') link.classList.add('active');
@@ -718,6 +721,10 @@ function route() {
   } else if (hash === '#/social') {
     currentView = socialFeeds;
     socialFeeds.render(app);
+  } else if (hash === '#/site-caches') {
+    // 3.0 site caches (docs/site-cache.md): LAN cache boxes, their status and which screens use them.
+    currentView = siteCaches;
+    siteCaches.render(app);
   } else if (hash === '#/alerts') {
     currentView = alerts;
     alerts.render(app);

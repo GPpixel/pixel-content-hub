@@ -26,11 +26,17 @@
 // v29: shells for 2.1.1-2.1.4 shipped without a cache-name bump, so warm web players kept serving the
 // v28-cached (pre-2.1.1) shell. Bumping purges it on activate; the index.html version-mismatch
 // self-heal is the durable fix, this just gives already-warm players a second, immediate nudge.
-const CACHE_NAME = 'rd-player-v29';
+// v30: 3.0 site cache — the worker can fetch media from the site's LAN cache box (verified by sha256,
+// origin fallback) and the page posts it st-site-cache. Bumped so warm players take the new shell.
+const CACHE_NAME = 'rd-player-v30';
 // Content lives in its own cache so the shell can be re-versioned (the activate handler deletes
 // every cache that is not CACHE_NAME) WITHOUT throwing away megabytes of media that are still
 // perfectly valid. Rolling the shell used to mean a player re-downloaded its entire playlist.
 const CONTENT_CACHE = 'rd-content-v1';
+// 3.0 site cache: where this screen's LAN cache box is (docs/site-cache.md). Its own cache name so a
+// shell version bump does not forget it, and spared by activate for the same reason as content.
+const SITE_CACHE_STORE = 'rd-site-cache-v1';
+const SITE_CACHE_KEY = '/__st_site_cache__';
 
 // Single source, shared with server/lib/player-cache-policy.js and its Node tests. A service worker
 // cannot require(), so this is importScripts against the route that serves that same file.
@@ -49,7 +55,7 @@ self.addEventListener('activate', (event) => {
       // CONTENT_CACHE is spared deliberately: it holds media, not code, and dropping it on every
       // shell version bump would make each deploy re-download the whole playlist — over a link
       // that may be exactly what is broken.
-      keys.filter(k => k !== CACHE_NAME && k !== CONTENT_CACHE).map(k => caches.delete(k))
+      keys.filter(k => k !== CACHE_NAME && k !== CONTENT_CACHE && k !== SITE_CACHE_STORE).map(k => caches.delete(k))
     )).then(() => self.clients.claim())
   );
 });
@@ -187,6 +193,10 @@ self.addEventListener('message', (event) => {
     prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.keep)).catch(() => {});
     return;
   }
+  if (data && data.type === 'st-site-cache') {
+    setSiteCache(data.config);
+    return;
+  }
   if (!data || data.type !== 'st-cache-playlist' || !Array.isArray(data.urls)) return;
 
   // The player sends the COMPLETE set of media this display needs, so anything else in the content
@@ -231,6 +241,15 @@ self.addEventListener('message', (event) => {
 async function ensureCached(url) {
   const cache = await caches.open(CONTENT_CACHE);
   if (await cache.match(url, { ignoreVary: true })) { await sweepOldRevisions(cache, url); return; }
+
+  // 3.0: the site's LAN cache first. Only ever a VERIFIED whole body; anything else falls through
+  // to the origin below exactly as before.
+  const fromSite = await siteCacheFetch(url, { wait: true });
+  if (fromSite) {
+    await storeContent(cache, new Request(url), fromSite);
+    await sweepOldRevisions(cache, url);
+    return;
+  }
 
   const metaKey = POLICY.chunkKey(url, 'meta');
   let meta = null;
@@ -368,6 +387,26 @@ async function handleContent(request) {
     // 416 that might be wrong if the cached copy is somehow stale.
   }
 
+  // 3.0: a miss the site's LAN cache can fill. Bounded to what is quick to pull across a LAN in one
+  // go; a bigger asset streams from the origin this time while the prefetch fills it from the box.
+  await loadSiteCache();
+  const siteEntry = siteEntryFor(request.url);
+  if (siteEntry && siteEntry.size <= SITE_INLINE_MAX_BYTES) {
+    const fromSite = await siteCacheFetch(request.url, { wait: false });
+    if (fromSite) {
+      try {
+        await storeContent(cache, new Request(request.url), fromSite.clone());
+        const stored = await cache.match(request.url, { ignoreVary: true });
+        if (stored) {
+          if (!range) return stored;
+          const sliced = await sliceCached(stored, range);
+          if (sliced) return sliced;
+        }
+      } catch (e) { /* fall through to the origin */ }
+      if (!range) return fromSite;
+    }
+  }
+
   try {
     // A ranged request goes to the network as-is; storing its 206 would corrupt the entry, so this
     // response is returned and deliberately NOT cached. The full copy arrives on a non-ranged
@@ -441,5 +480,152 @@ async function evictOldest(cache, needBytes) {
     await cache.delete(key);
     freed += size;
     if (freed >= needBytes) break;
+  }
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * 3.0 SITE CACHE (docs/site-cache.md)
+ *
+ * A box on this screen's LAN holds the site's media by sha256. The page hands us its address, a
+ * token minted for this screen, and the digest of each media path. We fetch from the box, check the
+ * bytes hash to the digest the ORIGIN gave us (never one the box gives us), and only then keep them.
+ * Every failure — no box, a timeout, a 401/404, a wrong byte — returns null and the caller goes to
+ * the origin as it always did. The box is an optimisation; it is never on the path to a dark screen.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+// Bodies are hashed in memory (WebCrypto has no streaming digest), so very large assets skip the box.
+const SITE_MAX_BYTES = 768 * 1024 * 1024;
+// The playback path waits for the box only for assets this small; prefetch handles the rest.
+const SITE_INLINE_MAX_BYTES = 64 * 1024 * 1024;
+// No answer at all for this long and the box is treated as down for a minute.
+const SITE_FIRST_BYTE_MS = 4000;
+const SITE_DOWN_MS = 60 * 1000;
+// A box that is still downloading an asset says so (503 warming). Prefetch waits for it this long
+// before giving up and taking the asset from the origin — the whole point is one WAN download.
+const SITE_WARM_WAIT_MS = 3 * 60 * 1000;
+
+let siteCache = null;
+let siteCacheLoaded = null;
+let siteDownUntil = 0;
+
+function validSiteConfig(c) {
+  if (!c || typeof c !== 'object' || typeof c.url !== 'string' || typeof c.token !== 'string') return null;
+  if (!/^https?:\/\/[^/?#]+$/.test(c.url)) return null;
+  const files = {};
+  for (const k of Object.keys(c.files || {})) {
+    const f = c.files[k];
+    if (f && /^[0-9a-f]{64}$/.test(f.sha256) && f.size >= 0) files[k] = { sha256: f.sha256, size: Number(f.size) };
+  }
+  return { url: c.url, token: c.token, expires_at: Number(c.expires_at) || 0, files: files };
+}
+
+function setSiteCache(config) {
+  siteCache = validSiteConfig(config);
+  siteCacheLoaded = Promise.resolve();
+  siteDownUntil = 0;
+  // Persisted so a worker the browser stopped and restarted still knows where the box is.
+  caches.open(SITE_CACHE_STORE).then((c) => siteCache
+    ? c.put(SITE_CACHE_KEY, new Response(JSON.stringify(siteCache), { headers: { 'Content-Type': 'application/json' } }))
+    : c.delete(SITE_CACHE_KEY)).catch(() => {});
+}
+
+function loadSiteCache() {
+  if (!siteCacheLoaded) {
+    siteCacheLoaded = caches.open(SITE_CACHE_STORE)
+      .then((c) => c.match(SITE_CACHE_KEY))
+      .then((r) => (r ? r.json() : null))
+      .then((j) => { if (!siteCache) siteCache = validSiteConfig(j); })
+      .catch(() => {});
+  }
+  return siteCacheLoaded;
+}
+
+function siteEntryFor(url) {
+  if (!siteCache) return null;
+  if (siteCache.expires_at && siteCache.expires_at * 1000 < Date.now()) return null;
+  let p;
+  try { p = new URL(url, self.location.href).pathname; } catch (e) { return null; }
+  return siteCache.files[p] || null;
+}
+
+function hexOf(buf) {
+  const b = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+  return s;
+}
+
+/* One attempt. Resolves { response } | { warming, retryMs } | { missing } | null. Never throws. */
+async function siteCacheOnce(entry) {
+  if (Date.now() < siteDownUntil) return null;
+  const ctrl = new AbortController();
+  let timer = setTimeout(() => ctrl.abort(), SITE_FIRST_BYTE_MS);
+  let res;
+  try {
+    res = await fetch(siteCache.url + '/cache/' + entry.sha256, {
+      headers: { Authorization: 'Bearer ' + siteCache.token },
+      mode: 'cors', credentials: 'omit', cache: 'no-store', redirect: 'error', signal: ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    siteDownUntil = Date.now() + SITE_DOWN_MS;
+    return null;
+  }
+  clearTimeout(timer);
+  if (res.status === 503) {
+    const ra = parseInt(res.headers.get('Retry-After') || '15', 10);
+    return { warming: true, retryMs: Math.min(30, Math.max(2, ra || 15)) * 1000 };
+  }
+  if (res.status === 404) return { missing: true };
+  if (res.status !== 200) return null;
+  // A LAN moves a megabyte in well under this; the budget only exists so a stalled box cannot hold
+  // the prefetch chain for ever.
+  timer = setTimeout(() => ctrl.abort(), 10000 + Math.ceil(entry.size / (512 * 1024)) * 1000);
+  let buf;
+  try { buf = await res.arrayBuffer(); } catch (e) { clearTimeout(timer); return null; } finally { clearTimeout(timer); }
+  if (buf.byteLength !== entry.size) return null;
+  let hex = null;
+  try { hex = hexOf(await crypto.subtle.digest('SHA-256', buf)); } catch (e) { hex = null; }
+  if (hex !== entry.sha256) {
+    console.warn('[site-cache] bytes from the cache did not match their sha256; using the origin');
+    return null;
+  }
+  return { response: new Response(buf, { status: 200, headers: {
+    'Content-Type': res.headers.get('Content-Type') || 'application/octet-stream',
+    'Content-Length': String(entry.size),
+    'X-ST-Source': 'site-cache',
+  } }) };
+}
+
+/*
+ * A verified whole body from the box, or null. With `wait`, a box still downloading the asset is
+ * given time (that is one WAN download instead of one per screen), and a "not here" is asked once
+ * more after the box has had a moment to refresh its manifest — a screen can learn about new media
+ * a few seconds before its box does.
+ */
+async function siteCacheFetch(url, { wait }) {
+  try {
+    await loadSiteCache();
+    const entry = siteEntryFor(url);
+    if (!entry || entry.size > SITE_MAX_BYTES) return null;
+    const until = Date.now() + SITE_WARM_WAIT_MS;
+    let askedAgain = false;
+    for (;;) {
+      const r = await siteCacheOnce(entry);
+      if (!r) return null;
+      if (r.response) return r.response;
+      if (!wait) return null;
+      let pause;
+      if (r.warming) pause = r.retryMs;
+      else if (r.missing && !askedAgain) { askedAgain = true; pause = 12000; }
+      else return null;
+      if (Date.now() + pause > until) return null;
+      await new Promise((resolve) => setTimeout(resolve, pause));
+      if (!siteEntryFor(url)) return null;   // the screen was taken off the cache meanwhile
+    }
+  } catch (e) {
+    return null;
   }
 }

@@ -1071,6 +1071,21 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
    * a frame whose seconds stand still. Keyed by zone; only zones that are real and differ from the
    * screen's own; absent when there are none.
    */
+  /*
+   * 3.0 site cache (lib/site-cache/origin.js): where this screen's LAN cache is, a token for it, and
+   * the sha256 of each asset it may fetch from there. ONLY for a player that declares net.site_cache
+   * and only when one is assigned, so every other payload stays byte-for-byte what it was. Never in a
+   * forecast (the preview has no screen to hand a token to). Never fatal: a payload without it plays
+   * from this server exactly as before.
+   */
+  if (!opts.forecast && device && capsLib.supports(device, 'net.site_cache')) {
+    try {
+      const sc = require('../lib/site-cache/origin').payloadFor(db, deviceId, device, assembled);
+      if (sc) assembled.site_cache = sc;
+    } catch (e) {
+      console.warn(`[site-cache] payload for ${deviceId} failed: ${e && e.message}`);
+    }
+  }
   if (capsLib.supports(device, 'clock.tz_table')) {
     const zones = new Set();
     for (const it of Array.isArray(assembled.assignments) ? assembled.assignments : []) {

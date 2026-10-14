@@ -128,6 +128,12 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/alert-channels', mod: './routes/alert-channels', tenancy: true },
   /*
+   * 3.0 site caches (lib/site-cache, docs/site-cache.md). JWT only: creating one mints a credential
+   * that downloads this workspace's media. The box's own door is /api/site-cache/node, mounted in
+   * server.js and authenticated by the box's token.
+   */
+  { path: '/api/site-caches', mod: './routes/site-caches', tenancy: true },
+  /*
    * Screen verification (lib/screen-verify): what each screen is actually showing, its incidents,
    * and the workspace's settings. JWT only alongside alert channels: the settings decide how often
    * every screen is asked for a screenshot and who is paged.

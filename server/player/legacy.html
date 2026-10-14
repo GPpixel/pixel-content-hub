@@ -903,12 +903,57 @@ function dropCacheForDeletedDisplay() {
   } catch (e) {
   }
 }
+const SITE_CACHE_CFG_KEY = "rd_site_cache" + SCREEN_SUFFIX;
+let siteCacheCfg = (function() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SITE_CACHE_CFG_KEY) || "null");
+    return v && typeof v === "object" ? v : null;
+  } catch (e) {
+    return null;
+  }
+})();
+function saveSiteCacheCfg(sc) {
+  try {
+    if (sc) localStorage.setItem(SITE_CACHE_CFG_KEY, JSON.stringify(sc));
+    else localStorage.removeItem(SITE_CACHE_CFG_KEY);
+  } catch (e) {
+  }
+}
+function siteCacheSig(sc) {
+  if (!sc || typeof sc !== "object") return "";
+  const files = sc.files && typeof sc.files === "object" ? sc.files : {};
+  return [sc.url || "", sc.token || "", Object.keys(files).sort().map((k) => k + ":" + (files[k] && files[k].sha256 || "")).join(",")].join("|");
+}
+function postSiteCache(items) {
+  try {
+    const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+    if (!sw) return;
+    const sc = siteCacheCfg;
+    let cfg = null;
+    if (sc && typeof sc.url === "string" && typeof sc.token === "string" && sc.files && typeof sc.files === "object") {
+      const files = {};
+      for (const it of items || []) {
+        if (!it || !it.content_id || !it.filepath || it.remote_url) continue;
+        const f = sc.files[it.content_id];
+        if (!f || typeof f.sha256 !== "string") continue;
+        try {
+          files[new URL(mediaUrl(it), location.href).pathname] = { sha256: f.sha256, size: Number(f.size) || 0 };
+        } catch (e) {
+        }
+      }
+      cfg = { url: sc.url, token: sc.token, expires_at: Number(sc.expires_at) || 0, files };
+    }
+    sw.postMessage({ type: "st-site-cache", config: cfg });
+  } catch (e) {
+  }
+}
 function requestOfflineCache(items, extraItems) {
   try {
     const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
     if (!sw) return;
     const all = (items || []).concat(extraItems || [], defaultContent ? [defaultContent] : []);
     const urls = all.filter((it) => it && it.filepath && !it.remote_url).map((it) => mediaUrl(it));
+    postSiteCache(all);
     sw.postMessage({ type: "st-cache-playlist", urls, prune: true });
     for (const it of all) {
       if (!it || it.mime_type !== BUNDLE_MIME || !it.content_id) continue;
@@ -4008,6 +4053,7 @@ function declaredCapabilities() {
   try {
     if (!swRegistrationFailed && navigator.serviceWorker && navigator.serviceWorker.controller) {
       caps.push("offline.cache");
+      if (typeof crypto !== "undefined" && crypto && crypto.subtle) caps.push("net.site_cache");
     }
   } catch (e) {
   }
@@ -4740,6 +4786,10 @@ function handlePlaylistUpdate(data) {
       triggerLog("warn", "HTTP triggers disabled \u2014 the listener stops at the next restart");
     }
   }
+  const siteSigBefore = siteCacheSig(siteCacheCfg);
+  siteCacheCfg = data && data.site_cache && typeof data.site_cache === "object" ? data.site_cache : null;
+  const siteCacheChanged = siteCacheSig(siteCacheCfg) !== siteSigBefore;
+  if (siteCacheChanged) saveSiteCacheCfg(siteCacheCfg);
   let triggersRepin = false;
   if (Array.isArray(data.triggers)) {
     const sig = triggersSig(data.triggers);
@@ -4750,6 +4800,7 @@ function handlePlaylistUpdate(data) {
       console.log("[trigger] " + triggers.length + " definition(s) synced");
     }
   }
+  if (siteCacheChanged) triggersRepin = true;
   if (newFp === oldFp && playlist.length > 0 && !wallChanged && !layoutChanged) {
     console.log("Playlist unchanged");
     let patched = false;

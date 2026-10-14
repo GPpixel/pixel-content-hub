@@ -160,6 +160,16 @@ const CAPABILITIES = [
    */
   'net.http_request',
   /*
+   * 3.0 site cache (lib/site-cache, docs/site-cache.md): the player can fetch an asset from a cache
+   * box on its own LAN by sha256 — `GET <cache>/cache/<sha256>` with a bearer token — VERIFY the bytes
+   * against that digest, and fall back to this server on any failure. It CHANGES THE PAYLOAD (a
+   * top-level `site_cache` with the box's address, a token and per-item digests), so it is opt-in by
+   * declaration and in NO baseline: every player that does not declare it receives byte-for-byte what
+   * it received before. The web player claims it only with a service worker in control (that is where
+   * the fetch lives) and WebCrypto to verify with; the native Android player in its downloader.
+   */
+  'net.site_cache',
+  /*
    * Audience counting (lib/audience.js): the player has a camera it can open and an on-device face
    * detector, and will report COUNTS ONLY. Declared by a player that could count if asked — not a
    * statement that it is counting; that is the org's switch, sent in the payload. In NO baseline.

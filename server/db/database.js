@@ -3044,6 +3044,58 @@ const migrations = [
      value REAL NOT NULL DEFAULT 0,
      PRIMARY KEY (experiment_id, source, metric, unit_key, hour_utc))`,
   'ALTER TABLE playlist_items ADD COLUMN experiment_id TEXT',
+  /*
+   * 3.0: site cache (lib/site-cache, docs/site-cache.md). A small always-on box at a site (a Pi, a
+   * NUC, a container) downloads each asset ONCE from this server and the screens on that LAN fetch
+   * it from there, so a school with forty screens pulls a new video once instead of forty times.
+   *
+   * token_hash is the sha256 of the node's enrolment token (shown once, like an API token).
+   * fetch_key is the secretbox-SEALED key the node uses to check the tokens screens show it
+   * (lib/site-cache/tokens.js) — sealed because whoever holds it can mint access to that site's
+   * media. The status columns are what the node last reported; they are display only and never
+   * decide anything.
+   *
+   * site_cache_assignments: device XOR group, the display_power_schedules shape, so "device beats
+   * group" reads the same way it does there. One cache per screen and per group: a screen with two
+   * caches has no defined behaviour, so the database refuses rather than the resolver inventing a
+   * tiebreak.
+   */
+  `CREATE TABLE IF NOT EXISTS site_caches (
+     id                TEXT PRIMARY KEY,
+     workspace_id      TEXT NOT NULL,
+     name              TEXT NOT NULL,
+     lan_url           TEXT NOT NULL,
+     token_hash        TEXT NOT NULL UNIQUE,
+     fetch_key         TEXT NOT NULL,
+     enabled           INTEGER NOT NULL DEFAULT 1,
+     created_by        TEXT,
+     created_at        INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at        INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     last_seen_at      INTEGER,
+     last_sync_at      INTEGER,
+     node_version      TEXT,
+     disk_used         INTEGER,
+     disk_free         INTEGER,
+     files_held        INTEGER,
+     files_wanted      INTEGER,
+     bytes_wanted      INTEGER,
+     hits              INTEGER NOT NULL DEFAULT 0,
+     misses            INTEGER NOT NULL DEFAULT 0,
+     bytes_served      INTEGER NOT NULL DEFAULT 0,
+     bytes_from_origin INTEGER NOT NULL DEFAULT 0,
+     last_error        TEXT)`,
+  'CREATE INDEX IF NOT EXISTS idx_site_caches_ws ON site_caches(workspace_id)',
+  `CREATE TABLE IF NOT EXISTS site_cache_assignments (
+     id            TEXT PRIMARY KEY,
+     site_cache_id TEXT NOT NULL REFERENCES site_caches(id) ON DELETE CASCADE,
+     workspace_id  TEXT NOT NULL,
+     device_id     TEXT REFERENCES devices(id) ON DELETE CASCADE,
+     group_id      TEXT REFERENCES device_groups(id) ON DELETE CASCADE,
+     created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     CHECK ((device_id IS NOT NULL AND group_id IS NULL) OR (device_id IS NULL AND group_id IS NOT NULL)))`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_sca_device ON site_cache_assignments (device_id) WHERE device_id IS NOT NULL',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_sca_group ON site_cache_assignments (group_id) WHERE group_id IS NOT NULL',
+  'CREATE INDEX IF NOT EXISTS idx_sca_cache ON site_cache_assignments (site_cache_id)',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

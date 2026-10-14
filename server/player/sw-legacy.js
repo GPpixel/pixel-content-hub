@@ -18,8 +18,10 @@ var __async = (__this, __arguments, generator) => {
     step((generator = generator.apply(__this, __arguments)).next());
   });
 };
-const CACHE_NAME = "rd-player-v29";
+const CACHE_NAME = "rd-player-v30";
 const CONTENT_CACHE = "rd-content-v1";
+const SITE_CACHE_STORE = "rd-site-cache-v1";
+const SITE_CACHE_KEY = "/__st_site_cache__";
 importScripts("/player/cache-policy.js");
 const POLICY = self.PlayerCachePolicy;
 self.addEventListener("install", (event) => {
@@ -31,7 +33,7 @@ self.addEventListener("activate", (event) => {
       // CONTENT_CACHE is spared deliberately: it holds media, not code, and dropping it on every
       // shell version bump would make each deploy re-download the whole playlist — over a link
       // that may be exactly what is broken.
-      keys.filter((k) => k !== CACHE_NAME && k !== CONTENT_CACHE).map((k) => caches.delete(k))
+      keys.filter((k) => k !== CACHE_NAME && k !== CONTENT_CACHE && k !== SITE_CACHE_STORE).map((k) => caches.delete(k))
     )).then(() => self.clients.claim())
   );
 });
@@ -91,6 +93,10 @@ self.addEventListener("message", (event) => {
     });
     return;
   }
+  if (data && data.type === "st-site-cache") {
+    setSiteCache(data.config);
+    return;
+  }
   if (!data || data.type !== "st-cache-playlist" || !Array.isArray(data.urls)) return;
   if (data.prune && data.urls.length > 0) {
     prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.urls)).catch(() => {
@@ -110,6 +116,12 @@ function ensureCached(url) {
   return __async(this, null, function* () {
     const cache = yield caches.open(CONTENT_CACHE);
     if (yield cache.match(url, { ignoreVary: true })) {
+      yield sweepOldRevisions(cache, url);
+      return;
+    }
+    const fromSite = yield siteCacheFetch(url, { wait: true });
+    if (fromSite) {
+      yield storeContent(cache, new Request(url), fromSite);
       yield sweepOldRevisions(cache, url);
       return;
     }
@@ -238,6 +250,24 @@ function handleContent(request) {
       const sliced = yield sliceCached(cached, range);
       if (sliced) return sliced;
     }
+    yield loadSiteCache();
+    const siteEntry = siteEntryFor(request.url);
+    if (siteEntry && siteEntry.size <= SITE_INLINE_MAX_BYTES) {
+      const fromSite = yield siteCacheFetch(request.url, { wait: false });
+      if (fromSite) {
+        try {
+          yield storeContent(cache, new Request(request.url), fromSite.clone());
+          const stored = yield cache.match(request.url, { ignoreVary: true });
+          if (stored) {
+            if (!range) return stored;
+            const sliced = yield sliceCached(stored, range);
+            if (sliced) return sliced;
+          }
+        } catch (e) {
+        }
+        if (!range) return fromSite;
+      }
+    }
     try {
       const response = yield fetch(request);
       if (!range && POLICY.isStorable(response)) {
@@ -302,6 +332,140 @@ function evictOldest(cache, needBytes) {
       yield cache.delete(key);
       freed += size;
       if (freed >= needBytes) break;
+    }
+  });
+}
+const SITE_MAX_BYTES = 768 * 1024 * 1024;
+const SITE_INLINE_MAX_BYTES = 64 * 1024 * 1024;
+const SITE_FIRST_BYTE_MS = 4e3;
+const SITE_DOWN_MS = 60 * 1e3;
+const SITE_WARM_WAIT_MS = 3 * 60 * 1e3;
+let siteCache = null;
+let siteCacheLoaded = null;
+let siteDownUntil = 0;
+function validSiteConfig(c) {
+  if (!c || typeof c !== "object" || typeof c.url !== "string" || typeof c.token !== "string") return null;
+  if (!/^https?:\/\/[^/?#]+$/.test(c.url)) return null;
+  const files = {};
+  for (const k of Object.keys(c.files || {})) {
+    const f = c.files[k];
+    if (f && /^[0-9a-f]{64}$/.test(f.sha256) && f.size >= 0) files[k] = { sha256: f.sha256, size: Number(f.size) };
+  }
+  return { url: c.url, token: c.token, expires_at: Number(c.expires_at) || 0, files };
+}
+function setSiteCache(config) {
+  siteCache = validSiteConfig(config);
+  siteCacheLoaded = Promise.resolve();
+  siteDownUntil = 0;
+  caches.open(SITE_CACHE_STORE).then((c) => siteCache ? c.put(SITE_CACHE_KEY, new Response(JSON.stringify(siteCache), { headers: { "Content-Type": "application/json" } })) : c.delete(SITE_CACHE_KEY)).catch(() => {
+  });
+}
+function loadSiteCache() {
+  if (!siteCacheLoaded) {
+    siteCacheLoaded = caches.open(SITE_CACHE_STORE).then((c) => c.match(SITE_CACHE_KEY)).then((r) => r ? r.json() : null).then((j) => {
+      if (!siteCache) siteCache = validSiteConfig(j);
+    }).catch(() => {
+    });
+  }
+  return siteCacheLoaded;
+}
+function siteEntryFor(url) {
+  if (!siteCache) return null;
+  if (siteCache.expires_at && siteCache.expires_at * 1e3 < Date.now()) return null;
+  let p;
+  try {
+    p = new URL(url, self.location.href).pathname;
+  } catch (e) {
+    return null;
+  }
+  return siteCache.files[p] || null;
+}
+function hexOf(buf) {
+  const b = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += (b[i] < 16 ? "0" : "") + b[i].toString(16);
+  return s;
+}
+function siteCacheOnce(entry) {
+  return __async(this, null, function* () {
+    if (Date.now() < siteDownUntil) return null;
+    const ctrl = new AbortController();
+    let timer = setTimeout(() => ctrl.abort(), SITE_FIRST_BYTE_MS);
+    let res;
+    try {
+      res = yield fetch(siteCache.url + "/cache/" + entry.sha256, {
+        headers: { Authorization: "Bearer " + siteCache.token },
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        signal: ctrl.signal
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      siteDownUntil = Date.now() + SITE_DOWN_MS;
+      return null;
+    }
+    clearTimeout(timer);
+    if (res.status === 503) {
+      const ra = parseInt(res.headers.get("Retry-After") || "15", 10);
+      return { warming: true, retryMs: Math.min(30, Math.max(2, ra || 15)) * 1e3 };
+    }
+    if (res.status === 404) return { missing: true };
+    if (res.status !== 200) return null;
+    timer = setTimeout(() => ctrl.abort(), 1e4 + Math.ceil(entry.size / (512 * 1024)) * 1e3);
+    let buf;
+    try {
+      buf = yield res.arrayBuffer();
+    } catch (e) {
+      clearTimeout(timer);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (buf.byteLength !== entry.size) return null;
+    let hex = null;
+    try {
+      hex = hexOf(yield crypto.subtle.digest("SHA-256", buf));
+    } catch (e) {
+      hex = null;
+    }
+    if (hex !== entry.sha256) {
+      console.warn("[site-cache] bytes from the cache did not match their sha256; using the origin");
+      return null;
+    }
+    return { response: new Response(buf, { status: 200, headers: {
+      "Content-Type": res.headers.get("Content-Type") || "application/octet-stream",
+      "Content-Length": String(entry.size),
+      "X-ST-Source": "site-cache"
+    } }) };
+  });
+}
+function siteCacheFetch(_0, _1) {
+  return __async(this, arguments, function* (url, { wait }) {
+    try {
+      yield loadSiteCache();
+      const entry = siteEntryFor(url);
+      if (!entry || entry.size > SITE_MAX_BYTES) return null;
+      const until = Date.now() + SITE_WARM_WAIT_MS;
+      let askedAgain = false;
+      for (; ; ) {
+        const r = yield siteCacheOnce(entry);
+        if (!r) return null;
+        if (r.response) return r.response;
+        if (!wait) return null;
+        let pause;
+        if (r.warming) pause = r.retryMs;
+        else if (r.missing && !askedAgain) {
+          askedAgain = true;
+          pause = 12e3;
+        } else return null;
+        if (Date.now() + pause > until) return null;
+        yield new Promise((resolve) => setTimeout(resolve, pause));
+        if (!siteEntryFor(url)) return null;
+      }
+    } catch (e) {
+      return null;
     }
   });
 }
