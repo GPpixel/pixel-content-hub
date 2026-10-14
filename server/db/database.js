@@ -2789,6 +2789,89 @@ const migrations = [
      attempts INTEGER NOT NULL DEFAULT 0,
      ok_attempts INTEGER NOT NULL DEFAULT 0,
      PRIMARY KEY (channel_id, incident_id))`,
+  /*
+   * 3.0: content requests (lib/content-requests.js, docs/content-requests.md). People WITHOUT an
+   * account submit something for the screens through a shared form; it lands in the review queue.
+   *
+   * request_forms.code is the URL secret (/r/<code>). Rotating it is an UPDATE, so an old link dies
+   * the moment the admin says so. targets / fields / file_rules are JSON the lib validates on write.
+   * Everything a requester typed lives on content_requests, never on users: they have no account.
+   * status_token_hash is the sha256 of the status link's secret — the link is shown once and mailed,
+   * and the database alone cannot be used to read anybody's request status.
+   * request_tickets is the short-lived proof that a requester passed the form's gate (link code,
+   * email code, or SSO); request_email_challenges holds the hashed six-digit codes for email mode.
+   * submissions.request_id ties a queue entry back to the request it reviews.
+   */
+  `CREATE TABLE IF NOT EXISTS request_forms (
+     id TEXT PRIMARY KEY,
+     workspace_id TEXT NOT NULL,
+     code TEXT NOT NULL UNIQUE,
+     title TEXT NOT NULL,
+     intro TEXT NOT NULL DEFAULT '',
+     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','paused','closed')),
+     access_mode TEXT NOT NULL DEFAULT 'link' CHECK (access_mode IN ('link','email','sso')),
+     allowed_domains TEXT NOT NULL DEFAULT '',
+     targets TEXT NOT NULL DEFAULT '[]',
+     fields TEXT NOT NULL DEFAULT '{}',
+     file_rules TEXT NOT NULL DEFAULT '{}',
+     lead_days INTEGER NOT NULL DEFAULT 0,
+     max_window_days INTEGER NOT NULL DEFAULT 60,
+     item_duration_sec INTEGER NOT NULL DEFAULT 10,
+     daily_quota INTEGER NOT NULL DEFAULT 20,
+     folder_id TEXT,
+     created_by TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'CREATE INDEX IF NOT EXISTS idx_request_forms_ws ON request_forms(workspace_id)',
+  `CREATE TABLE IF NOT EXISTS content_requests (
+     id TEXT PRIMARY KEY,
+     ref TEXT NOT NULL UNIQUE,
+     form_id TEXT NOT NULL,
+     workspace_id TEXT NOT NULL,
+     status_token_hash TEXT NOT NULL UNIQUE,
+     requester_name TEXT NOT NULL,
+     requester_email TEXT NOT NULL,
+     verified_via TEXT NOT NULL DEFAULT 'none',
+     title TEXT NOT NULL,
+     audience TEXT,
+     notes TEXT,
+     start_date TEXT NOT NULL,
+     end_date TEXT NOT NULL,
+     targets TEXT NOT NULL DEFAULT '[]',
+     content_id TEXT,
+     submission_id TEXT,
+     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','published','rejected','cancelled')),
+     reason TEXT,
+     decided_by TEXT,
+     decided_at INTEGER,
+     publish_result TEXT,
+     ip_hash TEXT,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'CREATE INDEX IF NOT EXISTS idx_content_requests_ws ON content_requests(workspace_id, status, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_content_requests_form ON content_requests(form_id, created_at)',
+  `CREATE TABLE IF NOT EXISTS request_tickets (
+     id TEXT PRIMARY KEY,
+     form_id TEXT NOT NULL,
+     token_hash TEXT NOT NULL UNIQUE,
+     name TEXT,
+     email TEXT NOT NULL,
+     verified_via TEXT NOT NULL DEFAULT 'none',
+     expires_at INTEGER NOT NULL,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'CREATE INDEX IF NOT EXISTS idx_request_tickets_exp ON request_tickets(expires_at)',
+  `CREATE TABLE IF NOT EXISTS request_email_challenges (
+     id TEXT PRIMARY KEY,
+     form_id TEXT NOT NULL,
+     email TEXT NOT NULL,
+     name TEXT,
+     code_hash TEXT NOT NULL,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     expires_at INTEGER NOT NULL,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))`,
+  'CREATE INDEX IF NOT EXISTS idx_request_email_challenges ON request_email_challenges(form_id, email)',
+  'ALTER TABLE submissions ADD COLUMN request_id TEXT',
+  'CREATE INDEX IF NOT EXISTS idx_submissions_request ON submissions(request_id)',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

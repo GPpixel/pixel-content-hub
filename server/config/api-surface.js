@@ -200,6 +200,12 @@ const JWT_ONLY_ROUTERS = [
    * browser. The meeting-room join is /api/share, mounted separately in server.js (no account).
    */
   { path: '/api/screen-share', mod: './routes/screen-share', tenancy: true },
+  /*
+   * 3.0 content requests (lib/content-requests.js): request forms and the requests they collect.
+   * JWT only: a form decides who OUTSIDE the workspace may put things in front of a reviewer, which
+   * is a signed-in person's call. The public side is /api/public/requests, mounted in server.js.
+   */
+  { path: '/api/content-requests', mod: './routes/content-requests', tenancy: true },
 ];
 
 // #73: AGENCY_ROUTERS - capability-restricted ('agency' scope) surface. Mounted with

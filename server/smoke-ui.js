@@ -34,7 +34,7 @@ const crypto = require('node:crypto');
 // renders the head office setup prompt — the path every new organization sees first.
 const VIEWS = ['#/', '#/content', '#/playlists', '#/layouts', '#/widgets', '#/schedule',
   '#/walls', '#/reports', '#/kiosk', '#/designer', '#/activity', '#/members', '#/help', '#/settings',
-  '#/corporate', '#/freshness'];
+  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms'];
 
 function findChrome() {
   if (process.env.CHROME && fs.existsSync(process.env.CHROME)) return process.env.CHROME;
@@ -776,6 +776,46 @@ const check = (name, ok, detail) => {
     check('signing in with the passkey ends signed in, with no email or password typed', signedIn.token,
       JSON.stringify(signedIn));
     check('the passkey pages throw nothing', pkErrors.length === 0, pkErrors.slice(0, 3).join(' | '));
+    await ctx.close();
+  }
+
+  // ---- 3.0 content requests: the public form works on a phone for someone with no account --------
+  {
+    const token = await page.evaluate(() => localStorage.getItem('token'));
+    const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
+    const pl = await (await fetch(BASE + '/api/playlists', { method: 'POST', headers: H, body: JSON.stringify({ name: 'Requests smoke' }) })).json();
+    await fetch(BASE + `/api/playlists/${pl.id}/publish`, { method: 'POST', headers: H });
+    const form = await (await fetch(BASE + '/api/content-requests/forms', { method: 'POST', headers: H,
+      body: JSON.stringify({ title: 'Smoke request form', intro: 'Send us a poster', targets: [{ label: 'Lobby', playlist_id: pl.id }] }) })).json();
+    check('a request form can be made', !!(form && form.path), JSON.stringify(form).slice(0, 200));
+    const ctx = await browser.createBrowserContext();
+    const pub = await ctx.newPage();
+    const pubErrors = [];
+    pub.on('pageerror', (e) => pubErrors.push(e.message));
+    pub.on('console', (m) => { if (m.type() === 'error' && !/favicon|404 \(Not Found\)/.test(m.text())) pubErrors.push(m.text().slice(0, 140)); });
+    await pub.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+    await pub.goto(BASE + (form.path || '/r/none'), { waitUntil: 'networkidle2' });
+    await pub.waitForSelector('#rqName', { timeout: 5000 }).catch(() => {});
+    const shown = await pub.evaluate(() => ({
+      title: (document.querySelector('h1') || {}).textContent,
+      bare: [...document.querySelectorAll('body *')].filter((e) => e.children.length === 0).map((e) => (e.textContent || '').trim())
+        .filter((s) => /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(s)),
+      scroll: document.documentElement.scrollWidth - window.innerWidth,
+    }));
+    check('the public request page renders on a phone, translated, with no sideways scroll',
+      shown.title === 'Smoke request form' && !shown.bare.length && shown.scroll <= 0 && !pubErrors.length,
+      `${JSON.stringify(shown)} ${pubErrors.slice(0, 3).join(' | ')}`);
+    await pub.type('#rqName', 'Smoke Tester');
+    await pub.type('#rqEmail', 'tester@x.test');
+    await pub.click('[data-go]');
+    await pub.waitForSelector('#rqTitle', { timeout: 5000 }).catch(() => {});
+    check('a requester passes an open-link gate and reaches the request form',
+      await pub.evaluate(() => !!document.querySelector('#rqTitle') && document.querySelectorAll('.choices input').length === 1) && !pubErrors.length,
+      pubErrors.slice(0, 3).join(' | '));
+    await pub.goto(BASE + '/r/status#' + 'x'.repeat(43), { waitUntil: 'networkidle2' });
+    await new Promise((r) => setTimeout(r, 500));
+    check('an unknown status link says so instead of failing', await pub.evaluate(() => (document.body.innerText || '').length > 20) && !pubErrors.length,
+      pubErrors.slice(0, 3).join(' | '));
     await ctx.close();
   }
 

@@ -44,6 +44,14 @@ const LIMIT_PATH_SHAPES = [
   [/^\/api\/templates\/thumb\/[^/]+$/, () => '/api/templates/thumb/:sha'],
   [/^\/api\/templates\/asset\/.+$/, () => '/api/templates/asset/:sha/:path'],
   /*
+   * 3.0 content requests: the form code (/r/<code>) and the upload id are caller-chosen, and the
+   * code is a secret — folded so a guess neither mints its own bucket nor lands in a 429 log line.
+   */
+  [/^\/r\/[^/]+$/, () => '/r/:code'],
+  [/^\/api\/public\/requests\/form\/[^/]+\/uploads\/[^/]+$/, () => '/api/public/requests/form/:code/uploads/:id'],
+  [/^\/api\/public\/requests\/form\/[^/]+(\/start|\/verify|\/verify\/confirm|\/sso|\/uploads|\/submit)?$/, (m) => `/api/public/requests/form/:code${m[1] || ''}`],
+  [/^\/api\/public\/requests\/form(\/.*)?$/, () => '/api/public/requests/form/:unmatched'],
+  /*
    * ⚠️ THE LAST SEGMENT IS A CREDENTIAL. An inbound hook's URL carries its secret, so without this
    * the per-IP bucket was keyed on it (a new bucket per probe) and the `[limit] 429 <endpoint>`
    * warning wrote the secret into the server log. The hook ID stays in the key (it is not a secret,
