@@ -34,7 +34,7 @@ const crypto = require('node:crypto');
 // renders the head office setup prompt — the path every new organization sees first.
 const VIEWS = ['#/', '#/content', '#/playlists', '#/layouts', '#/widgets', '#/schedule',
   '#/walls', '#/reports', '#/kiosk', '#/designer', '#/activity', '#/members', '#/help', '#/settings',
-  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms'];
+  '#/corporate', '#/freshness', '#/requests', '#/requests?tab=forms', '#/site-caches'];
 
 function findChrome() {
   if (process.env.CHROME && fs.existsSync(process.env.CHROME)) return process.env.CHROME;

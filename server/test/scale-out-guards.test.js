@@ -144,6 +144,9 @@ const NOT_WORKSPACE_SCOPED = Object.freeze({
   // session. Not exempt on trust: a guard forwards every action for a copied workspace to the
   // primary before the body is read (asserted below).
   'room-panel.js': 'room display actions; a guard forwards every one for a copied workspace to the primary (asserted below)',
+  // 3.0 site cache: the cache BOX's own door, authenticated by its token. Its one write is that cache
+  // row's status columns (disk, hits, last seen), which are display only and never replicated.
+  'site-cache-node.js': 'site cache box status report, authenticated by the box token; writes only its own site_caches status columns',
   'screen-share-guest.js': '3.0 meeting-room screen share join: spends an in-memory code and mints an in-memory session on the node the screen is connected to; writes no workspace row (only the activity_log audit line)',
 });
 

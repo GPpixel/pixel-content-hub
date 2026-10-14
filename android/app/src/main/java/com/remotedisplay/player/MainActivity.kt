@@ -96,6 +96,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusOverlay: View
     private lateinit var statusText: TextView
     private lateinit var rootView: View
+    // 3.0 site cache (data/SiteCache.kt): the LAN box from the latest payload, read by the downloader.
+    @Volatile private var siteCacheConfig: com.remotedisplay.player.data.SiteCacheConfig? = null
     // Audience counting (audience/AudienceController.kt): off unless the server's payload turns it on.
     private var audience: com.remotedisplay.player.audience.AudienceController? = null
     private lateinit var pipLayout: FrameLayout       // #109: reparented above rootView (see onCreate)
@@ -221,7 +223,8 @@ class MainActivity : AppCompatActivity() {
             cache = contentCache,
             serverUrl = { config.serverUrl },
             socketAlive = { wsService?.isConnected() == true },
-            onAck = { cid, status -> ackContentOnce(cid, status) }
+            onAck = { cid, status -> ackContentOnce(cid, status) },
+            siteCache = { siteCacheConfig }
         )
         screenshotCapture = ScreenshotCapture()
         touchInjector = TouchInjector()
@@ -539,6 +542,8 @@ class MainActivity : AppCompatActivity() {
                     // with no WAN (a LOCAL default is pinned on disk by the download loop; a remote one
                     // can't stream offline and simply won't show).
                     playlistController.setDefaultContent(if (cached.isNull("default_content")) null else cached.optJSONObject("default_content"))
+                    // The site cache too: a panel that reboots with the WAN down can still fill from its LAN box.
+                    siteCacheConfig = com.remotedisplay.player.data.SiteCacheConfig.parse(if (cached.isNull("site_cache")) null else cached.optJSONObject("site_cache"))
                     // Restore the SHAPE too, not just the content: a zoned (or wall) panel must
                     // cold-start into its zones/tiling, not render flat-fullscreen and then snap into
                     // zones the moment the server reconnects (the visible "loads fullscreen, then jumps
@@ -975,6 +980,10 @@ class MainActivity : AppCompatActivity() {
             // of the idle text. Null/absent when unset. Set here so BOTH the wall and single-zone
             // updatePlaylist paths below have it before they run.
             playlistController.setDefaultContent(if (data.isNull("default_content")) null else data.optJSONObject("default_content"))
+            // 3.0 site cache: set BEFORE the download sweep this payload triggers, so new media is
+            // tried from the LAN box first. Absent = no box (an un-assigned screen, or a server
+            // that predates it) and downloads go to the origin as before.
+            siteCacheConfig = com.remotedisplay.player.data.SiteCacheConfig.parse(if (data.isNull("site_cache")) null else data.optJSONObject("site_cache"))
 
             /*
              * Cache playlist JSON for offline cold-start.

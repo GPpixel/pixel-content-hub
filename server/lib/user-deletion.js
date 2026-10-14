@@ -37,6 +37,9 @@ const WORKSPACE_SCOPED = [
   'playlists', 'schedules', 'video_walls', 'device_groups', 'devices',
   'content', 'layouts', 'widgets', 'content_folders', 'kiosk_pages',
   'white_labels', 'alert_configs',
+  // 3.0 site cache: a deleted workspace's cache boxes stop being able to sign in (their token_hash
+  // goes) and their assignments cascade with them.
+  'site_caches',
 ];
 // Logs that carry a device_id but NO foreign key (so they don't block, but we
 // clean them to avoid dangling rows).
