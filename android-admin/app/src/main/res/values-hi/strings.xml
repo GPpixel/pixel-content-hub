@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">किसी स्क्रीन पर दिखाएँ</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">अपने फ़ोन से बदलें कि आपकी स्क्रीन क्या दिखाएँ।</string>
+    <string name="server_question">आपका ScreenTinker कहाँ है?</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">मेरा अपना सर्वर</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">कनेक्ट करें</string>
+    <string name="server_checking">%1$s की जाँच हो रही है…</string>
+    <string name="server_bad_url">अपने सर्वर का पता दर्ज करें, जैसे https://signage.example.com</string>
+    <string name="server_unreachable">%1$s तक नहीं पहुँचा जा सका। पता जाँचें, और देखें कि यह फ़ोन ऐसे नेटवर्क पर है जहाँ से वह पहुँच में हो।</string>
+    <string name="server_not_screentinker">%1$s ने ScreenTinker सर्वर की तरह जवाब नहीं दिया।</string>
+    <string name="server_too_old">%1$s पर ScreenTinker %2$s चल रहा है। इस ऐप को 3.0 या नया संस्करण चाहिए: जो इसे चलाते हैं उनसे अपडेट करने को कहें।</string>
+    <string name="servers_title">आपके सर्वर</string>
+    <string name="servers_add">एक और सर्वर जोड़ें</string>
+    <string name="servers_in_use">उपयोग में</string>
+    <string name="servers_switch">बदलें</string>
+    <string name="servers_remove">हटाएँ</string>
+    <string name="servers_remove_confirm">क्या %1$s को इस फ़ोन से हटाएँ? वहाँ आपके खाते और स्क्रीन पर कोई असर नहीं होगा; आप इसे कभी भी फिर से जोड़ सकते हैं।</string>
+    <string name="cancel">रद्द करें</string>
+    <string name="server_already_added">%1$s पहले से आपकी सूची में है।</string>
+    <string name="signing_in">आपको साइन इन किया जा रहा है…</string>
+    <string name="sso_failed">साइन इन विफल रहा: %1$s</string>
+    <string name="uploading">%1$d फ़ाइल अपलोड हो रही हैं…</string>
+    <string name="share_sign_in_first">पहले साइन इन करें, फिर अपनी फ़ोटो दोबारा शेयर करें।</string>
+    <string name="share_failed">अपलोड विफल रहा: %1$s</string>
+    <string name="offline">आपके सर्वर तक नहीं पहुँचा जा सका। अपना कनेक्शन जाँचें और फिर से कोशिश करें।</string>
+    <string name="retry">फिर से कोशिश करें</string>
+</resources>

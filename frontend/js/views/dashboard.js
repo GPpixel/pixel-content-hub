@@ -546,16 +546,12 @@ export async function renderStatsPrompt(container) {
   el.style.cssText = 'margin-bottom:16px;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap';
   el.innerHTML = `
     <div style="flex:1;min-width:260px">
-      <strong>Help show how widely ScreenTinker is deployed?</strong>
-      <p style="color:var(--text-muted);font-size:13px;margin:6px 0 0">
-        Because most installs are private, we can't tell how many screens are out there. Sharing
-        sends a random ID, the version, and how many screens you run — nothing else, ever.
-        You can change this any time in Settings.
-      </p>
+      <strong>${esc(t('stats.prompt.title'))}</strong>
+      <p style="color:var(--text-muted);font-size:13px;margin:6px 0 0">${esc(t('stats.prompt.body'))}</p>
     </div>
     <div style="display:flex;gap:8px">
-      <button class="btn btn-primary btn-sm" id="statsYes">Share</button>
-      <button class="btn btn-secondary btn-sm" id="statsNo">No thanks</button>
+      <button class="btn btn-primary btn-sm" id="statsYes">${esc(t('stats.prompt.share'))}</button>
+      <button class="btn btn-secondary btn-sm" id="statsNo">${esc(t('stats.prompt.no'))}</button>
     </div>
   `;
   container.prepend(el);
@@ -563,7 +559,7 @@ export async function renderStatsPrompt(container) {
   const answer = async (enabled) => {
     try { await api.adminSetTelemetry(enabled); } catch { /* leave it unasked; it can ask again later */ return; }
     el.remove();
-    if (enabled) showToast('Thank you — sharing install statistics', 'success');
+    if (enabled) showToast(t('stats.prompt.thanks'), 'success');
   };
   el.querySelector('#statsYes').addEventListener('click', () => answer(true));
   el.querySelector('#statsNo').addEventListener('click', () => answer(false));

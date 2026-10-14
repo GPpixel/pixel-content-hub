@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">Afficher sur un écran</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">Changez ce qu’affichent vos écrans, depuis votre téléphone.</string>
+    <string name="server_question">Où se trouve votre ScreenTinker ?</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">Mon propre serveur</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">Se connecter</string>
+    <string name="server_checking">Vérification de %1$s…</string>
+    <string name="server_bad_url">Saisissez l\'adresse de votre serveur, par exemple https://signage.example.com</string>
+    <string name="server_unreachable">Impossible de joindre %1$s. Vérifiez l\'adresse et que ce téléphone est sur un réseau qui peut y accéder.</string>
+    <string name="server_not_screentinker">%1$s n\'a pas répondu comme un serveur ScreenTinker.</string>
+    <string name="server_too_old">%1$s utilise ScreenTinker %2$s. Cette application nécessite la version 3.0 ou plus récente : demandez à la personne qui le gère de le mettre à jour.</string>
+    <string name="servers_title">Vos serveurs</string>
+    <string name="servers_add">Ajouter un autre serveur</string>
+    <string name="servers_in_use">Utilisé</string>
+    <string name="servers_switch">Basculer</string>
+    <string name="servers_remove">Retirer</string>
+    <string name="servers_remove_confirm">Retirer %1$s de ce téléphone ? Votre compte et vos écrans sur ce serveur ne sont pas affectés ; vous pouvez le rajouter à tout moment.</string>
+    <string name="cancel">Annuler</string>
+    <string name="server_already_added">%1$s est déjà dans votre liste.</string>
+    <string name="signing_in">Connexion en cours…</string>
+    <string name="sso_failed">Échec de la connexion : %1$s</string>
+    <string name="uploading">Téléversement de %1$d fichier(s)…</string>
+    <string name="share_sign_in_first">Connectez-vous d\'abord, puis partagez à nouveau vos photos.</string>
+    <string name="share_failed">Échec du téléversement : %1$s</string>
+    <string name="offline">Impossible de joindre votre serveur. Vérifiez votre connexion et réessayez.</string>
+    <string name="retry">Réessayer</string>
+</resources>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">Op een scherm tonen</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">Wijzig vanaf je telefoon wat je schermen tonen.</string>
+    <string name="server_question">Waar staat je ScreenTinker?</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">Mijn eigen server</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">Verbinden</string>
+    <string name="server_checking">%1$s controleren…</string>
+    <string name="server_bad_url">Vul het adres van je server in, bijvoorbeeld https://signage.example.com</string>
+    <string name="server_unreachable">%1$s is niet bereikbaar. Controleer het adres en of deze telefoon op een netwerk zit dat de server kan bereiken.</string>
+    <string name="server_not_screentinker">%1$s antwoordde niet zoals een ScreenTinker-server.</string>
+    <string name="server_too_old">Op %1$s draait ScreenTinker %2$s. Deze app heeft 3.0 of nieuwer nodig: vraag de beheerder om bij te werken.</string>
+    <string name="servers_title">Je servers</string>
+    <string name="servers_add">Nog een server toevoegen</string>
+    <string name="servers_in_use">In gebruik</string>
+    <string name="servers_switch">Wisselen</string>
+    <string name="servers_remove">Verwijderen</string>
+    <string name="servers_remove_confirm">%1$s van deze telefoon verwijderen? Je account en schermen daar blijven ongewijzigd; je kunt de server altijd opnieuw toevoegen.</string>
+    <string name="cancel">Annuleren</string>
+    <string name="server_already_added">%1$s staat al in je lijst.</string>
+    <string name="signing_in">Je wordt aangemeld…</string>
+    <string name="sso_failed">Aanmelden mislukt: %1$s</string>
+    <string name="uploading">%1$d bestand(en) uploaden…</string>
+    <string name="share_sign_in_first">Meld je eerst aan en deel je foto\'s daarna opnieuw.</string>
+    <string name="share_failed">Uploaden mislukt: %1$s</string>
+    <string name="offline">Je server is niet bereikbaar. Controleer je verbinding en probeer het opnieuw.</string>
+    <string name="retry">Opnieuw proberen</string>
+</resources>

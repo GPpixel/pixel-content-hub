@@ -607,55 +607,35 @@ async function renderUpload(container, presetIds = []) {
 // ---------------------------------------------------------------------------------------------
 // Help, inside Simple view. The full Help page is about the whole product (widgets, layouts,
 // kiosks, video walls) and opens in the full shell; this one answers what Simple view does, keeps
-// the top bar, and always has a way home. Guide text is English like views/help.js (see its note);
-// the page chrome is translated.
+// the top bar, and always has a way home. Fully translated (simple.help.*), unlike views/help.js:
+// the people who use Simple view are the ones least likely to read English documentation.
 // ---------------------------------------------------------------------------------------------
 
+// Guides and questions for Simple view (translated: i18n keys simple.help.*).
 const SIMPLE_GUIDES = [
-  { icon: '&#10133;', title: 'Connect a screen', steps: [
-    'On the TV, tablet or computer you want to use, open the player: install the Android app, or open this site\'s /player page in its web browser.',
-    'No TV handy? Open the player in another browser tab to try it.',
-    'The player shows a 6-digit code. Here, choose "Add a screen" and type it in.',
-    'Give the screen a name you will recognise, like "Front window".',
-  ] },
-  { icon: '&#9998;', title: 'Change what a screen shows', steps: [
-    'Choose "Change what a screen shows", or tap the screen under "Your screens".',
-    'Pick "Replace" to show only the new things, or "Add" to keep what is already playing.',
-    'Upload photos or videos, pick ones you uploaded before, or show the same as another screen.',
-    'The screen updates within a few seconds.',
-  ] },
-  { icon: '&#128247;', title: 'Upload photos and videos', steps: [
-    'Choose "Upload photos" and pick as many files as you like, or drag them in.',
-    'Tick the screens that should show them, or untick them all to keep them for later.',
-    'Photos show for 10 seconds each; videos play to the end.',
-  ] },
+  { icon: '&#10133;', key: 'simple.help.g1', steps: 4 },
+  { icon: '&#9998;', key: 'simple.help.g2', steps: 4 },
+  { icon: '&#128247;', key: 'simple.help.g3', steps: 3 },
 ];
 
-const SIMPLE_FAQ = [
-  { q: 'What can I use as a screen?', a: 'Android TVs, TV boxes and tablets, Fire TV, LG and Samsung smart TVs, Raspberry Pi, Windows and ChromeOS — or any device with a web browser.' },
-  { q: 'My screen is not changing. What should I check?', a: 'Make sure the screen shows "Playing" on the home page. If it says "Offline", check that the device is on and connected to the internet; it picks up your changes as soon as it reconnects.' },
-  { q: 'What happens if the internet goes down?', a: 'Screens keep the content locally and carry on playing it. New changes arrive when the connection comes back.' },
-  { q: 'Which files can I upload?', a: 'Photos (JPEG, PNG, GIF, WebP) and videos (MP4 works best), plus audio. PDFs can be uploaded from the Content page in Advanced view.' },
-  { q: 'How do I rename or remove a screen?', a: 'Switch to Advanced (top right), open Screens, click the screen, then use Rename or Remove at the top of its page.' },
-  { q: 'Can I show different things at different times of day?', a: 'Yes — that is Schedule, in Advanced view. Simple view always shows the same content on a screen until you change it.' },
-];
+const SIMPLE_FAQ = [1, 2, 3, 4, 5, 6];
 
 function renderHelp(container) {
   const u = cachedUser() || {};
   const trial = plansVisible(u)
-    ? [{ q: 'How does the free trial work?', a: 'You get 14 days of the Pro plan with every feature unlocked and no card required. When it ends you move to the Free plan: nothing is deleted, and screens beyond the Free plan pause until you choose a plan.' }]
+    ? [{ q: t('simple.help.trial_q'), a: t('simple.help.trial_a') }]
     : [];
   shell(container, `
     <div class="simple-help-top"><a href="#/" class="btn btn-secondary btn-sm">&larr; ${esc(t('simple.done.home'))}</a></div>
     <h1 class="simple-h1">${esc(t('simple.help.title'))}</h1>
     <div class="simple-help-guides">${SIMPLE_GUIDES.map((g) => `
       <div class="simple-card">
-        <h3>${g.icon} ${esc(g.title)}</h3>
-        <ol>${g.steps.map((st) => `<li>${esc(st)}</li>`).join('')}</ol>
+        <h3>${g.icon} ${esc(t(`${g.key}.title`))}</h3>
+        <ol>${Array.from({ length: g.steps }, (_, i) => `<li>${esc(t(`${g.key}.s${i + 1}`))}</li>`).join('')}</ol>
       </div>`).join('')}
     </div>
     <h2 class="simple-h2">${esc(t('simple.help.faq'))}</h2>
-    <div class="simple-card simple-faq">${[...SIMPLE_FAQ, ...trial].map((f) => `
+    <div class="simple-card simple-faq">${[...SIMPLE_FAQ.map((n) => ({ q: t(`simple.help.q${n}`), a: t(`simple.help.a${n}`) })), ...trial].map((f) => `
       <details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}
     </div>
     <div class="simple-card simple-help-more">

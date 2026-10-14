@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">Auf einem Bildschirm zeigen</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">Ändern Sie vom Handy aus, was Ihre Bildschirme zeigen.</string>
+    <string name="server_question">Wo läuft Ihr ScreenTinker?</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">Mein eigener Server</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">Verbinden</string>
+    <string name="server_checking">%1$s wird geprüft…</string>
+    <string name="server_bad_url">Geben Sie die Adresse Ihres Servers ein, z. B. https://signage.example.com</string>
+    <string name="server_unreachable">%1$s ist nicht erreichbar. Prüfen Sie die Adresse und ob dieses Handy in einem Netzwerk ist, das den Server erreichen kann.</string>
+    <string name="server_not_screentinker">%1$s hat nicht wie ein ScreenTinker-Server geantwortet.</string>
+    <string name="server_too_old">Auf %1$s läuft ScreenTinker %2$s. Diese App benötigt 3.0 oder neuer: Bitten Sie den Betreiber, den Server zu aktualisieren.</string>
+    <string name="servers_title">Ihre Server</string>
+    <string name="servers_add">Weiteren Server hinzufügen</string>
+    <string name="servers_in_use">Aktiv</string>
+    <string name="servers_switch">Wechseln</string>
+    <string name="servers_remove">Entfernen</string>
+    <string name="servers_remove_confirm">%1$s von diesem Handy entfernen? Ihr Konto und Ihre Bildschirme dort bleiben unverändert; Sie können den Server jederzeit wieder hinzufügen.</string>
+    <string name="cancel">Abbrechen</string>
+    <string name="server_already_added">%1$s ist bereits in Ihrer Liste.</string>
+    <string name="signing_in">Sie werden angemeldet…</string>
+    <string name="sso_failed">Anmeldung fehlgeschlagen: %1$s</string>
+    <string name="uploading">%1$d Datei(en) werden hochgeladen…</string>
+    <string name="share_sign_in_first">Melden Sie sich zuerst an und teilen Sie Ihre Fotos dann erneut.</string>
+    <string name="share_failed">Hochladen fehlgeschlagen: %1$s</string>
+    <string name="offline">Ihr Server ist nicht erreichbar. Prüfen Sie Ihre Verbindung und versuchen Sie es erneut.</string>
+    <string name="retry">Erneut versuchen</string>
+</resources>

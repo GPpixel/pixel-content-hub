@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">在屏幕上显示</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">用手机更改屏幕显示的内容。</string>
+    <string name="server_question">你的 ScreenTinker 在哪里？</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">我自己的服务器</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">连接</string>
+    <string name="server_checking">正在检查 %1$s…</string>
+    <string name="server_bad_url">请输入服务器地址，例如 https://signage.example.com</string>
+    <string name="server_unreachable">无法连接到 %1$s。请检查地址，并确认此手机所在的网络可以访问它。</string>
+    <string name="server_not_screentinker">%1$s 的响应不像 ScreenTinker 服务器。</string>
+    <string name="server_too_old">%1$s 运行的是 ScreenTinker %2$s。此应用需要 3.0 或更高版本：请联系服务器管理员进行更新。</string>
+    <string name="servers_title">你的服务器</string>
+    <string name="servers_add">添加其他服务器</string>
+    <string name="servers_in_use">使用中</string>
+    <string name="servers_switch">切换</string>
+    <string name="servers_remove">移除</string>
+    <string name="servers_remove_confirm">要从此手机移除 %1$s 吗？你在该服务器上的账户和屏幕不受影响，随时可以重新添加。</string>
+    <string name="cancel">取消</string>
+    <string name="server_already_added">%1$s 已在你的列表中。</string>
+    <string name="signing_in">正在登录…</string>
+    <string name="sso_failed">登录失败：%1$s</string>
+    <string name="uploading">正在上传 %1$d 个文件…</string>
+    <string name="share_sign_in_first">请先登录，然后重新分享你的照片。</string>
+    <string name="share_failed">上传失败：%1$s</string>
+    <string name="offline">无法连接到你的服务器。请检查网络连接后重试。</string>
+    <string name="retry">重试</string>
+</resources>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTinker Manager</string>
+    <string name="share_label">Mostrar en una pantalla</string>
+    <string name="server_title">ScreenTinker Manager</string>
+    <string name="server_subtitle">Cambia lo que muestran tus pantallas desde tu teléfono.</string>
+    <string name="server_question">¿Dónde está tu ScreenTinker?</string>
+    <string name="server_hosted">screentinker.com</string>
+    <string name="server_own">Mi propio servidor</string>
+    <string name="server_url_hint">https://signage.example.com</string>
+    <string name="server_connect">Conectar</string>
+    <string name="server_checking">Comprobando %1$s…</string>
+    <string name="server_bad_url">Escribe la dirección de tu servidor, por ejemplo https://signage.example.com</string>
+    <string name="server_unreachable">No se pudo conectar con %1$s. Revisa la dirección y que este teléfono esté en una red que pueda llegar a él.</string>
+    <string name="server_not_screentinker">%1$s no respondió como un servidor de ScreenTinker.</string>
+    <string name="server_too_old">%1$s usa ScreenTinker %2$s. Esta app necesita la versión 3.0 o posterior: pide a quien lo administra que lo actualice.</string>
+    <string name="servers_title">Tus servidores</string>
+    <string name="servers_add">Agregar otro servidor</string>
+    <string name="servers_in_use">En uso</string>
+    <string name="servers_switch">Cambiar</string>
+    <string name="servers_remove">Quitar</string>
+    <string name="servers_remove_confirm">¿Quitar %1$s de este teléfono? Tu cuenta y tus pantallas allí no se ven afectadas; puedes volver a agregarlo cuando quieras.</string>
+    <string name="cancel">Cancelar</string>
+    <string name="server_already_added">%1$s ya está en tu lista.</string>
+    <string name="signing_in">Iniciando sesión…</string>
+    <string name="sso_failed">No se pudo iniciar sesión: %1$s</string>
+    <string name="uploading">Subiendo %1$d archivo(s)…</string>
+    <string name="share_sign_in_first">Primero inicia sesión y luego vuelve a compartir tus fotos.</string>
+    <string name="share_failed">Falló la subida: %1$s</string>
+    <string name="offline">No se puede conectar con tu servidor. Revisa tu conexión e inténtalo de nuevo.</string>
+    <string name="retry">Reintentar</string>
+</resources>
