@@ -1989,6 +1989,9 @@ app.use('/api/ai/hosted/checkout', rateLimit(60000, 10));
   setInterval(aiHousekeeping, 10 * 60 * 1000).unref();
 }
 app.use('/api/widgets/preview', rateLimit(60000, 30)); // base64 inline = memory-intensive
+// 3.0 Make a sign: one gallery request renders every built-in template, and the form re-renders as
+// the person types (debounced). Generous for a person, a ceiling for a loop.
+app.use('/api/signs/preview', rateLimit(60000, 120));
 app.use('/api/widgets/preview-session', rateLimit(60000, 30)); // preview session creation retains rendered HTML in memory for 5min
 // `/test` triggers an outbound fetch of an arbitrary calendar feed; cap it so a single
 // workspace cannot fan out unbounded requests to third-party URLs.

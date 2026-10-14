@@ -369,6 +369,7 @@ async function openNewDeckModal(container) {
           <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">${esc(t('slides.deck_name_label'))}</label>
           <input type="text" id="deckNameInput" class="input" style="width:100%" placeholder="${esc(t('slides.deck_name_placeholder'))}" value="New Slide Deck">
         </div>
+        <p style="margin:0;font-size:13px;color:var(--text-muted)">${esc(t('signs.slides_modal_hint'))} <a href="#/signs?from=slides" data-sign-link>${esc(t('signs.new_from_template'))} &rarr;</a></p>
         <div>
           <label style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">${esc(t('slides.choose_template'))}</label>
           <div style="display:flex;flex-direction:column;gap:8px">
@@ -407,6 +408,7 @@ async function openNewDeckModal(container) {
   const close = () => overlay.remove();
   overlay.querySelector('#closeNewDeckModal').onclick = close;
   overlay.querySelector('#cancelNewDeckBtn').onclick = close;
+  overlay.querySelector('[data-sign-link]').addEventListener('click', close);
 
   overlay.querySelector('#submitNewDeckBtn').onclick = async () => {
     const name = overlay.querySelector('#deckNameInput').value.trim() || 'New Slide Deck';
@@ -443,7 +445,10 @@ async function openNewDeckModal(container) {
 export async function render(container) {
   container.innerHTML = `<div class="page-header"><div><h1>Slides</h1>
     <div class="subtitle">Build a deck of slides and publish it as a playlist.</div></div>
-    <button class="btn btn-primary" id="newDeck">+ New deck</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <!-- 3.0 Make a sign: the built-in sign templates, which come back here as an ordinary deck. -->
+      <a class="btn btn-secondary" href="#/signs?from=slides">${esc(t('signs.new_from_template'))}</a>
+      <button class="btn btn-primary" id="newDeck">+ New deck</button></div></div>
     <div id="deckArea"><p style="color:var(--text-muted)">Loading…</p></div>`;
 
   container.querySelector('#newDeck').addEventListener('click', () => openNewDeckModal(container));

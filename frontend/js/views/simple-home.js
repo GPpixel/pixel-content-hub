@@ -5,8 +5,9 @@
  *   #/simple/change[?device] Change what a screen shows: pick the screen → choose content → it's live
  *   #/simple/upload          Upload photos: choose files → choose screens → done
  *   #/simple/passkey         Sign in with a passkey: confirm your password → the browser's prompt → done
-  /*
  *   #/simple/share[?device]  Share my screen (3.0): pick the screen → choose what to share → live, Stop
+ *   #/simple/sign            Make a sign: pick a template → fill it in → choose screens (views/make-sign.js)
+ *   #/simple/brand           The workspace brand kit the sign templates use (components/brand-kit-editor.js)
  *   (#/add-screen is the setup guide's add mode, views/onboarding.js)
  *
  * No sidebar here: a small top bar carries the Simple | Advanced switch and an account menu. Every
@@ -31,6 +32,7 @@ import { mountStockPicker } from '../components/stock-picker.js';
 import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
 import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
 import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText } from '../components/screen-share.js';
+import { renderSign, renderBrand } from './make-sign.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -48,7 +50,7 @@ function online(d) { return d && d.status === 'online'; }
 // Shell: top bar + a centred column, the same proportions as the setup guide
 // ---------------------------------------------------------------------------------------------
 
-function shell(container, inner) {
+export function shell(container, inner) {
   const u = cachedUser() || {};
   const showPlan = plansVisible(u);
   container.innerHTML = `
@@ -66,6 +68,7 @@ function shell(container, inner) {
             ${isPlatformAdmin(u) ? (inManagerApp()
               ? `<button type="button" data-outside="/app#/platform/overview">${esc(t('simple.menu.admin'))} &#8599;</button>`
               : `<a href="#/platform/overview">${esc(t('simple.menu.admin'))}</a>`) : ''}
+            <a href="#/simple/brand">${esc(t('signs.brand.menu'))}</a>
             ${showPlan ? `<a href="#/billing">${esc(t('simple.menu.plan'))}</a>` : ''}
             ${inManagerApp()
               ? `<button type="button" data-outside="/app#/settings">${esc(t('simple.menu.settings'))} &#8599;</button>`
@@ -115,17 +118,18 @@ function workspaceMenu(u) {
     <hr class="simple-menu-sep">`;
 }
 
-/** Guide frame: progress, icon, title, card, footer. Same look as views/onboarding.js. */
-function guideFrame({ step, total, icon, title, body, back = true, next = null, nextLabel = '' }) {
+/** Guide frame: progress, icon, title, card, footer. Same look as views/onboarding.js.
+ *  `cancelHref` is where Cancel goes (home by default); `wide` gives a task with a live preview room. */
+export function guideFrame({ step, total, icon, title, body, back = true, next = null, nextLabel = '', cancelHref = '#/', wide = false }) {
   return `
-    <div class="simple-guide">
+    <div class="simple-guide${wide ? ' simple-guide--wide' : ''}">
       <div class="simple-progress">${Array.from({ length: total }, (_, i) => `<span class="${i <= step ? 'on' : ''}"></span>`).join('')}</div>
       <div class="simple-guide-head"><div class="simple-guide-icon">${icon}</div><h2>${esc(title)}</h2></div>
       <div class="simple-card">${body}</div>
       <div class="simple-guide-foot">
         ${back ? `<button type="button" class="btn btn-secondary" data-guide-back>${esc(t('onboarding.back'))}</button>` : '<span></span>'}
         <div style="display:flex;gap:8px">
-          <a href="#/" class="btn btn-secondary" style="color:var(--text-muted)">${esc(t('common.cancel'))}</a>
+          <a href="${esc(cancelHref)}" class="btn btn-secondary" style="color:var(--text-muted)">${esc(t('common.cancel'))}</a>
           ${next ? `<button type="button" class="btn btn-primary" data-guide-next>${esc(nextLabel)}</button>` : ''}
         </div>
       </div>
@@ -148,7 +152,8 @@ async function renderHome(container) {
     <div class="simple-tasks">
       ${canChange ? `<a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
-      <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>` : ''}
+      <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>
+      <a class="simple-task" href="#/simple/sign"><span class="simple-task-icon">&#127991;&#65039;</span><span><strong>${esc(t('signs.task'))}</strong><small>${esc(t('signs.task_desc'))}</small></span></a>` : ''}
       ${canManageTeam() ? `<a class="simple-task" href="#/simple/team"><span class="simple-task-icon">&#128101;</span><span><strong>${esc(t('simple.task.team'))}</strong><small>${esc(t('simple.task.team_desc'))}</small></span></a>` : ''}
       <a class="simple-task" href="#/simple/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
     </div>
@@ -483,7 +488,7 @@ async function renderTeam(container) {
  *   3. only when neither exists is a list created, once per screen.
  * A shared or hand-made list is never edited by Replace: another screen or a schedule may use it.
  */
-async function showOnScreen(device, contentIds, how, ctx = {}) {
+export async function showOnScreen(device, contentIds, how, ctx = {}) {
   const devices = ctx.devices || [];
   const playlists = ctx.playlists || [];
   const usedByOthers = (pid) => devices.some((d) => d.id !== device.id && d.playlist_id === pid);
@@ -509,13 +514,14 @@ async function showOnScreen(device, contentIds, how, ctx = {}) {
   }
 
   let playlistId = device.playlist_id || null;
+  // An entry is a content id, or an item body as is ({ widget_id, duration_sec } for a sign).
   for (const id of contentIds) {
-    const r = await api.addAssignment(device.id, { content_id: id });
+    const r = await api.addAssignment(device.id, typeof id === 'object' ? id : { content_id: id });
     if (r && r.playlist_id) playlistId = r.playlist_id;
   }
   if (!playlistId) return { ok: true };
   device.playlist_id = playlistId;
-  const state = await publishOrSubmit(playlistId, { note: `From the Simple view: ${device.name}` });
+  const state = await publishOrSubmit(playlistId, { note: ctx.note || `From the Simple view: ${device.name}` });
   return { ok: true, review: state === 'review' };
 }
 
@@ -901,6 +907,7 @@ const SIMPLE_GUIDES = [
   { icon: '&#10133;', key: 'simple.help.g1', steps: 4 },
   { icon: '&#9998;', key: 'simple.help.g2', steps: 4 },
   { icon: '&#128247;', key: 'simple.help.g3', steps: 3 },
+  { icon: '&#127991;&#65039;', key: 'simple.help.g4', steps: 3 },
 ];
 
 const SIMPLE_FAQ = [1, 2, 3, 4, 5, 6];
@@ -979,19 +986,21 @@ export function render(container, hash = window.location.hash || '#/') {
   const onRefreshed = (e) => {
     const h = window.location.hash || '#/';
     if (accessKey(e.detail) === drawnFor || !isSimpleRoute(h)) return;
-    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload')) return;
+    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share')) return;
     render(container, h);
   };
   window.addEventListener('user-refreshed', onRefreshed);
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign'))) {
     window.location.replace('#/');
     return undefined;
   }
   if (hash.startsWith('#/simple/change')) return renderChange(container, q.get('device'));
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
+  if (hash.startsWith('#/simple/sign')) return renderSign(container, { simple: true, device: q.get('device'), from: q.get('from') });
+  if (hash.startsWith('#/simple/brand')) return renderBrand(container, { simple: true });
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
   if (hash.startsWith('#/simple/passkey')) return renderPasskey(container);
   if (hash.startsWith('#/simple/team')) return renderTeam(container);

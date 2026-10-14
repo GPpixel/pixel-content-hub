@@ -789,6 +789,12 @@ export const api = {
   getMySubmissions: (status = 'open') => request(`/approvals/mine?status=${encodeURIComponent(status)}`),
   getSubmission: (id) => request(`/approvals/${id}`),
   submitForReview: (resource_type, resource_id, note) => request('/approvals/submit', { method: 'POST', body: JSON.stringify({ resource_type, resource_id, note }) }),
+  // 3.0 Make a sign (routes/signs.js) and the workspace brand kit (routes/brand-kit.js).
+  getSignTemplates: () => request('/signs/templates'),
+  previewSigns: (body) => request('/signs/preview', { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  createSign: (body) => request('/signs', { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  getBrandKit: () => request('/brand-kit'),
+  saveBrandKit: (body) => request('/brand-kit', { method: 'PUT', body: JSON.stringify(body ?? {}) }),
   withdrawSubmission: (id) => request(`/approvals/${id}/withdraw`, { method: 'POST' }),
   approveSubmission: (id, comment, version) => request(`/approvals/${id}/approve`, { method: 'POST', body: JSON.stringify({ comment, version }) }),
   requestChanges: (id, comment, version) => request(`/approvals/${id}/request-changes`, { method: 'POST', body: JSON.stringify({ comment, version }) }),

@@ -122,6 +122,7 @@ const check = (name, ok, detail) => {
   // A new account is in Simple view: guide-style home, no sidebar.
   check('a new account lands on the Simple home', await page.evaluate(() =>
     !!document.querySelector('.simple-tasks') && getComputedStyle(document.getElementById('sidebar')).display === 'none'));
+  check('the Simple home offers Make a sign', await page.evaluate(() => !!document.querySelector('.simple-tasks a[href="#/simple/sign"]')));
   // Everything below exercises the full product, so switch this account to Advanced view.
   await page.evaluate(async () => {
     await fetch('/api/auth/me', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + localStorage.getItem('token') },
@@ -616,6 +617,57 @@ const check = (name, ok, detail) => {
     !ai.err && /not configured|endpoint|AI/i.test(ai.failMsg || ''),
     `status said ${JSON.stringify(ai.failMsg)} — a silent no-op here is indistinguishable from a broken button`);
 
+  // ---- 3.0 Make a sign: the gallery renders real previews, and the flow produces a deck ----------
+  //
+  // ⚠️ The previews are server-rendered documents put in sandboxed srcdoc frames, and the whole
+  // value of the feature is that a new user sees finished signs, not grey boxes. A broken preview
+  // endpoint, a frame the CSP blanks, or a script-blocked console storm are all invisible to the
+  // unit suite. This drives the real flow to the end and checks a deck came out of it.
+  {
+    const before = errors.length;
+    await page.goto(BASE + '/app#/signs', { waitUntil: 'networkidle2' });
+    await page.reload({ waitUntil: 'networkidle2' });
+    const sign = await page.evaluate(async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      let cards = 0, previews = 0;
+      for (let i = 0; i < 60; i++) {
+        cards = document.querySelectorAll('[data-tpl]').length;
+        previews = [...document.querySelectorAll('iframe[data-prev]')].filter((f) => /class="stage"/.test(f.srcdoc || '')).length;
+        if (cards && previews === cards) break;
+        await sleep(150);
+      }
+      const bare = [...document.querySelectorAll('body *')].filter((e) => e.children.length === 0)
+        .map((e) => (e.textContent || '').trim()).filter((s) => /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(s) && !/^v?\d/.test(s));
+      const card = document.querySelector('[data-tpl="specials"]');
+      if (!card) return { cards, previews, err: 'no specials template' };
+      card.click();
+      let live = '';
+      for (let i = 0; i < 60 && !/class="stage"/.test(live); i++) { await sleep(150); live = (document.querySelector('[data-live]') || {}).srcdoc || ''; }
+      const title = document.querySelector('[data-key="title"]');
+      if (!title) return { cards, previews, err: 'the form has no headline field' };
+      title.value = 'Smoke <i>soup</i>';
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+      for (let i = 0; i < 40 && !/Smoke &lt;i&gt;soup/.test(live); i++) { await sleep(150); live = document.querySelector('[data-live]').srcdoc || ''; }
+      const typed = /Smoke &lt;i&gt;soup/.test(live) && !/<i>soup/.test(live);
+      document.querySelector('[data-guide-next]').click();
+      // With screens, the next step asks which; with none (this account), the sign is saved.
+      await sleep(600);
+      const show = document.querySelector('.simple-checks') && document.querySelector('[data-guide-next]');
+      if (show) show.click();
+      let done = false;
+      for (let i = 0; i < 60 && !done; i++) { await sleep(150); done = !!document.querySelector('.simple-done-actions'); }
+      const decks = await (await fetch('/api/slide-decks', { headers: { Authorization: 'Bearer ' + localStorage.getItem('token') } })).json();
+      return { cards, previews, bare, typed, done, deck: Array.isArray(decks) && decks.some((d) => /Smoke/.test(d.name)) };
+    });
+    check('Make a sign: every template shows a live preview', !sign.err && sign.cards >= 12 && sign.previews === sign.cards,
+      sign.err || `${sign.previews} of ${sign.cards} previews rendered`);
+    check('Make a sign: typed text reaches the preview, escaped', !!sign.typed, 'the live preview never showed the typed headline as text');
+    check('Make a sign: the flow finishes and the sign is a deck in Slides', !!(sign.done && sign.deck),
+      `done=${sign.done} deck=${sign.deck}`);
+    check('Make a sign renders no untranslated keys', !(sign.bare || []).length, (sign.bare || []).join(', '));
+    check('no uncaught error or console error in Make a sign', errors.length === before, errors.slice(before).join(' | '));
+  }
+
   // ---- the calendar binds its pointer handlers ONCE -------------------------------------------
   await page.goto(BASE + '/app#/schedule', { waitUntil: 'networkidle2' });
   await page.reload({ waitUntil: 'networkidle2' });
@@ -638,7 +690,7 @@ const check = (name, ok, detail) => {
   // ---- a phone-width viewport must not scroll sideways -----------------------------------------
   await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
   const overflowing = [];
-  for (const hash of ['#/', '#/schedule', '#/content', '#/settings']) {
+  for (const hash of ['#/', '#/schedule', '#/content', '#/settings', '#/signs']) {
     await page.goto(BASE + '/app' + hash, { waitUntil: 'networkidle2' });
     await page.reload({ waitUntil: 'networkidle2' });
     await new Promise(r => setTimeout(r, 900));

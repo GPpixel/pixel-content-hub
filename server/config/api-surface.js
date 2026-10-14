@@ -99,6 +99,13 @@ const JWT_ONLY_ROUTERS = [
   { path: '/api/provision',   mod: './routes/provisioning', tenancy: true },
   { path: '/api/teams',       mod: './routes/teams',        tenancy: true },
   { path: '/api/white-label', mod: './routes/white-label',  tenancy: true },
+  /*
+   * 3.0 Make a sign (lib/sign-templates.js) and the workspace brand kit (lib/brand-kit.js). JWT only:
+   * they are dashboard authoring surfaces for a person; an integrator who wants a slide already has
+   * /api/slide-decks on the token door.
+   */
+  { path: '/api/signs',       mod: './routes/signs',        tenancy: true },
+  { path: '/api/brand-kit',   mod: './routes/brand-kit',    tenancy: true },
   { path: '/api/workspaces',  mod: './routes/workspaces' },
   // Player rollouts (lib/ota-rollout.js). Before /api/admin: Express walks mounts in order.
   { path: '/api/admin/ota-rollouts', mod: './routes/ota-rollouts' },
