@@ -245,7 +245,8 @@ function formatBytes(n) {
   const b = Number(n) || 0;
   if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
   if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
-  return `${(b / 1024 ** 3).toFixed(2)} GB`;
+  if (b < 1024 ** 4) return `${(b / 1024 ** 3).toFixed(b < 100 * 1024 ** 3 ? 2 : 0)} GB`;
+  return `${(b / 1024 ** 4).toFixed(2)} TB`;
 }
 
 /*
@@ -259,8 +260,8 @@ async function loadAttentionDetail(d) {
   const ago = (sec) => (sec ? relAgo(sec) : t('platform.att.never'));
   const table = (heads, rows) => rows.length ? `<div class="table-wrap"><table class="att-table"><thead><tr>${heads.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
     <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : `<p class="platform-empty">${esc(t('platform.att.nothing_now'))}</p>`;
-  let r;
-  try { r = await api.adminAttention(item); } catch (err) { body.innerHTML = `<p style="color:var(--danger)">${esc(err.message)}</p>`; return; }
+  let r = {};
+  if (item !== 'host') try { r = await api.adminAttention(item); } catch (err) { body.innerHTML = `<p style="color:var(--danger)">${esc(err.message)}</p>`; return; }
   switch (item) {
     case 'sso':
       body.innerHTML = `<p class="att-why">${esc(t('platform.att.sso_why'))}</p>` +
@@ -271,6 +272,9 @@ async function loadAttentionDetail(d) {
       body.innerHTML = `<p class="att-why">${esc(t('platform.att.plugins_why'))}</p>` +
         table([t('platform.att.col_plugin'), t('platform.att.col_version'), t('platform.att.col_submitted_by'), t('platform.att.col_waiting')],
           r.rows.map((x) => [esc(x.name || x.plugin_id), esc(x.version || '—'), esc(x.submitted_by || '—'), esc(ago(x.submitted_at))])) + go(t('platform.att.go_plugins'));
+      break;
+    case 'host':
+      body.innerHTML = `<p class="att-why">${esc(t('platform.host.att_why'))}</p>`;
       break;
     case 'update':
       body.innerHTML = `<p class="att-why">${esc(t('platform.att.update_why', { current: r.current, latest: r.latest || '?' }))}</p>` + go(t('platform.att.go_system'));
@@ -310,6 +314,66 @@ function relAgo(sec) {
   return t('platform.att.ago_d', { n: Math.round(d / 86400) });
 }
 
+/*
+ * 3.0: this server's machine — disk, CPU, memory (GET /api/admin/host, lib/host-stats.js). Refreshed
+ * every 10 s while the overview is on screen; the timer stops itself once the section is gone.
+ */
+let hostTimer = null;
+function pctBar(pct, warnAt = 85) {
+  const p = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  return `<span class="host-bar"><span class="${pct != null && pct >= warnAt ? 'warn' : ''}" style="width:${p}%"></span></span>`;
+}
+function durationShort(sec) {
+  if (!(sec > 0)) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? t('platform.host.uptime_d', { d, h }) : h ? t('platform.host.uptime_h', { h, m }) : t('platform.host.uptime_m', { m });
+}
+async function loadHost() {
+  clearTimeout(hostTimer);
+  const el = document.getElementById('platformHost');
+  if (!el) return;
+  let h;
+  try { h = await api.adminHost(); } catch (err) { el.innerHTML = ''; return; }
+  if (!document.contains(el)) return;
+  const disk = (d) => {
+    const used = d.total - d.free;
+    const pct = Math.round((used / d.total) * 1000) / 10;
+    return `<div class="host-card" title="${esc(d.path)}">
+      <span class="host-k">${esc(t(d.role === 'uploads' ? 'platform.host.disk_uploads' : 'platform.host.disk'))}</span>
+      <span class="host-v">${esc(t('platform.host.pct_used', { n: Math.round(pct) }))}</span>
+      ${pctBar(pct, 90)}
+      <span class="host-s">${esc(t('platform.host.disk_free', { free: formatBytes(d.free), total: formatBytes(d.total) }))}</span>
+    </div>`;
+  };
+  const cpu = h.cpu || {};
+  const mem = h.memory || {};
+  const memUsed = mem.total && mem.available != null ? mem.total - mem.available : null;
+  const memPct = memUsed != null ? Math.round((memUsed / mem.total) * 1000) / 10 : null;
+  const warn = (h.warnings || []).map((w) => w.kind === 'disk_low'
+    ? t('platform.host.warn_disk', { free: formatBytes(w.free) })
+    : t('platform.host.warn_mem', { free: formatBytes(w.available) }));
+  el.innerHTML = `
+    <h3 class="platform-subhead">${esc(t('platform.host.title'))} <span class="host-name">${esc(h.hostname || '')}</span></h3>
+    ${warn.length ? `<p class="host-warn">&#9888;&#65039; ${warn.map(esc).join(' ')}</p>` : ''}
+    <div class="host-grid">
+      ${(h.disks || []).map(disk).join('') || `<div class="host-card"><span class="host-k">${esc(t('platform.host.disk'))}</span><span class="host-v">—</span></div>`}
+      <div class="host-card">
+        <span class="host-k">${esc(t('platform.host.cpu'))}</span>
+        <span class="host-v">${cpu.pct == null ? '—' : esc(t('platform.host.pct_busy', { n: Math.round(cpu.pct) }))}</span>
+        ${pctBar(cpu.pct)}
+        <span class="host-s">${esc(tn('platform.host.cores', cpu.cores || 0))}${cpu.load ? ` · ${esc(t('platform.host.load', { l: cpu.load.join(' / ') }))}` : ''}</span>
+      </div>
+      <div class="host-card">
+        <span class="host-k">${esc(t('platform.host.memory'))}</span>
+        <span class="host-v">${memPct == null ? '—' : esc(t('platform.host.pct_used', { n: Math.round(memPct) }))}</span>
+        ${pctBar(memPct, 90)}
+        <span class="host-s">${memUsed == null ? '' : esc(t('platform.host.mem_used', { used: formatBytes(memUsed), total: formatBytes(mem.total) }))}${mem.process_rss ? ` · ${esc(t('platform.host.mem_app', { n: formatBytes(mem.process_rss) }))}` : ''}</span>
+      </div>
+    </div>
+    <p class="host-foot">${esc(t('platform.host.foot', { db: h.db_bytes ? formatBytes(h.db_bytes) : '—', up: durationShort(h.uptime && h.uptime.process_sec), host: durationShort(h.uptime && h.uptime.host_sec) }))}</p>`;
+  hostTimer = setTimeout(loadHost, 10000);
+}
+
 async function loadOverview() {
   const el = document.getElementById('platformOverview');
   if (!el) return;
@@ -325,6 +389,11 @@ async function loadOverview() {
     if (o.sso_only_requests > 0) attention.push(['sso', '#/platform/orgs', tn('platform.overview.att_sso', o.sso_only_requests), 'warn']);
     if (o.plugin_submissions > 0) attention.push(['plugins', '#/platform/plugins', tn('platform.overview.att_plugins', o.plugin_submissions), 'info']);
     if (o.update_available) attention.push(['update', '#/platform/system', t('platform.overview.att_update', { v: o.latest_version }), 'info']);
+    for (const w of o.host_warnings || []) {
+      attention.push(['host', '#/platform/overview', w.kind === 'disk_low'
+        ? t('platform.host.warn_disk', { free: formatBytes(w.free) })
+        : t('platform.host.warn_mem', { free: formatBytes(w.available) }), 'warn']);
+    }
     if (o.orphaned_plan_users > 0) attention.push(['orphans', '#/platform/billing', tn('platform.overview.att_orphans', o.orphaned_plan_users), 'warn']);
     if (o.stale_accounts_180d > 0) attention.push(['stale', '#/platform/cleanup', tn('platform.overview.att_stale', o.stale_accounts_180d), 'info']);
     if (o.screens_offline_24h > 0) attention.push(['offline', '#/platform/orgs', tn('platform.overview.att_offline', o.screens_offline_24h), 'info']);
@@ -341,6 +410,7 @@ async function loadOverview() {
         ${card('#/platform/orgs', o.devices, t('platform.overview.devices'), t('platform.overview.online', { n: o.devices_online }))}
         ${card('#/platform/billing', o.paying_accounts, t('platform.overview.paying'), tn('platform.overview.trialing', o.trialing))}
       </div>
+      <div id="platformHost"></div>
       <h3 class="platform-subhead">${esc(t('platform.overview.health'))}</h3>
       <div class="platform-minis">
         ${mini('#/platform/users', o.new_users_7d, t('platform.overview.new_7d'))}
@@ -364,6 +434,7 @@ async function loadOverview() {
       </div>
       <p class="platform-version">${esc(t('platform.overview.version', { v: o.version }))}</p>`;
     loadFunnel();
+    loadHost();
     // Details load the first time an item is opened (GET /admin/overview/attention/:item).
     el.querySelectorAll('details.att').forEach((d) => {
       d.addEventListener('toggle', () => { if (d.open && !d.dataset.loaded) { d.dataset.loaded = '1'; loadAttentionDetail(d); } });
@@ -1101,7 +1172,7 @@ function watchUpdate(el, jobId) {
   tick();
 }
 
-export function cleanup() { clearTimeout(updatePollTimer); }
+export function cleanup() { clearTimeout(updatePollTimer); clearTimeout(hostTimer); }
 
 
 /* ------------------------------------------------------------------ server diagnostics */

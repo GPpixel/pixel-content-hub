@@ -899,6 +899,7 @@ export const api = {
   adminDeletePromotion: (id) => request(`/admin/promotions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   getPromotion: () => request('/subscription/promotion'),
   adminOverview: () => request('/admin/overview'),
+  adminHost: () => request('/admin/host'),
   adminAttention: (item) => request(`/admin/overview/attention/${encodeURIComponent(item)}`),
   adminStaleAccounts: (days) => request(`/admin/cleanup/stale-accounts?days=${encodeURIComponent(days)}`),
   adminPurgeStale: (body) => request('/admin/cleanup/stale-accounts', { method: 'POST', body: JSON.stringify(body) }),

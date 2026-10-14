@@ -849,6 +849,13 @@ router.delete('/promotions/:id', requirePlatformAdmin, async (req, res) => {
 // The numbers an operator checks first plus the things waiting on them. Counts only — no names,
 // no emails. Each count is independent and tolerant: a table an older install lacks reads as 0
 // instead of failing the whole page.
+// 3.0: the machine this server runs on — disk, CPU, memory (lib/host-stats.js). Platform admins only:
+// hostname, paths and load are about the box, not about any tenant. Polled by Platform → Overview.
+router.get('/host', requirePlatformAdmin, async (req, res) => {
+  try { res.json(await require('../lib/host-stats').sample()); }
+  catch (e) { res.status(500).json({ error: 'Could not read server stats' }); }
+});
+
 router.get('/overview', requirePlatformAdmin, (req, res) => {
   const n = (sql, ...args) => { try { return db.prepare(sql).get(...args).n || 0; } catch (_) { return 0; } };
   const now = Math.floor(Date.now() / 1000);
@@ -859,6 +866,8 @@ router.get('/overview', requirePlatformAdmin, (req, res) => {
     version: VERSION,
     latest_version: latest || null,
     update_available: cmp > 0,
+    // 3.0: this machine running out of disk or memory (lib/host-stats.js), for "Needs your attention".
+    host_warnings: (() => { try { return require('../lib/host-stats').warningsNow(); } catch (_) { return []; } })(),
     users: n('SELECT COUNT(*) AS n FROM users'),
     platform_staff: n("SELECT COUNT(*) AS n FROM users WHERE role IN ('platform_admin','superadmin','platform_operator')"),
     organizations: n('SELECT COUNT(*) AS n FROM organizations'),
