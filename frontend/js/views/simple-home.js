@@ -5,6 +5,8 @@
  *   #/simple/change[?device] Change what a screen shows: pick the screen → choose content → it's live
  *   #/simple/upload          Upload photos: choose files → choose screens → done
  *   #/simple/passkey         Sign in with a passkey: confirm your password → the browser's prompt → done
+  /*
+ *   #/simple/share[?device]  Share my screen (3.0): pick the screen → choose what to share → live, Stop
  *   (#/add-screen is the setup guide's add mode, views/onboarding.js)
  *
  * No sidebar here: a small top bar carries the Simple | Advanced switch and an account menu. Every
@@ -28,6 +30,7 @@ import { switchWorkspaceTo } from '../components/corporate-ui.js';
 import { mountStockPicker } from '../components/stock-picker.js';
 import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
 import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
+import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText } from '../components/screen-share.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -165,12 +168,113 @@ async function renderHome(container) {
   }
   // A view-only member gets the same cards, without the link into Change.
   const tag = canChange ? 'a' : 'div';
-  host.innerHTML = devices.map((d) => `
+  // 3.0 screen share: an editor gets "Share my screen" under each screen that can show one.
+  const sharing = canChange && await screenShareOn();
+  if (!document.contains(host)) return;
+  host.innerHTML = devices.map((d) => {
+    const card = `
     <${tag} class="simple-screen" ${canChange ? `href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}"` : ''}>
       <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
       <span class="simple-screen-name">${esc(d.name)}</span>
       <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
-    </${tag}>`).join('');
+    </${tag}>`;
+    if (!sharing || !canShareTo(d)) return card;
+    return `<div class="simple-screen-wrap">${card}
+      <a class="btn btn-secondary btn-sm simple-screen-share" href="#/simple/share?device=${encodeURIComponent(d.id)}">&#128421;&#65039; ${esc(t('screen_share.start'))}</a></div>`;
+  }).join('');
+  if (sharing && devices.some(canShareTo)) {
+    const tasks = container.querySelector('.simple-tasks');
+    const help = tasks && tasks.querySelector('a[href="#/simple/help"]');
+    if (help) help.insertAdjacentHTML('beforebegin', `<a class="simple-task" href="#/simple/share"><span class="simple-task-icon">&#128421;&#65039;</span><span><strong>${esc(t('screen_share.start'))}</strong><small>${esc(t('screen_share.simple.task_desc'))}</small></span></a>`);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task: share my screen (3.0) — the person's laptop on a screen, until they press Stop.
+// ---------------------------------------------------------------------------------------------
+
+/** Is screen sharing on for this server? (GET /api/status features.screen_share) */
+async function screenShareOn() {
+  try { const st = await api.getServerStatus(); return !!(st && st.features && st.features.screen_share); } catch { return false; }
+}
+function canShareTo(d) {
+  return Array.isArray(d.capabilities) && d.capabilities.includes('remote.screen_share');
+}
+
+async function renderShare(container, presetId) {
+  let devices = [];
+  try { devices = (await api.getDevices()).filter(canShareTo); } catch { devices = []; }
+  const on = await screenShareOn();
+  if (!on || !devices.length) {
+    shell(container, guideFrame({ step: 0, total: 1, icon: '&#128421;&#65039;', title: t('screen_share.simple.none_title'), back: false,
+      body: `<p class="simple-lead">${esc(t(on ? 'screen_share.simple.none' : 'screen_share.reason.disabled'))}</p><div class="simple-done-actions"><a class="btn btn-primary" href="#/">${esc(t('screen_share.simple.home'))}</a></div>` }));
+    return;
+  }
+  let device = devices.find((d) => d.id === presetId) || (devices.length === 1 ? devices[0] : null);
+  const skipPick = !!device;
+  const total = skipPick ? 2 : 3;
+  const wireBack = (fn) => container.querySelector('[data-guide-back]')?.addEventListener('click', fn);
+  const off = onScreenShareChange(() => { if (document.contains(container)) draw(); });
+  cleanupFns.push(off);
+
+  function pickStep() {
+    shell(container, guideFrame({ step: 0, total, icon: '&#128250;', title: t('screen_share.simple.pick_title'), back: false,
+      body: `<div class="simple-pick">${devices.map((d) => `
+        <button type="button" class="simple-screen" data-pick="${esc(d.id)}" ${online(d) ? '' : 'disabled'}>
+          <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
+          <span class="simple-screen-name">${esc(d.name)}</span>
+          <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
+        </button>`).join('')}</div>` }));
+    container.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
+      device = devices.find((d) => d.id === b.dataset.pick);
+      draw();
+    }));
+  }
+
+  function chooseStep() {
+    const why = screenShareUnsupportedText();
+    shell(container, guideFrame({ step: skipPick ? 0 : 1, total, icon: '&#128421;&#65039;', title: t('screen_share.simple.choose_title', { name: device.name }), back: !skipPick,
+      body: `
+        <p class="simple-lead">${esc(t('screen_share.simple.choose_lead'))}</p>
+        ${why ? `<p class="simple-status" style="color:var(--danger)">${esc(why)}</p>` : `
+        <label class="simple-share-audio"><input type="checkbox" data-share-audio> ${esc(t('screen_share.include_audio'))}</label>
+        <div class="simple-done-actions"><button type="button" class="btn btn-primary simple-share-go" data-share-go ${online(device) ? '' : 'disabled'}>${esc(t('screen_share.simple.choose_btn'))}</button></div>
+        ${online(device) ? '' : `<p class="simple-status">${esc(t('screen_share.card.offline'))}</p>`}`}` }));
+    wireBack(() => { device = null; draw(); });
+    container.querySelector('[data-share-go]')?.addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      const audio = !!container.querySelector('[data-share-audio]')?.checked;
+      const started = await startScreenShare(device, { audio });
+      if (!started && document.contains(container)) draw();
+    });
+  }
+
+  function liveStep(a) {
+    const live = a.state === 'live';
+    shell(container, guideFrame({ step: total - 1, total, icon: live ? '&#128308;' : '&#9203;', title: t('screen_share.simple.live_title', { name: a.deviceName }), back: false,
+      body: `
+        <p class="simple-lead">${esc(t(live ? 'screen_share.state.live' : a.state === 'negotiating' ? 'screen_share.state.negotiating' : 'screen_share.state.connecting'))}</p>
+        <p class="simple-muted">${esc(t('screen_share.simple.live_hint'))}</p>
+        <div class="simple-done-actions"><button type="button" class="btn btn-danger simple-share-go" data-share-stop>${esc(t('screen_share.stop'))}</button></div>` }));
+    container.querySelector('[data-share-stop]')?.addEventListener('click', () => stopScreenShare());
+  }
+
+  let wasSharing = false;
+  function draw() {
+    const a = activeScreenShare();
+    if (a) { wasSharing = true; liveStep(a); return; }
+    if (wasSharing) {
+      wasSharing = false;
+      shell(container, guideFrame({ step: total - 1, total, icon: '&#10003;', title: t('screen_share.simple.done_title'), back: false,
+        body: `<p class="simple-lead">${esc(t('screen_share.simple.done'))}</p>
+          <div class="simple-done-actions"><a class="btn btn-primary" href="#/">${esc(t('screen_share.simple.home'))}</a>
+          <button type="button" class="btn btn-secondary" data-share-again>${esc(t('screen_share.simple.again'))}</button></div>` }));
+      container.querySelector('[data-share-again]')?.addEventListener('click', () => { if (!skipPick) device = null; draw(); });
+      return;
+    }
+    if (!device) pickStep(); else chooseStep();
+  }
+  draw();
 }
 
 /*
@@ -882,7 +986,7 @@ export function render(container, hash = window.location.hash || '#/') {
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share'))) {
     window.location.replace('#/');
     return undefined;
   }
@@ -891,6 +995,7 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
   if (hash.startsWith('#/simple/passkey')) return renderPasskey(container);
   if (hash.startsWith('#/simple/team')) return renderTeam(container);
+  if (hash.startsWith('#/simple/share')) return renderShare(container, q.get('device'));
   return renderHome(container);
 }
 

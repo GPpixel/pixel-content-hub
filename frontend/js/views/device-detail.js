@@ -3,6 +3,7 @@ import { publishOrSubmit } from '../components/release.js';
 import { isSimpleMode } from '../components/ui-mode.js';
 import { on, off, requestScreenshot, startRemote, stopRemote, sendTouch, sendSwipe, sendKey, sendCommand, requestLivePublish, startTalk, stopTalk, ptyOpen, ptyInput, ptyResize, ptyClose } from '../socket.js';
 import { TalkClient } from '../lib/talk-client.js';
+import { renderScreenShareCard, startScreenShare } from '../components/screen-share.js';   // 3.0 screen share
 import { showToast } from '../components/toast.js';
 import { openContentPicker } from '../components/content-picker.js';
 import { esc, livenessBadge, hydrateAuthImages, screenshotUrl } from '../utils.js';
@@ -211,6 +212,7 @@ let liveViewer = null;        // #go2rtc WebRTC viewer for the Now Playing tile
 let liveViewerDispose = null; // IntersectionObserver disposer for the live tile
 let remoteActive = false;
 let talkClient = null;        // #talk: active two-way intercom client, or null
+let screenShareCardDispose = null;   // 3.0 screen share: the Now Playing card's poller
 
 // #talk: tear down any live intercom. Safe to call unconditionally (leaving the view, ending a
 // session, or an error). Also tells the device to leave so it stops capturing its mic.
@@ -749,6 +751,9 @@ async function loadDevice(deviceId, activeTab = null) {
           ${can('remote.talk') ? `<button data-advanced-ui class="btn btn-secondary btn-sm" id="start2wayBtn">🎙️ ${t('device.talk.two_way')}</button>` : ''}
           <button class="btn btn-danger btn-sm" id="stopTalkBtn" style="display:none">${t('device.talk.stop')}</button>
           <button class="btn btn-secondary btn-sm" id="muteTalkBtn" style="display:none">${t('device.talk.mute')}</button>` : ''}
+          ${/* 3.0 screen share: hidden until the card below has asked the server whether this person
+                can share to this screen (capability, workspace switch, edit rights). */ ''}
+          ${can('remote.screen_share') ? `<button class="btn btn-secondary btn-sm" id="shareScreenBtn" style="display:none">&#128421;&#65039; ${t('screen_share.start')}</button>` : ''}
           ${device.android_version && !device.android_version.startsWith('Web/') && !isNativeDevice(device) && !isRokuDevice(device) ? `
           <button data-advanced-ui class="btn btn-secondary btn-sm" id="deviceOwnerBtn" title="${t('device.owner_provision.tip')}">${t('device.owner_provision.btn')}</button>` : ''}
           <button data-advanced-ui class="btn btn-secondary btn-sm" id="moveDeviceBtn">${t('move.button')}</button>
@@ -819,6 +824,7 @@ async function loadDevice(deviceId, activeTab = null) {
         <p id="nowPlayingInfo" style="color:var(--text-secondary);font-size:13px;">
           ${device.assignments?.length ? tn('device.playlist_count', device.assignments.length) : t('device.no_content_assigned')}
         </p>
+        <div id="screenShareCard"></div>
       </div>
 
       <!-- Playlist Tab -->
@@ -1618,6 +1624,13 @@ async function loadDevice(deviceId, activeTab = null) {
     setupTabs();
     setupActions(device);
     setupRemote(device);
+    // 3.0 screen share: the card explains why a screen cannot be shared to, and drives the header button.
+    if (screenShareCardDispose) { try { screenShareCardDispose(); } catch (e) {} }
+    const shareBtn = document.getElementById('shareScreenBtn');
+    screenShareCardDispose = renderScreenShareCard(document.getElementById('screenShareCard'), device, {
+      onAvailable: (ok) => { if (shareBtn) shareBtn.style.display = ok ? '' : 'none'; },
+    });
+    shareBtn?.addEventListener('click', () => startScreenShare(device));
     setupPlaylistActions(device);
     setupCorporateDevice(device);
     setupEnrolKey(device);
@@ -3793,6 +3806,9 @@ export function cleanup() {
   if (remoteActive && currentDevice) stopRemote(currentDevice.id);
   // #talk: leaving the view ends any intercom (and tells the device to stop capturing its mic).
   if (talkClient && currentDevice) stopTalkSession(currentDevice.id);
+  // 3.0 screen share: stop polling the card. A running share is NOT ended here — it belongs to the
+  // page (its bar follows you around the dashboard) and ends when you stop it or close the tab.
+  if (screenShareCardDispose) { try { screenShareCardDispose(); } catch (e) {} screenShareCardDispose = null; }
   // Same reasoning as stopRemote above: an operator who navigates away has stopped watching, so
   // the display should stop talking. Must run BEFORE currentDevice is cleared.
   if (debugStreamOn && currentDevice) sendCommand(currentDevice.id, 'set_debug', { enabled: false });

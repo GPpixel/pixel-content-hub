@@ -894,6 +894,13 @@ export const api = {
   // #talk: per-org talk flag + optional per-org ICE (STUN/TURN) override. data = { talk_enabled, ice_servers }.
   adminSetOrgTalk: (id, data) => request(`/admin/orgs/${id}/talk`, { method: 'PUT', body: JSON.stringify(data) }),
   adminDeleteWorkspace: (id) => request(`/admin/workspaces/${id}`, { method: 'DELETE' }),
+  // 3.0 screen share (docs/screen-share.md). start returns a single-use ticket for the signalling socket.
+  getScreenShare: (deviceId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`),
+  startScreenShare: (deviceId, data) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  stopScreenShare: (deviceId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
+  setScreenShareGuest: (deviceId, enabled) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/guest`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  getScreenShareWorkspace: (wsId) => request(`/screen-share/workspace/${encodeURIComponent(wsId)}`),
+  setScreenShareWorkspace: (wsId, enabled) => request(`/screen-share/workspace/${encodeURIComponent(wsId)}`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
   aiGetSettings: () => request('/ai/settings'),
   aiSaveSettings: (data) => request('/ai/settings', { method: 'PUT', body: JSON.stringify(data) }),
   aiGenerateDesign: (prompt) => request('/ai/generate-design', { method: 'POST', body: JSON.stringify({ prompt }) }),

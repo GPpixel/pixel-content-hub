@@ -2592,6 +2592,13 @@ const migrations = [
      opted_out INTEGER NOT NULL DEFAULT 0,
      opted_out_at INTEGER,
      last_sent_at INTEGER)`,
+  /*
+   * 3.0: screen share to a screen (lib/screen-share.js). screen_share_guest is the per-screen
+   * meeting-room code (a guest in the room shares without an account) — OFF by default, an admin
+   * turns it on screen by screen. Its workspace switch, workspaces.screen_share_enabled, is added in
+   * the 'workspace and organization settings' step below: workspaces does not exist yet here.
+   */
+  "ALTER TABLE devices ADD COLUMN screen_share_guest INTEGER NOT NULL DEFAULT 0",
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
@@ -3539,6 +3546,10 @@ migrationStep('workspace and organization settings', () => {
   try { db.prepare('ALTER TABLE workspaces ADD COLUMN replica_rev INTEGER').run(); } catch (_) { /* present */ }
   try { db.prepare('ALTER TABLE workspaces ADD COLUMN replica_as_of INTEGER').run(); } catch (_) { /* present */ }
   try { db.prepare('ALTER TABLE devices ADD COLUMN live_video_enabled INTEGER NOT NULL DEFAULT 0').run(); } catch (_) { /* present */ }
+  // 3.0 screen share (lib/screen-share.js): the workspace admin's switch for the whole feature. ON by
+  // default — starting a share already needs edit rights on the screen, and the guest code is a
+  // separate per-screen switch that is off (devices.screen_share_guest, in the array above).
+  try { db.prepare('ALTER TABLE workspaces ADD COLUMN screen_share_enabled INTEGER NOT NULL DEFAULT 1').run(); console.log('[migrate] workspaces.screen_share_enabled added (default on)'); } catch (_) { /* present */ }
   // #talk: per-org enablement for the voice intercom / PA feature (off by default).
   try { db.prepare('ALTER TABLE organizations ADD COLUMN talk_enabled INTEGER NOT NULL DEFAULT 0').run(); console.log('[migrate] organizations.talk_enabled added (default off)'); } catch (_) { /* present */ }
   // #talk/#go2rtc: optional per-org ICE (STUN/TURN) override as a JSON array [{urls,username?,credential?}].

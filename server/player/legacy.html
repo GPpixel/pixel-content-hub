@@ -327,6 +327,8 @@
   <script src="/player/offline-play-queue.js"></script>
   <script src="/player/live-publish-legacy.js"></script>
   <script src="/player/talk-legacy.js"></script>
+  <!-- 3.0: screen share receiver (lib/screen-share-player.js), window.STScreenShare -->
+  <script src="/player/screen-share.js"></script>
   <script src="/player/trigger-resolve.js"></script>
   <script src="/player/media-mute.js"></script>
   <script src="/player/orientation-style.js"></script>
@@ -402,7 +404,13 @@ const PLAYER_I18N = {
     info_sw: "Service Worker",
     nothing_scheduled: "Nothing scheduled right now",
     preview_webpage_blocked: "If this area is blank, the site blocks being embedded and won\u2019t display on the device either. Try a page that allows embedding.",
-    enrol_key_refused: "This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display\u2019s current link from the dashboard."
+    enrol_key_refused: "This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display\u2019s current link from the dashboard.",
+    // 3.0: screen share (other languages fall back to these until translated)
+    share_shared_by: "Shared by {name}",
+    share_guest: "guest",
+    share_connecting: "Connecting to {name}\u2026",
+    share_code_title: "Share your screen here",
+    share_code_hint: "Go to {url} and enter"
   },
   es: {
     web_player: "Reproductor web",
@@ -3136,6 +3144,58 @@ function connect(serverUrl) {
     } catch (_) {
     }
   });
+  const shareLabels = () => ({
+    sharedBy: _t("share_shared_by"),
+    guest: _t("share_guest"),
+    connecting: _t("share_connecting"),
+    codeTitle: _t("share_code_title"),
+    codeHint: _t("share_code_hint")
+  });
+  socket.on("device:screenshare-start", (data) => {
+    const SS = window.STScreenShare;
+    if (!SS || !data || typeof data.session_id !== "string") return;
+    if (!config || !config.deviceId || !config.deviceToken) return;
+    try {
+      setShareDucking(true);
+      SS.start({
+        deviceId: config.deviceId,
+        deviceToken: config.deviceToken,
+        serverUrl: config.serverUrl || "",
+        sessionId: data.session_id,
+        sharedBy: typeof data.shared_by === "string" ? data.shared_by : "",
+        guest: !!data.guest,
+        maxSeconds: data.max_seconds,
+        iceServers: Array.isArray(data.ice_servers) ? data.ice_servers : [],
+        labels: shareLabels(),
+        onState: (st, reason) => {
+          console.log("[share]", st, reason || "");
+          if (st === "stopped" || st === "unsupported") {
+            try {
+              setShareDucking(false);
+            } catch (_) {
+            }
+          }
+        }
+      });
+    } catch (_) {
+      try {
+        setShareDucking(false);
+      } catch (e) {
+      }
+    }
+  });
+  socket.on("device:screenshare-stop", (data) => {
+    try {
+      window.STScreenShare && window.STScreenShare.stop(data && data.session_id, data && data.reason);
+    } catch (_) {
+    }
+  });
+  socket.on("device:screenshare-code", (data) => {
+    try {
+      window.STScreenShare && window.STScreenShare.showCode(data, shareLabels());
+    } catch (_) {
+    }
+  });
   socket.on("device:pip-show", (data) => pipShow(data));
   socket.on("device:pip-clear", (data) => pipClear(data && data.pip_id));
 }
@@ -3259,19 +3319,35 @@ function triggerStop(reason) {
 }
 function triggerSyncAudio() {
   if (typeof setBaseAudioSuppressed !== "function") return;
+  const sharing = typeof shareDucking !== "undefined" && shareDucking;
   try {
-    setBaseAudioSuppressed(!!(triggerActive && triggerActive.coversBase) || talkDucking);
+    setBaseAudioSuppressed(!!(triggerActive && triggerActive.coversBase) || talkDucking || sharing);
   } catch (e) {
   }
 }
 let talkDucking = false;
+let shareDucking = false;
+function setShareDucking(on) {
+  shareDucking = !!on;
+  triggerSyncAudio();
+  try {
+    if (on) {
+      if (currentVideoEl) currentVideoEl.pause();
+    } else if (!talkDucking && currentVideoEl && !currentVideoEl.__stOverlay) {
+      const p = currentVideoEl.play();
+      if (p && p.catch) p.catch(() => {
+      });
+    }
+  } catch (e) {
+  }
+}
 function setTalkDucking(on) {
   talkDucking = !!on;
   triggerSyncAudio();
   try {
     if (on) {
       if (currentVideoEl) currentVideoEl.pause();
-    } else if (currentVideoEl && !currentVideoEl.__stOverlay) {
+    } else if (!shareDucking && currentVideoEl && !currentVideoEl.__stOverlay) {
       const p = currentVideoEl.play();
       if (p && p.catch) p.catch(() => {
       });
@@ -3878,6 +3954,13 @@ function declaredCapabilities() {
   } catch (e) {
   }
   if (window.__stHasMic) caps.push("remote.mic");
+  try {
+    const SS = typeof window !== "undefined" ? window.STScreenShare : null;
+    const rtc = !!(SS && typeof SS.isSupported === "function" && SS.isSupported());
+    const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST;
+    if (rtc && !shell) caps.push("remote.screen_share");
+  } catch (e) {
+  }
   if (typeof triggerStats === "object" && triggerStats.listeners && triggerStats.listeners.http) {
     caps.push("trigger.http");
   }
