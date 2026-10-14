@@ -140,6 +140,7 @@ async function renderHome(container) {
       ${canChange ? `<a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>` : ''}
+      ${canChange ? `<a class="simple-task" href="#/simple/requests"><span class="simple-task-icon">&#128229;</span><span><strong>${esc(t('simple.task.requests'))}</strong><small>${esc(t('simple.task.requests_desc'))}</small></span></a>` : ''}
       ${canManageTeam() ? `<a class="simple-task" href="#/simple/team"><span class="simple-task-icon">&#128101;</span><span><strong>${esc(t('simple.task.team'))}</strong><small>${esc(t('simple.task.team_desc'))}</small></span></a>` : ''}
       <a class="simple-task" href="#/simple/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
     </div>
@@ -653,6 +654,155 @@ async function renderUpload(container, presetIds = []) {
 // ---------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------
+// Task: requests from people without an account (views/requests.js is the Advanced version).
+// What is waiting, with a big Approve / Decline each; the request links to pass on; and a three-step
+// guide to make a new link for some screens. Server: routes/content-requests.js. Approving goes
+// through the same release gate as everything else, so a workspace that requires review still needs
+// a reviewer to press it.
+// ---------------------------------------------------------------------------------------------
+
+async function renderRequests(container) {
+  shell(container, `
+    <div class="simple-help-top"><a href="#/" class="btn btn-secondary btn-sm">&larr; ${esc(t('simple.done.home'))}</a></div>
+    <h1 class="simple-h1">${esc(t('simple.req.title'))}</h1>
+    <p class="simple-muted">${esc(t('simple.req.intro'))}</p>
+    <h2 class="simple-h2">${esc(t('simple.req.waiting'))}</h2>
+    <div data-waiting><p class="simple-muted">${esc(t('common.loading'))}</p></div>
+    <h2 class="simple-h2">${esc(t('simple.req.links'))}</h2>
+    <div data-links><p class="simple-muted">${esc(t('common.loading'))}</p></div>
+    <a class="btn btn-primary" href="#/simple/requests/new" style="margin-top:12px">${esc(t('simple.req.new'))}</a>`);
+  const waiting = container.querySelector('[data-waiting]');
+  const links = container.querySelector('[data-links]');
+
+  async function loadWaiting() {
+    let rows = [];
+    try { rows = await api.get('/content-requests/requests?status=pending'); } catch (e) { waiting.innerHTML = `<p class="simple-status">${esc(e.message)}</p>`; return; }
+    if (!rows.length) { waiting.innerHTML = `<div class="simple-card"><p class="simple-muted" style="margin:0">${esc(t('simple.req.none'))}</p></div>`; return; }
+    waiting.innerHTML = rows.map((r) => `
+      <div class="simple-card" data-req="${esc(r.id)}" style="margin-bottom:12px">
+        <img data-auth-src="/api/content/${esc(r.content_id)}/thumbnail" alt="" style="width:100%;max-height:220px;object-fit:contain;border-radius:8px;background:#000">
+        <h3 class="simple-card-title" style="margin-top:12px">${esc(r.title)}</h3>
+        <p class="simple-lead">${esc(t('creq.from', { name: r.requester_name, email: r.requester_email }))}</p>
+        <p class="simple-muted">${esc(t('simple.req.when_where', { start: r.start_date, end: r.end_date, where: r.targets.map((x) => x.label).join(', ') }))}</p>
+        <div class="simple-done-actions">
+          <button type="button" class="btn btn-primary" data-approve>${esc(t('simple.req.approve'))}</button>
+          <button type="button" class="btn btn-secondary" data-decline>${esc(t('simple.req.decline'))}</button>
+        </div>
+        <div data-why hidden style="margin-top:12px">
+          <label class="simple-label">${esc(t('simple.req.why'))}</label>
+          <textarea class="input" rows="3" maxlength="1000"></textarea>
+          <button type="button" class="btn btn-primary" data-send style="margin-top:8px">${esc(t('simple.req.send_decline'))}</button>
+        </div>
+        <p class="simple-status" data-status></p>
+      </div>`).join('');
+    hydrateAuthImages(waiting);
+    waiting.querySelectorAll('[data-req]').forEach((el) => {
+      const id = el.dataset.req;
+      const status = el.querySelector('[data-status]');
+      el.querySelector('[data-approve]').addEventListener('click', async (e) => {
+        e.target.disabled = true; status.textContent = t('simple.working');
+        try {
+          const out = await api.post(`/content-requests/requests/${encodeURIComponent(id)}/approve`, {});
+          status.textContent = t(out.all_published ? 'simple.req.approved' : 'creq.toast.partial');
+          el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        } catch (err) { status.textContent = err.message; e.target.disabled = false; }
+      });
+      el.querySelector('[data-decline]').addEventListener('click', () => { el.querySelector('[data-why]').hidden = false; el.querySelector('textarea').focus(); });
+      el.querySelector('[data-send]').addEventListener('click', async (e) => {
+        const reason = el.querySelector('textarea').value.trim();
+        if (!reason) { status.textContent = t('simple.req.why'); return; }
+        e.target.disabled = true;
+        try {
+          await api.post(`/content-requests/requests/${encodeURIComponent(id)}/reject`, { reason });
+          status.textContent = t('simple.req.declined');
+          el.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        } catch (err) { status.textContent = err.message; e.target.disabled = false; }
+      });
+    });
+  }
+
+  async function loadLinks() {
+    let forms = [];
+    try { forms = await api.get('/content-requests/forms'); } catch (e) { links.innerHTML = `<p class="simple-status">${esc(e.message)}</p>`; return; }
+    const open = forms.filter((f) => f.status === 'open');
+    if (!open.length) { links.innerHTML = `<div class="simple-card"><p class="simple-muted" style="margin:0">${esc(t('simple.req.no_links'))}</p></div>`; return; }
+    links.innerHTML = open.map((f) => `
+      <div class="simple-card" data-form="${esc(f.id)}" style="margin-bottom:12px">
+        <h3 class="simple-card-title">${esc(f.title)}</h3>
+        <p class="simple-muted" style="word-break:break-all" data-url></p>
+        <button type="button" class="btn btn-primary" data-share>${esc(t('simple.req.share'))}</button>
+        <p class="simple-status" data-status></p>
+      </div>`).join('');
+    links.querySelectorAll('[data-form]').forEach((el) => {
+      const f = open.find((x) => x.id === el.dataset.form);
+      const url = `${location.origin}${f.path}`;
+      el.querySelector('[data-url]').textContent = url;
+      el.querySelector('[data-share]').addEventListener('click', async () => {
+        const how = await passOn(url);
+        el.querySelector('[data-status]').textContent = t(how === 'failed' ? 'simple.req.copy_failed' : 'simple.req.shared');
+      });
+    });
+  }
+  await Promise.all([loadWaiting(), loadLinks()]);
+}
+
+async function renderRequestNew(container) {
+  let devices = [];
+  try { devices = await api.getDevices(); } catch { devices = []; }
+  let title = '';
+  const total = 3;
+
+  function nameStep() {
+    shell(container, guideFrame({ step: 0, total, icon: '&#128229;', title: t('simple.req.new_q1'), back: false, next: true, nextLabel: t('simple.req.next'),
+      body: `<label class="simple-label" for="reqTitle">${esc(t('simple.req.new_q1_label'))}</label>
+        <input id="reqTitle" class="input" maxlength="120" placeholder="${esc(t('simple.req.new_q1_placeholder'))}" value="${esc(title)}">
+        <p class="simple-status" data-status></p>` }));
+    container.querySelector('[data-guide-next]').addEventListener('click', () => {
+      title = container.querySelector('#reqTitle').value.trim();
+      if (!title) { container.querySelector('[data-status]').textContent = t('simple.req.new_q1_label'); return; }
+      screensStep();
+    });
+  }
+
+  function screensStep() {
+    shell(container, guideFrame({ step: 1, total, icon: '&#128250;', title: t('simple.req.new_q2'), next: !!devices.length, nextLabel: t('simple.req.make_link'),
+      body: devices.length ? `<div class="simple-checks">${devices.map((d) => `<label><input type="checkbox" value="${esc(d.id)}"> <span>${esc(d.name)}</span></label>`).join('')}</div>
+        <p class="simple-muted">${esc(t('simple.req.new_q2_hint'))}</p><p class="simple-status" data-status></p>`
+        : `<p class="simple-lead">${esc(t('simple.req.no_screens'))}</p>` }));
+    container.querySelector('[data-guide-back]')?.addEventListener('click', nameStep);
+    container.querySelector('[data-guide-next]')?.addEventListener('click', async (e) => {
+      const ids = [...container.querySelectorAll('.simple-checks input:checked')].map((i) => i.value);
+      const status = container.querySelector('[data-status]');
+      if (!ids.length) { status.textContent = t('simple.req.new_q2_hint'); return; }
+      e.target.disabled = true;
+      try {
+        const f = await api.post('/content-requests/forms', {
+          title, targets: ids.map((id) => ({ label: (devices.find((d) => d.id === id) || {}).name || id, device_id: id })),
+        });
+        doneStep(f);
+      } catch (err) { status.textContent = err.message; e.target.disabled = false; }
+    });
+  }
+
+  function doneStep(f) {
+    const url = `${location.origin}${f.path}`;
+    shell(container, guideFrame({ step: 2, total, icon: '&#127881;', title: t('simple.req.new_done'), back: false,
+      body: `<p class="simple-lead">${esc(t('simple.req.new_done_body'))}</p>
+        <p class="simple-muted" style="word-break:break-all" data-url></p>
+        <div class="simple-done-actions"><button type="button" class="btn btn-primary" data-share>${esc(t('simple.req.share'))}</button>
+          <a class="btn btn-secondary" href="#/simple/requests">${esc(t('simple.req.title'))}</a></div>
+        <p class="simple-status" data-status></p>` }));
+    container.querySelector('[data-url]').textContent = url;
+    container.querySelector('[data-share]').addEventListener('click', async () => {
+      const how = await passOn(url);
+      container.querySelector('[data-status]').textContent = t(how === 'failed' ? 'simple.req.copy_failed' : 'simple.req.shared');
+    });
+  }
+  nameStep();
+}
+
+
+// ---------------------------------------------------------------------------------------------
 // Help, inside Simple view. The full Help page is about the whole product (widgets, layouts,
 // kiosks, video walls) and opens in the full shell; this one answers what Simple view does, keeps
 // the top bar, and always has a way home. Fully translated (simple.help.*), unlike views/help.js:
@@ -742,14 +892,14 @@ export function render(container, hash = window.location.hash || '#/') {
   const onRefreshed = (e) => {
     const h = window.location.hash || '#/';
     if (accessKey(e.detail) === drawnFor || !isSimpleRoute(h)) return;
-    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload')) return;
+    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/requests/new')) return;
     render(container, h);
   };
   window.addEventListener('user-refreshed', onRefreshed);
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/requests'))) {
     window.location.replace('#/');
     return undefined;
   }
@@ -757,6 +907,8 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
   if (hash.startsWith('#/simple/team')) return renderTeam(container);
+  if (hash.startsWith('#/simple/requests/new')) return renderRequestNew(container);
+  if (hash.startsWith('#/simple/requests')) return renderRequests(container);
   return renderHome(container);
 }
 

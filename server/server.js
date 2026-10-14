@@ -1367,6 +1367,20 @@ app.use('/api/auth/users', rateLimit(60000, 20));
  */
 app.get('/q/:code', rateLimit(60000, 120), require('./routes/qr-links').redirect);
 /*
+ * 3.0 content requests (lib/content-requests.js, docs/content-requests.md): the public request page
+ * /r/<code> (and its status page /r/status#<token>) and the API behind it. No account by design; the
+ * code in the URL is the form's secret. The page is static (the code is read client-side), so the
+ * limit here only bounds page loads; every API action has its own, tighter per-IP limit inside
+ * routes/request-public.js, and this outer cap is sized for a chunked video upload (1 MiB a request).
+ */
+app.get(['/r/status', '/r/:code'], rateLimit(60000, 60), (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');   // the code must not leak to a logo's host
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(config.frontendDir, 'request.html'));
+});
+app.use('/api/public/requests', rateLimit(60000, 1500), require('./routes/request-public'));
+/*
  * View-only display access (lib/view-access.js, routes/view.js): /view/<token> and the network-only
  * /view/screen/<id>, plus the read-only payload they poll. GET only, no session, no device row. The
  * token is the credential, so each IP gets one bucket per route shape (lib/limit-paths.js), not one

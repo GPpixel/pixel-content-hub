@@ -1539,6 +1539,61 @@ async function beginOidc(req, res, provider, extra = {}, onError = backToApp, as
   }
 }
 
+/*
+ * 3.0: content requests (lib/content-requests.js) on an SSO-gated form. A requester has NO account
+ * and gets none: the organization's identity provider vouches for who they are, and the result is a
+ * short-lived ticket for one form, nothing else. The round trip is the sign-in one (same PKCE, state,
+ * nonce, SAML request binding and assertion checks); `rq` in the signed transaction is what sends the
+ * callback to finishRequesterSso instead of completeFederatedLogin, so no session, no user row and no
+ * org membership can come out of it.
+ */
+function requesterBack(res, code, params) {
+  const qs = new URLSearchParams(params).toString();
+  res.redirect(code ? `/r/${encodeURIComponent(code)}#${qs}` : `/r/status#${qs}`);
+}
+function requesterBackById(res, formId, params) {
+  let code = null;
+  try { code = (db.prepare('SELECT code FROM request_forms WHERE id = ?').get(String(formId)) || {}).code || null; } catch (_) { /* gone */ }
+  requesterBack(res, code, params);
+}
+
+async function beginRequesterSso(req, res, provider, form) {
+  const onError = (r, params) => requesterBack(r, form.code, params);
+  if (provider.kind !== 'saml') return beginOidc(req, res, provider, { rq: form.id }, onError);
+  try {
+    const requestId = saml.newRequestId();
+    const url = await saml.samlFor(provider, publicOrigin(req), { generateUniqueId: () => requestId })
+      .getAuthorizeUrlAsync('', undefined, {});
+    const tx = jwt.sign({ typ: 'saml-tx', slug: provider.slug, rid: requestId, rq: form.id }, config.jwtSecret, { expiresIn: OIDC_TX_TTL_S, algorithm: 'HS256' });
+    const secure = req.protocol === 'https';
+    res.cookie(SAML_TX_COOKIE, tx, { httpOnly: true, secure, sameSite: secure ? 'none' : 'lax', maxAge: OIDC_TX_TTL_S * 1000, path: SAML_TX_PATH });
+    res.redirect(url);
+  } catch (err) {
+    console.error(`[saml] ${provider.slug} requester start failed:`, err.message);
+    onError(res, { sso_error: 'provider_unavailable' });
+  }
+}
+
+/*
+ * The assertion has passed every check a sign-in gets. What is left is whether THIS person may use
+ * THIS form: the provider must be the form's organization's, and the address one it may speak for
+ * (emailAllowedForProvider — the same confinement a sign-in has) and verified.
+ */
+function finishRequesterSso(req, res, { provider, claims, formId }) {
+  const email = String(claims.email || '').toLowerCase().trim();
+  const out = require('../lib/content-requests').ssoTicket({
+    formId, provider, email, name: claims.name,
+    emailAllowed: !!email && emailAllowedForProvider(provider, email),
+    emailVerified: oidcProviders.emailIsVerified(claims, provider),
+  });
+  if (out.error) {
+    console.warn(`[sso] requester for form ${formId} refused: ${out.error}`);
+    return requesterBack(res, out.code, { sso_error: out.error });
+  }
+  // The ticket rides in the FRAGMENT: browsers do not send it to servers and proxies do not log it.
+  return requesterBack(res, out.code, { ticket: out.ticket, name: out.name, email: out.email });
+}
+
 router.get('/oidc/:slug/start', asyncRoute(async (req, res) => {
   const provider = oidcProviders.get(req.params.slug);
   if (!provider) return backToApp(res, { sso_error: 'unknown_provider' });
@@ -1647,6 +1702,7 @@ router.post('/saml/:slug/acs', express.urlencoded({ extended: false, limit: '512
   const claims = saml.profileToClaims(profile);
   if (!claims.sub) return backToApp(res, { sso_error: 'verification_failed' });
   try {
+    if (tx.rq) return finishRequesterSso(req, res, { provider, claims, formId: tx.rq });
     return await completeFederatedLogin(req, res, { provider, claims, tag: 'saml', app: tx.app || null });
   } catch (err) {
     console.error(`[saml] ${provider.slug} sign-in failed:`, err.message);
@@ -1737,6 +1793,9 @@ router.get('/oidc/:slug/callback', asyncRoute(async (req, res) => {
     return backToApp(res, { sso_error: 'expired' });
   }
 
+  // A content-request round trip (beginRequesterSso) reports its failures on the form, not the login page.
+  const backFail = tx.rq ? (r, params) => requesterBackById(r, tx.rq, params) : backToApp;
+
   // CSRF: the state we minted, in the cookie only we could set, must match the one coming back.
   // Compared in constant time so a wrong state cannot be discovered a character at a time.
   const got = String(req.query.state || '');
@@ -1753,10 +1812,10 @@ router.get('/oidc/:slug/callback', asyncRoute(async (req, res) => {
   const gotBuf = Buffer.from(got, 'utf8');
   const wantBuf = Buffer.from(want, 'utf8');
   if (gotBuf.length !== wantBuf.length || !crypto.timingSafeEqual(gotBuf, wantBuf)) {
-    return backToApp(res, { sso_error: 'bad_state' });
+    return backFail(res, { sso_error: 'bad_state' });
   }
-  if (tx.slug !== provider.slug) return backToApp(res, { sso_error: 'bad_state' });
-  if (!req.query.code) return backToApp(res, { sso_error: 'no_code' });
+  if (tx.slug !== provider.slug) return backFail(res, { sso_error: 'bad_state' });
+  if (!req.query.code) return backFail(res, { sso_error: 'no_code' });
 
   let claims;
   try {
@@ -1775,9 +1834,10 @@ router.get('/oidc/:slug/callback', asyncRoute(async (req, res) => {
     });
   } catch (err) {
     console.error(`[oidc] ${provider.slug} verification failed:`, err.message);
-    return backToApp(res, { sso_error: 'verification_failed' });
+    return backFail(res, { sso_error: 'verification_failed' });
   }
 
+  if (tx.rq) return finishRequesterSso(req, res, { provider, claims, formId: tx.rq });
   return completeFederatedLogin(req, res, { provider, claims, link: tx.link || null, app: tx.app || null });
 }));
 
@@ -2220,3 +2280,6 @@ module.exports = router;
 module.exports.emailAllowedForProvider = emailAllowedForProvider;
 module.exports.upsertFederatedUser = upsertFederatedUser;
 module.exports.isOrphanedFederated = isOrphanedFederated;
+// 3.0 content requests: the SSO gate of a request form (routes/request-public.js) and its finish, for tests.
+module.exports.beginRequesterSso = beginRequesterSso;
+module.exports.finishRequesterSso = finishRequesterSso;

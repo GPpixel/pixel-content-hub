@@ -113,6 +113,8 @@ const NOT_WORKSPACE_SCOPED = Object.freeze({
   'plugin-submissions.js': 'mounted with tenancy in api-surface; listed for the inline rate-limit mount',
   'agency.js': 'agency-token surface, mounted behind bearerAuth + resolveTenancy (AGENCY_ROUTERS)',
   'kiosk.js': 'mounted with tenancy (PUBLIC_ROUTERS)',
+  // 3.0 content requests: the public form has no session; the workspace comes from the form code.
+  'request-public.js': 'public request form; a router.param(code) guard forwards every mutating call for a copied workspace to the primary (and the status cancel does the same), asserted below',
   // Writes one column on a users row, authorised by an HMAC in an email link — not a workspace write.
   // ⚠️ It is NOT simply exempt: `users` IS copied and `email_alerts` is not blocklisted, so the POST
   // proxies to the primary for a copied user (same isCopiedUser test routes/auth.js uses for login).
@@ -195,6 +197,9 @@ test('test_every_mutating_route_passes_resolveTenancy: no second writer can hide
   assert.match(workspaces, /router\.param\('id'/, 'workspaces.js: router.param guard');
   assert.match(workspaces, /replicaProxy\.shouldIntercept\(req, ws\)\) return replicaProxy\.proxyToPrimary\(req, res, appConfig\)/);
   assert.match(workspaces, /isCopiedOrganization\(organizationId\)\) return replicaProxy\.proxyToPrimary/);
+  const requestPublic = read('routes/request-public.js');
+  assert.match(requestPublic, /router\.param\('code'[\s\S]{0,300}replicaProxy\.shouldIntercept\(req, ws\)\) return replicaProxy\.proxyToPrimary\(req, res, appConfig\)/,
+    'request-public.js: the copy guard runs as a param handler, before the chunk body parser');
   const status = read('routes/status.js');
   // authenticateImport (the session check) also runs before multer, after the copy guard.
   assert.match(status, /router\.post\('\/import', proxyImportIfCopied, (authenticateImport, )?importUpload/, 'status.js: the import guard runs before multer');

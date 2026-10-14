@@ -12,6 +12,7 @@ import * as slides from './views/slides.js';
 import * as templates from './views/templates.js';
 import * as dataSources from './views/data-sources.js';
 import * as reviews from './views/reviews.js';
+import * as contentRequests from './views/requests.js';
 import * as videoWall from './views/video-wall.js';
 import * as reports from './views/reports.js';
 import * as audience from './views/audience.js';
@@ -247,6 +248,7 @@ const NAV_LABEL_KEYS = {
   templates: 'nav.templates',
   'data-sources': 'nav.data_sources',
   reviews: 'nav.reviews',
+  requests: 'nav.requests',
   schedule: 'nav.schedule',
   walls: 'nav.walls',
   reports: 'nav.reports',
@@ -673,6 +675,9 @@ function route() {
   } else if (hash === '#/reviews') {
     currentView = reviews;
     reviews.render(app);
+  } else if (hash === '#/requests' || hash.startsWith('#/requests?')) {
+    currentView = contentRequests;
+    contentRequests.render(app);
   } else if (hash === '#/widgets') {
     currentView = widgets;
     widgets.render(app);
@@ -1020,6 +1025,21 @@ async function refreshReviewsBadge() {
   } catch { badge.style.display = 'none'; }
 }
 window.addEventListener('hashchange', () => { if (location.hash === '#/reviews' || location.hash === '#/members') refreshReviewsBadge(); });
+
+// 3.0 content requests: how many requests from outside are waiting for a decision. Requests need an
+// approve step whether or not the workspace requires approval, so this lights up either way.
+async function refreshRequestsBadge() {
+  const badge = document.getElementById('requestsNavBadge');
+  if (!badge || !isAuthenticated()) return;
+  try {
+    const rows = await api.get('/content-requests/requests?status=pending');
+    const n = Array.isArray(rows) ? rows.length : 0;
+    badge.textContent = String(n);
+    badge.style.display = n > 0 ? '' : 'none';
+  } catch { badge.style.display = 'none'; }
+}
+window.addEventListener('hashchange', () => { if (location.hash.startsWith('#/requests')) refreshRequestsBadge(); });
+setTimeout(refreshRequestsBadge, 1800);
 setTimeout(refreshReviewsBadge, 1500);
 
 /*
