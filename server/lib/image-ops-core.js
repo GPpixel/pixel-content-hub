@@ -70,6 +70,21 @@ async function wasmDecode(mime, buf) {
 }
 
 /*
+ * ⚠️ REFUSE A HUGE CANVAS BEFORE DECODING IT. Decoding allocates width*height*4 bytes up front, and
+ * the header is the uploader's claim: a few-KB PNG declaring 50000x50000 asked for 10 GB. ~50 MP
+ * (a 50 MP phone sensor is 8160x6120) is ~200 MB of RGBA, which is already the most a thumbnail
+ * should cost. Unknown/unreadable headers fall through to the decoder as before.
+ */
+const MAX_DECODE_PIXELS = 50 * 1024 * 1024;
+function assertDecodableSize(buf, mime) {
+  const dims = require('./image-dims').headerDims(buf, mime);
+  if (dims && dims.width * dims.height > MAX_DECODE_PIXELS) {
+    throw Object.assign(new Error(`image is too large to decode (${dims.width}x${dims.height}, limit ${MAX_DECODE_PIXELS} pixels)`),
+      { code: 'IMAGE_TOO_LARGE' });
+  }
+}
+
+/*
  * Decode to a Jimp image whatever the format. Reuses sniffMime rather than carrying a second copy
  * of the magic-byte table — routes/media.js already duplicating it once is noted there as a smell.
  * Throws on anything undecodable, which is the contract callers already handle (a failure yields
@@ -78,6 +93,7 @@ async function wasmDecode(mime, buf) {
 async function readImage(src) {
   const buf = await fs.promises.readFile(src);
   const mime = sniffMime(buf);
+  assertDecodableSize(buf, mime);
 
   if (WASM_CODECS[mime]) {
     const raw = await wasmDecode(mime, buf);
@@ -193,4 +209,4 @@ async function cutout(src, destPath, opts = {}) {
   };
 }
 
-module.exports = { metadata, writeThumbnail, measureAndThumbnail, readImage, cutout };
+module.exports = { metadata, writeThumbnail, measureAndThumbnail, readImage, cutout, MAX_DECODE_PIXELS };

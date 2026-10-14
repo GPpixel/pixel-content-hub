@@ -244,8 +244,29 @@ function listActiveGrants(now = Math.floor(Date.now() / 1000)) {
   ).all(now);
 }
 
-function revokeGrant(jti) { return db.prepare('DELETE FROM support_grants WHERE jti = ?').run(jti).changes; }
-function revokeAllGrants() { return db.prepare('DELETE FROM support_grants').run().changes; }
+/*
+ * ⚠️ Revoking also closes the session's open dashboard sockets. HTTP refuses on the next request
+ * (resolveSessionUser checks the row), but a socket authenticated once at its handshake, so a
+ * revoked support engineer kept live device events and, until the write re-check, fleet control.
+ * Lazy require: ws/dashboardSocket pulls in the socket stack, which this module must not load.
+ */
+function closeSupportSockets(jtis) {
+  try {
+    const { disconnectUserSockets } = require('../ws/dashboardSocket');
+    for (const jti of jtis) disconnectUserSockets(SUPPORT_ID_PREFIX + jti);
+  } catch (_) { /* best-effort: the write-tier re-check still refuses */ }
+}
+function revokeGrant(jti) {
+  const n = db.prepare('DELETE FROM support_grants WHERE jti = ?').run(jti).changes;
+  if (n) closeSupportSockets([jti]);
+  return n;
+}
+function revokeAllGrants() {
+  const jtis = db.prepare('SELECT jti FROM support_grants').all().map((r) => r.jti);
+  const n = db.prepare('DELETE FROM support_grants').run().changes;
+  closeSupportSockets(jtis);
+  return n;
+}
 
 /** Housekeeping only; every reader already refuses expired rows. */
 function pruneExpired(now = Math.floor(Date.now() / 1000), graceSec = 30 * 86400) {

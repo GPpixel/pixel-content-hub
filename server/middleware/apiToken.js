@@ -128,6 +128,13 @@ function agencyGate(req, res, next) {
   if (!req.viaToken || req.tokenScope !== 'agency') {
     return res.status(403).json({ error: 'agency token required' });
   }
+  // ⚠️ RE-CHECK THE OWNER'S ROLE ON EVERY USE. Minting refuses a viewer (routes/tokens.js), but the
+  // agency handlers never consult req.workspaceRole, so an owner later DEMOTED to viewer kept an
+  // upload/publish credential. resolveTenancy has just resolved the owner's CURRENT role in the
+  // bound workspace (role forced to 'user', so actingAs here means org_owner/org_admin only).
+  if (!req.actingAs && req.workspaceRole === 'workspace_viewer') {
+    return res.status(403).json({ error: "agency token's owner is now read-only in this workspace" });
+  }
   next();
 }
 

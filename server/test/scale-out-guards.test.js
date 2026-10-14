@@ -196,7 +196,8 @@ test('test_every_mutating_route_passes_resolveTenancy: no second writer can hide
   assert.match(workspaces, /replicaProxy\.shouldIntercept\(req, ws\)\) return replicaProxy\.proxyToPrimary\(req, res, appConfig\)/);
   assert.match(workspaces, /isCopiedOrganization\(organizationId\)\) return replicaProxy\.proxyToPrimary/);
   const status = read('routes/status.js');
-  assert.match(status, /router\.post\('\/import', proxyImportIfCopied, importUpload/, 'status.js: the import guard runs before multer');
+  // authenticateImport (the session check) also runs before multer, after the copy guard.
+  assert.match(status, /router\.post\('\/import', proxyImportIfCopied, (authenticateImport, )?importUpload/, 'status.js: the import guard runs before multer');
   assert.match(status, /replicaProxy\.shouldIntercept\(req, ws\)\) return replicaProxy\.proxyToPrimary\(req, res, config\)/);
 });
 

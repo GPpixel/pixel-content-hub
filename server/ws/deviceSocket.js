@@ -311,10 +311,28 @@ function validateDeviceToken(deviceId, token) {
   }
 }
 
+/*
+ * 3.0: the device's address, resolved with the SAME trust list Express uses for req.ip
+ * (config/cloudflareIps trustedProxies). This used to take the first X-Forwarded-For entry from
+ * anyone, so a device could claim 127.0.0.1 — and devices.ip_address being loopback is what tells
+ * a server-on-a-player that this is its own screen and lets the dashboard capture the host's
+ * framebuffer for it (dashboardSocket bsCapture.isLoopback). Now a forwarded address counts only
+ * when it arrived through a proxy we trust; a direct connection is its peer address.
+ */
+let _trustProxy = null;
 function getClientIp(socket) {
+  const peer = socket.handshake.address;
   const forwarded = socket.handshake.headers['x-forwarded-for'];
-  if (forwarded) return forwarded.split(',')[0].trim();
-  return socket.handshake.address;
+  if (!forwarded) return peer;
+  try {
+    if (!_trustProxy) {
+      const proxyaddr = require('proxy-addr');
+      _trustProxy = proxyaddr.compile(require('../config/cloudflareIps').trustedProxies);
+    }
+    return require('proxy-addr')({ connection: { remoteAddress: peer }, headers: { 'x-forwarded-for': forwarded } }, _trustProxy);
+  } catch {
+    return peer;
+  }
 }
 
 // #146: route status transitions through the batched, coalescing writer instead of
@@ -3334,3 +3352,4 @@ module.exports.PLAYER_EVENT_KINDS = Object.freeze(
   Object.keys(EVENT_APPLIERS).filter((k) => !NOT_RELAYABLE.includes(k))
 );
 module.exports.provisionViaReplica = provisionViaReplica;
+module.exports.__getClientIp = getClientIp; // 3.0 test hook (X-Forwarded-For trust)

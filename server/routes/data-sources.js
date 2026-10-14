@@ -369,7 +369,17 @@ router.put('/:id', requireWorkspaceWrite, (req, res) => {
     let prev = {};
     try { prev = decryptSecrets(JSON.parse(existing.config), fields); } catch (_) {}
     // Merge against DECRYPTED stored secrets so a blank incoming secret keeps the real value.
-    parsedConfig = mergeSecrets(parsedConfig, prev, fields);
+    // ⚠️ Only when the edit keeps the SAME destination (same rule as POST /test). Otherwise an
+    // editor could repoint `url` at their own host, have the stored token merged back, and the next
+    // sync would deliver it there. A url change drops the stored secrets: the user re-enters them
+    // (the form shows them blank anyway). Types with no `url` on either side (plugins whose host is
+    // fixed by their network allow-list) have no repointable destination, so they keep merging.
+    const urlLess = (c) => !c || c.url === undefined || c.url === null || c.url === '';
+    if (sameSecretDestination(parsedConfig, prev) || (urlLess(parsedConfig) && urlLess(prev))) {
+      parsedConfig = mergeSecrets(parsedConfig, prev, fields);
+    } else {
+      parsedConfig = mergeSecrets(parsedConfig, {}, fields); // strips blank/"***" placeholders only
+    }
     plaintextChanged = JSON.stringify(parsedConfig) !== JSON.stringify(prev);
     configJson = JSON.stringify(encryptSecrets(parsedConfig, fields)); // re-encrypt for storage
   } else {

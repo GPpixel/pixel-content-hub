@@ -1004,7 +1004,9 @@ router.post('/:id/telemetry', express.text({ type: '*/*', limit: '16kb' }), (req
   t.receivedAt = Date.now();
   // Key by the reporting device (player passes ?device=<id>) so multiple panels don't collide;
   // fall back to a widget-scoped key for players that don't pass a device id yet.
-  const key = (t.device && String(t.device).slice(0, 64)) || ('w:' + req.params.id);
+  // 3.0: namespaced by the widget too. Keyed on the bare device id, anyone who knew a screen's id
+  // could forge or read its diagnostics through ANY widget id; now they also need this widget's id.
+  const key = (t.device && `d:${req.params.id}:${String(t.device).slice(0, 64)}`) || ('w:' + req.params.id);
   widgetTelemetry.set(key, t);
   // 204, not res.json(): this is fire-and-forget diagnostic data and the reporting widget ignores
   // the response entirely (routes/widgets.js renderDiagSmoothness -> fetch(...).catch()). It also
@@ -1023,7 +1025,7 @@ router.get('/:id/telemetry', (req, res) => {
   // with no device id gets the widget-scoped snapshot (raw/debug view only).
   // get() returns null for a missing OR expired entry, so a stale snapshot is never served
   // as live even between sweeps.
-  const rec = dev ? widgetTelemetry.get(dev) : widgetTelemetry.get('w:' + req.params.id);
+  const rec = dev ? widgetTelemetry.get(`d:${req.params.id}:${dev.slice(0, 64)}`) : widgetTelemetry.get('w:' + req.params.id);
   res.json(rec || null);
 });
 

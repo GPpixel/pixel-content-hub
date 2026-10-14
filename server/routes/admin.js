@@ -352,6 +352,8 @@ router.put('/users/:id/workspace', requirePlatformAdmin, (req, res) => {
     releaseWorkspaceMember(db, { userId: target.id, workspaceIds: memberships.map(m => m.workspace_id).filter(id => id !== ws.id) });
   });
   txn();
+  // A move leaves the old workspace's socket room behind on any open dashboard; drop it.
+  for (const m of memberships) if (m.workspace_id !== ws.id) try { require('../ws/dashboardSocket').dropUserFromWorkspace(target.id, m.workspace_id); } catch (_) { /* best-effort: writes are re-checked live anyway */ }
 
   logActivity(req.user.id, 'admin_set_user_workspace', `target: ${target.email}, workspace: ${ws.id}`, null, getClientIp(req), ws.id);
 
@@ -486,6 +488,8 @@ router.delete('/users/:id/workspaces/:workspaceId', requirePlatformAdmin, (req, 
     db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(req.params.workspaceId, req.params.id);
     releaseWorkspaceMember(db, { userId: req.params.id, workspaceIds: [req.params.workspaceId] });
   })();
+  // Their open dashboards joined this workspace's socket room at connect; take them out of it.
+  try { require('../ws/dashboardSocket').dropUserFromWorkspace(req.params.id, req.params.workspaceId); } catch (_) { /* best-effort: writes are re-checked live anyway */ }
   req.workspaceId = req.params.workspaceId;
   const target = db.prepare('SELECT email FROM users WHERE id = ?').get(req.params.id);
   logActivity(req.user.id, 'admin_remove_user_workspace', `target: ${target?.email}, workspace: ${req.params.workspaceId}`, null, getClientIp(req), req.params.workspaceId);
@@ -981,7 +985,8 @@ router.post('/cleanup/stale-accounts/warn', requirePlatformAdmin, async (req, re
   if (!isConfigured()) {
     return res.status(503).json({ error: 'Email is not configured on this server, so no notice can be sent. Configure email, or delete without notice.' });
   }
-  const appUrl = trimTrailing(process.env.APP_URL || `${req.protocol}://${req.get('host')}`, '/');
+  // Emailed to customers: lib/public-origin, never the raw Host header.
+  const appUrl = trimTrailing(require('../lib/public-origin').publicOrigin(req), '/');
   const { ids, days, notice_days: noticeDays } = req.body || {};
   try {
     const out = await cleanup.warn(db, {

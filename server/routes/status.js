@@ -395,37 +395,89 @@ function discardImportZip(req) {
 }
 
 /*
- * Scale-out (docs/scale-out.md): an import WRITES into the session's workspace. When that workspace
- * is a copy (origin_node_id set) the whole upload is forwarded to the primary — before multer, so
- * the multipart stream is still intact — and nothing lands here. Session errors are left to the
- * handler below, which reports them exactly as it always has.
+ * ⚠️ LEFTOVERS FROM A CRASH OR A KILLED REQUEST ARE SWEPT AT LOAD. Uploads land in
+ * IMPORT_UPLOAD_DIR and are extracted into IMPORT_EXTRACT_PREFIX<random>; both are removed per
+ * request now, but a process that dies mid-import leaves up to 2 GB (plus its extraction) in /tmp
+ * forever. Anything older than an hour cannot belong to a live import (the route is rate-limited
+ * to 3/min and an import is one request).
  */
-function proxyImportIfCopied(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
-  let ws = null;
+const IMPORT_EXTRACT_PREFIX = 'screentinker-import-';
+const IMPORT_STALE_MS = 60 * 60 * 1000;
+function sweepImportTmp(now = Date.now()) {
+  const old = (p) => { try { return now - fs.statSync(p).mtimeMs > IMPORT_STALE_MS; } catch (_) { return false; } };
   try {
-    const session = resolveSessionUser(authHeader.split(' ')[1]);
-    if (session.viaRecovery) return next();
-    const wsId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
-    ws = wsId ? db.prepare('SELECT id, origin_node_id FROM workspaces WHERE id = ?').get(wsId) : null;
-  } catch (e) { return next(); }
-  if (ws && replicaProxy.shouldIntercept(req, ws)) return replicaProxy.proxyToPrimary(req, res, config);
-  next();
+    for (const f of fs.readdirSync(IMPORT_UPLOAD_DIR)) {
+      const p = resolveWithin(IMPORT_UPLOAD_DIR, f);
+      if (p && old(p)) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+    }
+  } catch (_) { /* no upload dir yet */ }
+  try {
+    for (const f of fs.readdirSync(os.tmpdir())) {
+      if (!f.startsWith(IMPORT_EXTRACT_PREFIX)) continue;
+      const p = resolveWithin(os.tmpdir(), f);
+      if (p && old(p)) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+    }
+  } catch (_) { /* tmpdir unreadable: nothing to sweep */ }
+}
+sweepImportTmp();
+
+/*
+ * ⚠️ EXTRACTION IS CAPPED ON REAL BYTES. unzipper.Extract wrote whatever the archive inflated to,
+ * so a 2 GB upload of zeros (or a few-MB bomb) could fill /tmp. Only the two shapes an export
+ * contains are written — export.json and files/<content id>/<name> — every other entry is ignored,
+ * symlinks are refused, names go through the bundle path normaliser (zip slip) and resolveWithin.
+ * Each entry is capped at its claimed size, and the whole extraction at a total and a ratio.
+ */
+const IMPORT_MAX_ENTRIES = 50000;
+const IMPORT_MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024;   // an export is mostly already-compressed media
+const IMPORT_MAX_RATIO = 50;                             // real bytes out per archive byte, whole archive
+const IMPORT_MIN_BUDGET = 256 * 1024 * 1024;             // so a small, JSON-heavy export is never refused
+async function extractImportZip(zipPath, extractDir) {
+  const unzipper = require('unzipper');
+  const { normalizeEntryPath } = require('../lib/html-bundle');
+  const { inflateToFileCapped } = require('../lib/zip-inflate');
+  const zipBytes = fs.statSync(zipPath).size;
+  const budget = { remaining: Math.min(IMPORT_MAX_TOTAL_BYTES, Math.max(IMPORT_MIN_BUDGET, zipBytes * IMPORT_MAX_RATIO)) };
+  const directory = await unzipper.Open.file(zipPath);
+  const entries = directory.files || [];
+  if (entries.length > IMPORT_MAX_ENTRIES) throw new Error(`archive has more than ${IMPORT_MAX_ENTRIES} entries`);
+  const tooBig = (kind) => new Error(kind === 'too-large' ? 'archive inflates past the import limit' : 'archive entry is corrupt');
+  for (const e of entries) {
+    if (e.type === 'Directory') continue;
+    if ((((Number(e.externalFileAttributes) || 0) >>> 16) & 0xF000) === 0xA000) throw new Error('archive contains a symlink');
+    const name = normalizeEntryPath(e.path);
+    if (!name) throw new Error('archive entry has an unsafe path');
+    const parts = name.split('/');
+    if (!(name === 'export.json' || (parts.length === 3 && parts[0] === 'files'))) continue;
+    const claimed = Number(e.uncompressedSize) || 0;
+    if (claimed > budget.remaining) throw tooBig('too-large');
+    const dest = resolveWithin(extractDir, name);
+    if (!dest) throw new Error('archive entry has an unsafe path');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    await inflateToFileCapped(e, dest, claimed, budget, tooBig);
+  }
 }
 
-router.post('/import', proxyImportIfCopied, importUpload.single('file'), async (req, res) => {
+/*
+ * ⚠️ AUTHENTICATE BEFORE MULTER. The session check used to run inside the handler, AFTER
+ * importUpload had already streamed up to 2 GB to disk — for anyone, token or not — and the 401 /
+ * denySession returns never removed it. This resolves the same session, with the same statuses and
+ * bodies, before a byte of the upload is accepted, and hands the result to the handler.
+ */
+function authenticateImport(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Token required' });
 
   let userId;
   let workspaceId;
+  let sessionRole = null;
   try {
     const session = resolveSessionUser(authHeader.split(' ')[1]);
     // A break-glass identity has no users row: the lookup this replaced returned nothing
     // for it, so the route 404'd. Preserve that.
     if (session.viaRecovery) return res.status(404).json({ error: 'User not found' });
     userId = session.user.id;
+    sessionRole = session.user.role;
     // Import WRITES into the workspace and can overwrite its branding, so re-validate the JWT's
     // workspace claim against current membership (stale-access) rather than trusting it, then fall back.
     workspaceId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
@@ -443,19 +495,113 @@ router.post('/import', proxyImportIfCopied, importUpload.single('file'), async (
    * applied denyReadOnly's rule — a workspace_viewer could create devices, playlists and widgets
    * and overwrite the workspace's branding. Same rule as lib/tenancy.js denyReadOnly.
    */
-  let sessionRole = null;
   try {
-    sessionRole = resolveSessionUser(authHeader.split(' ')[1]).user.role;
     const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(workspaceId);
     const ctx = ws && accessContext(userId, sessionRole, ws);
     if (!ctx || (!ctx.actingAs && ctx.workspaceRole === 'workspace_viewer')) {
-      discardImportZip(req);
       return res.status(403).json({ error: 'Read-only access' });
     }
   } catch (err) {
-    discardImportZip(req);
     return res.status(403).json({ error: 'Access denied' });
   }
+  req.importAuth = { userId, workspaceId, sessionRole };
+  next();
+}
+
+/*
+ * Imported content rows: the URL and type get the same gates the content routes apply
+ * (routes/content.js POST /remote, PUT /:id). A live transport is player-opened (LAN allowed);
+ * a hold is hold://blank|freeze; everything else is server-retrievable and SSRF-gated. Returns
+ * null when the row may be imported, else a reason.
+ */
+function importedContentRefusal(c) {
+  const mime = c.mime_type;
+  if (mime != null && (typeof mime !== 'string' || !/^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,99}$/i.test(mime))) {
+    return 'invalid mime_type';
+  }
+  const url = c.remote_url;
+  const { HOLD_MIME } = require('../lib/hold-item');
+  if (mime === HOLD_MIME) return url && !/^hold:\/\/(blank|freeze)$/.test(String(url)) ? 'invalid hold url' : null;
+  if (!url) return null;
+  if (typeof url !== 'string') return 'invalid remote_url';
+  const ru = require('../lib/remote-url');
+  let err;
+  if (mime === ru.RTSP_MIME) err = ru.validateRtspUrl(url);
+  else if (mime === ru.HDMI_IN_MIME) err = ru.validateHdmiInUrl(url);
+  else if (mime === ru.LIVE_MIME) err = ru.validatePlayerOpenedUrl(url);
+  else err = ru.validateRemoteUrl(url);
+  return err ? err.error : null;
+}
+
+/*
+ * ⚠️ A DIGEST NAME IS A CLAIM UNTIL THE BYTES ARE HASHED. The restore keeps <sha256><ext> names
+ * (see below), and contentDir is SHARED across workspaces — so an archive naming a file after
+ * another tenant's digest overwrote that tenant's media with its own bytes. The name is kept only
+ * when the bytes hash to it, and an existing file is never written over: if it is there and its
+ * bytes match, it is reused (refcounted, lib/content-files.js); otherwise a fresh uuid name is used.
+ * Returns the destination basename, or null when the copy failed.
+ */
+function restoreImportedFile(srcPath, srcName, newId, ext) {
+  if (isDigestName(srcName)) {
+    const claimed = path.basename(srcName).split('.')[0];
+    if (digestFileSync(srcPath) === claimed) {
+      const name = path.basename(srcName);
+      const dest = path.join(config.contentDir, name);
+      if (fs.existsSync(dest)) {
+        if (digestFileSync(dest) === claimed) return name;
+      } else if (copyFileExclusive(srcPath, dest)) {
+        return name;
+      }
+    }
+  }
+  // A row's file and its thumbnail can share an extension, so the second one gets its own uuid
+  // instead of truncating the first (which the old 'w' copy did).
+  for (const name of [`${newId}${ext}`, `${require('uuid').v4()}${ext}`]) {
+    if (copyFileExclusive(srcPath, path.join(config.contentDir, name))) return name;
+  }
+  return null;
+}
+// copyFileBytes truncates; refuse to overwrite by claiming the name with O_EXCL first.
+function copyFileExclusive(src, dest) {
+  try { fs.closeSync(fs.openSync(dest, 'wx')); } catch (_) { return false; }
+  try { copyFileBytes(src, dest); return true; } catch (_) {
+    try { fs.unlinkSync(dest); } catch (_2) {}
+    return false;
+  }
+}
+
+/*
+ * Scale-out (docs/scale-out.md): an import WRITES into the session's workspace. When that workspace
+ * is a copy (origin_node_id set) the whole upload is forwarded to the primary — before multer, so
+ * the multipart stream is still intact — and nothing lands here. Session errors are left to
+ * authenticateImport, which reports them exactly as the handler always has.
+ */
+function proxyImportIfCopied(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
+  let ws = null;
+  try {
+    const session = resolveSessionUser(authHeader.split(' ')[1]);
+    if (session.viaRecovery) return next();
+    const wsId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
+    ws = wsId ? db.prepare('SELECT id, origin_node_id FROM workspaces WHERE id = ?').get(wsId) : null;
+  } catch (e) { return next(); }
+  if (ws && replicaProxy.shouldIntercept(req, ws)) return replicaProxy.proxyToPrimary(req, res, config);
+  next();
+}
+
+router.post('/import', proxyImportIfCopied, authenticateImport, importUpload.single('file'), async (req, res) => {
+  // The upload and its extraction are removed however the handler ends (return, throw, or success).
+  try {
+    await handleImport(req, res);
+  } finally {
+    discardImportZip(req);
+    if (req.importExtractDir) { try { fs.rmSync(req.importExtractDir, { recursive: true, force: true }); } catch (_) {} }
+  }
+});
+
+async function handleImport(req, res) {
+  const { userId, workspaceId, sessionRole } = req.importAuth;
   const importerIsPlatformAdmin = PLATFORM_ROLES.includes(sessionRole);
 
   let data;
@@ -466,16 +612,10 @@ router.post('/import', proxyImportIfCopied, importUpload.single('file'), async (
     const zipPath = importZipPath(req);
     if (!zipPath) return res.status(400).json({ error: 'Upload not found' });
     try {
-      const unzipper = require('unzipper');
-      const extractDir = path.join(os.tmpdir(), `screentinker-import-${Date.now()}`);
-      fs.mkdirSync(extractDir, { recursive: true });
+      const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), IMPORT_EXTRACT_PREFIX));
+      req.importExtractDir = extractDir;   // removed by the route wrapper's finally
 
-      await new Promise((resolve, reject) => {
-        fs.createReadStream(zipPath)
-          .pipe(unzipper.Extract({ path: extractDir }))
-          .on('close', resolve)
-          .on('error', reject);
-      });
+      await extractImportZip(zipPath, extractDir);
 
       // Read the JSON manifest
       const jsonPath = path.join(extractDir, 'export.json');
@@ -557,6 +697,12 @@ router.post('/import', proxyImportIfCopied, importUpload.single('file'), async (
 
     // Import content metadata + files from ZIP if available
     for (const c of (data.content || [])) {
+      // Same URL / type gates as the content routes; a refused row is left out (items naming it
+      // are dropped like any other unknown content id) and counted.
+      if (importedContentRefusal(c)) {
+        stats.content_refused = (stats.content_refused || 0) + 1;
+        continue;
+      }
       const newId = uuid.v4();
       idMap.content[c.id] = newId;
 
@@ -590,10 +736,10 @@ router.post('/import', proxyImportIfCopied, importUpload.single('file'), async (
            * unlinking is refcounted now (lib/content-files.js), so neither row can take the other's
            * file with it.
            */
-          const destName = isDigestName(f.name) ? path.basename(f.name) : `${newId}${ext}`;
-          const destPath = path.join(config.contentDir, destName);
+          // ...and only once its bytes are hashed and nothing is written over: restoreImportedFile.
           try {
-            copyFileBytes(f.path, destPath);
+            const destName = restoreImportedFile(f.path, f.name, newId, ext);
+            if (!destName) throw new Error('copy failed');
             // Match original filepath vs thumbnail
             if (c.original_filepath && f.name === c.original_filepath) {
               newFilepath = destName;
@@ -955,7 +1101,7 @@ router.post('/import', proxyImportIfCopied, importUpload.single('file'), async (
     console.error('Import error:', err);
     res.status(500).json({ error: 'Import failed: ' + err.message });
   }
-});
+}
 
 module.exports = router;
 // Scale-out NOC (routes/mesh-enroll.js /noc) reads the same block rather than recomputing it.
