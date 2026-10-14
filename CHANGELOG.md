@@ -25,6 +25,14 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
 - `scripts/remotedisplay.service` is now a template filled in by `install-service.sh`.
 - `upgrade.sh` checks the Node the service actually runs.
 
+- **A new server dependency**, `@simplewebauthn/server` (pinned, for passkeys): run `npm ci` in
+  `server/` when upgrading from a checkout. Docker images and release bundles already include it.
+- **Passkeys need a stable public address**: set `APP_URL` (or list the host in `PUBLIC_HOSTS`) on
+  HTTPS. Without it passkeys stay off and Settings tells platform admins what to set.
+- **New optional environment variables:** `PEXELS_API_KEY` / `PIXABAY_API_KEY` (free stock media;
+  or paste a key in Platform → System), `SCREEN_SHARE_ENABLED` / `SCREEN_SHARE_MAX_MINUTES`,
+  `SCIM_RATE_LIMIT`, `FRESHNESS_DIGEST=off`.
+
 ### Added
 
 - **First-run guide reached by default** for new accounts. It offers an in-browser player path, a
@@ -85,6 +93,74 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
   3 days on a fresh one. "Not now" snoozes it for 30 days; "Don't ask again" ends it. A permanent
   link sits in Settings → About. `ST_HIDE_SPONSOR=true` turns it off.
 
+- **Make a sign.** New users can put a professional sign on a screen in about a minute, with no
+  photos: pick one of 14 built-in designs (today's specials, sale, opening hours, welcome, event,
+  announcement, now hiring, holiday closure, Wi-Fi with a join QR code, safety notice, celebration,
+  live countdown, room/reception, QR link), type your words with a live preview, and choose screens.
+  Designs work offline on every install, in landscape and portrait, and each sign is an ordinary
+  slide deck, editable later in Slides. A per-workspace **brand kit** (business name, logo, colours,
+  headline font) pre-fills and themes every design, with text colour chosen for contrast. From the
+  Simple home, Slides → New from template and the first-run guide. See docs/make-a-sign.md.
+- **Free stock photos and videos.** Search Pexels and Pixabay inside ScreenTinker and add what you
+  pick to your library: "Free photos" in Simple view's Change and Upload flows and the setup guide,
+  and "Free stock photos and videos" in Content → Add content. Items arrive at signage size (about
+  1920px photos, HD video), count toward storage like uploads, and keep the photographer credit and
+  licence. Keys stay on the server; searches are cached and rate limited. See docs/stock-media.md.
+- **Menus from Square and Shopify.** Menu boards and price displays take their items straight from
+  a Square item library or a Shopify store: sections, sizes, prices in the store's currency,
+  descriptions, photos and sold-out items. A price change or sold-out mark at the till reaches the
+  screens on the next sync (5 minutes by default, or Sync now). Shopify connections are read-only
+  (`read_products`); credentials are encrypted and only ever sent back to the store they were saved
+  for. Advanced → Data sources, or "Menu from Square/Shopify" in the menu board editor. See
+  docs/pos-menus.md.
+- **Share your screen to a screen.** Present a laptop on any screen running the web player, straight
+  from the browser, and the screen goes back to its content the moment you stop. Editors use **Share
+  my screen** on a screen's page or in Simple view; admins can turn on a rotating **meeting-room
+  code** per screen so guests can share at `/share` without an account. Peer-to-peer WebRTC (no
+  sidecar, nothing recorded) using the organization's STUN/TURN settings. The sharer needs HTTPS; the
+  native Android and other non-browser players do not support it yet. See docs/screen-share.md.
+- **Passkeys.** Sign in with a fingerprint, face, device PIN, phone or security key: add one in
+  Settings → Passkeys (or the Simple view account menu), then "Sign in with a passkey" or pick it
+  from the browser's autofill. Accounts with two-factor codes can use a passkey in place of the
+  code; removing a passkey signs out your other devices; SSO-only organizations refuse passkeys like
+  passwords. Not yet available inside the Manager app. See docs/passkeys.md.
+- **User provisioning (SCIM 2.0).** Connect Okta, Microsoft Entra ID or any SCIM 2.0 provider under
+  Settings → User provisioning: people are created, updated, deactivated and removed automatically,
+  and groups grant workspace roles mapped by org admins. Provisioned people sign in with the
+  organization's SSO; deactivation ends their sessions at once. Same safety rules as org SSO
+  (verified domains only, never platform accounts, org roles or the owner). See docs/scim.md.
+- **Screen verification.** ScreenTinker checks what each screen is actually showing, not just that
+  the player is online: from the screenshots players send plus an occasional verification capture
+  (every 30 minutes by default), each screen is Verified, Blank, Frozen, Unexpected content, Panel
+  off or Unknown. A problem must persist before it counts and clears itself on recovery; confirmed
+  problems go to Slack, Teams, PagerDuty, webhook or email channels ("screen problem" / "screen
+  recovered"). Badges on Screens and the screen page, plain words in Simple view ("Showing a blank
+  screen"). No extra images are stored. See docs/screen-verification.md.
+- **What will this screen show?** Pick any screen and any date and time to see exactly what it will
+  play then, and why: which schedule, group, wall or head-office rule won, and why each item does or
+  doesn't play (expired, outside its hours, condition not met, not playable on this player, screen
+  powered off). A clickable day/week timeline, a whole-group comparison, and "What's coming up" on
+  Simple view's screen cards. The forecast uses the same rules as the live screen (proven equivalent
+  by tests). Read-only API: `GET /api/devices/:id/simulate`, `/simulate/payload`, `/timeline`,
+  `GET /api/groups/:id/simulate`. See docs/preview-at-time.md.
+- **Content freshness.** A **Freshness** page (Insights) shows how old the content your screens
+  actually played is and lists what needs a look, worst first: items mentioning a date that has
+  passed ("Christmas 2025", "Sale ends Oct 3"), holiday content out of season, expired items still in
+  playlists, and things unchanged for 30 or 90 days, each with a plain reason and one-click fixes
+  (replace, take off screens, set an expiry, snooze). **Stale** chips on cards, a gentle nudge on the
+  Simple home, and an optional weekly digest email with one-click unsubscribe. See
+  docs/content-freshness.md.
+- **Content requests.** Share a request form so staff, students or departments without an account
+  can send something for the screens: each form sets where requests may go (friendly names over
+  screens, groups or playlists), file rules (type, size, resolution, shape, video length, checked on
+  the server), notice, a daily limit, and who may use it (anyone with the link, an email in your
+  domains confirmed by code, or your SSO). Requesters get a reference number and a status link;
+  requests land in Reviews and go live only after an explicit approval, for exactly the requested
+  dates. See docs/content-requests.md.
+- **Web player: `?autoplay_audio=1`** starts with sound on kiosk browsers that allow it (e.g. Fully
+  Kiosk with Autoplay Audio), skipping the tap screen; anywhere else it behaves as before (#627).
+  See docs/web-player.md.
+
 ### Changed
 
 - "Screen" is the user-facing noun (Screens, Add screen, Connect screen).
@@ -99,6 +175,16 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
 - The past-due banner disappeared after the first `/me` refresh (`subscription_status` was never
   returned).
 - Trial copy said "Free plan (1 device)" and "Pro (15 devices)" against seeded limits of 2 and 25.
+
+- **Web player: adding items to a one-item playlist now reaches the screen.** A lone video or
+  YouTube item looped forever and the new items never played until the browser restarted; the clip
+  now finishes its pass and the playlist moves on (#632).
+- **Web player: a display link (`/player?k=…`) wins over an identity left in the browser.** A casting
+  device or kiosk that had been paired before (or whose server was rebuilt) showed a pairing code as a
+  new display; it now becomes the link's display, and an unrecognised link says so on screen (#630).
+- **ScreenTinker Manager: password sign-in threw in the app** (a 3.0 pre-release regression).
+- **Simple view:** workspace switching, read-only handling for view-only members, and the
+  "No TV handy?" card on phones.
 
 ### Security
 

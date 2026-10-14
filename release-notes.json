@@ -17,11 +17,14 @@
       "version": "3.0.0",
       "date": "2026-10-14",
       "notes": [
-        "A new Simple view: one page that asks what you would like to do — add a screen, change what a screen shows, upload photos — and walks you through it step by step. Switch to Advanced at the top for everything else. Accounts that existed before 3.0 start in Advanced.",
-        "New accounts are guided from sign-up to a screen showing their content, with a sample image and an in-browser player if no TV is handy.",
-        "Adding content to a screen in the simple menu sends it to the screen straight away (unless your workspace reviews changes first).",
-        "The Screens page marks any screen that is paused by your plan, and plan limits now explain what to do instead of showing an error.",
-        "Changing your password or two-factor settings now signs you out on your other devices."
+        "A new Simple view asks what you would like to do and walks you through it step by step, and new accounts are guided from sign-up to a screen showing their content. Switch to Advanced at the top for everything else; accounts that existed before 3.0 start in Advanced.",
+        "Make a sign: pick one of 14 ready-made designs, type your words and choose screens, with your logo and colours from a brand kit. Free stock photos and videos from Pexels and Pixabay can be added right where you pick content.",
+        "Menu boards can take their items and prices straight from Square or Shopify, so a price change at the till reaches the screens by itself.",
+        "Share your laptop screen to any screen running the web player, from the browser, with an optional meeting-room code for guests.",
+        "ScreenTinker now notices when a screen is online but showing a blank or frozen picture, tells you which content has gone stale, and can show exactly what any screen will play at any date and time, and why.",
+        "People without an account can send content for the screens through a request form you share; nothing goes live until someone approves it.",
+        "Sign in with a passkey (fingerprint, face or security key), and provision users from Okta or Microsoft Entra ID. Changing your password or two-factor settings now signs you out on your other devices.",
+        "The Screens page marks any screen paused by your plan, and plan limits explain what to do instead of failing silently."
       ]
     },
     {
