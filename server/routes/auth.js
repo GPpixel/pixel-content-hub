@@ -229,12 +229,14 @@ router.post('/register', (req, res) => {
  * Any failure degrades to the 2.x shape rather than failing /me.
  */
 function accountSummary(userId) {
-  const out = { self_hosted: config.selfHosted, ui_mode: 'advanced', onboarded_at: null };
+  const out = { self_hosted: config.selfHosted, ui_mode: 'advanced', onboarded_at: null,
+    sponsor_prompt: false };
   try {
-    const row = db.prepare('SELECT ui_mode, onboarded_at, subscription_status FROM users WHERE id = ?').get(userId);
+    const row = db.prepare('SELECT ui_mode, onboarded_at, subscription_status, created_at FROM users WHERE id = ?').get(userId);
     if (!row) return out; // support / recovery identities: full menu, no guide, no billing facts
     out.ui_mode = row.ui_mode === 'simple' ? 'simple' : 'advanced';
     out.onboarded_at = row.onboarded_at || null;
+    out.sponsor_prompt = sponsorEligible(row.created_at);
     out.subscription_status = row.subscription_status || null;
     const plan = require('../middleware/subscription').getUserPlan(userId);
     if (plan) {
@@ -254,6 +256,23 @@ function accountSummary(userId) {
     console.warn('[auth/me] account summary unavailable:', e.message);
   }
   return out;
+}
+
+/*
+ * Self-hosted only: may the dashboard ask the operator to sponsor the project (frontend
+ * plan-nudges.js; it also limits the ask to platform admins who finished setup, and to the dismissals)?
+ * - Off entirely with ST_HIDE_SPONSOR=true.
+ * - An install that has been UPGRADED from an earlier version is established: yes, straight away.
+ * - A fresh install: only once the account is SPONSOR_FRESH_INSTALL_DAYS old, so nobody is asked for
+ *   money on the day they try it.
+ */
+const SPONSOR_FRESH_INSTALL_DAYS = 3;
+function sponsorEligible(createdAt) {
+  if (!config.selfHosted || config.hideSponsor) return false;
+  try {
+    if (db.prepare("SELECT 1 FROM app_settings WHERE key = 'last_upgraded_at'").get()) return true;
+  } catch { /* no app_settings: treat as a fresh install */ }
+  return !!createdAt && (Date.now() / 1000 - createdAt) >= SPONSOR_FRESH_INSTALL_DAYS * 86400;
 }
 
 /*

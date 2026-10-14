@@ -1,4 +1,5 @@
 import { api } from '../api.js';
+import { SPONSOR_URL } from '../components/plan-nudges.js';
 import { mountCanvaSettings } from '../components/canva-settings.js';
 import * as whatsNew from '../components/whats-new.js';
 import { showToast } from '../components/toast.js';
@@ -370,6 +371,7 @@ export async function render(container) {
       <div style="color:var(--text-secondary);font-size:13px">
         <p><strong>${esc(window.__ST_BRAND_NAME || 'ScreenTinker')}</strong>${appVersion ? ` v${esc(appVersion)}` : ''}</p>
         <p style="margin-top:4px">${t('settings.about_tagline')}</p>
+        ${user.self_hosted ? `<p style="margin-top:8px"><a href="${SPONSOR_URL}" target="_blank" rel="noopener" style="color:var(--accent)">&#9829; ${t('sponsor.about_link')}</a></p>` : ''}
         <!-- The permanent home for the release notes the dashboard panel links to. Populated
              after render because it is a fetch, and About must not wait on one. -->
         <div id="whatsNewHistory"></div>

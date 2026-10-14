@@ -2840,3 +2840,13 @@ html.simple-shell .trial-banner { padding-left: 16px; justify-content: center; }
 }
 .simple-backbar .simple-switch { min-width: 170px; }
 .simple-backbar .simple-switch button:not([data-simple-mode]) { cursor: default; }
+
+/* Self-hosted sponsor ask (js/components/plan-nudges.js updateSponsorBanner) */
+.trial-banner--sponsor { border-bottom-color: #db61a2; }
+.trial-banner--sponsor .trial-banner-cta { background: #db61a2; }
+.trial-banner--sponsor .trial-banner-cta:hover { background: #bf4b8a; }
+.trial-banner-link {
+  background: none; border: 0; padding: 4px 6px; font-size: 12px; font-family: inherit; cursor: pointer;
+  color: var(--text-secondary); text-decoration: underline;
+}
+.trial-banner-link:hover { color: var(--text-primary); }

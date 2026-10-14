@@ -113,3 +113,18 @@ test('self-hosted: a later signup is enterprise with no trial clock', async () =
   assert.equal(row.trial_started, null);
   assert.equal(row.ui_mode, 'simple');
 });
+
+test('self-hosted sponsor ask: fresh install waits 3 days; an upgraded install is asked at once', async () => {
+  const u = makeUser();
+  const tok = generateToken(u, null);
+  db.prepare("DELETE FROM app_settings WHERE key = 'last_upgraded_at'").run();
+  assert.equal((await call('GET', '/me', { token: tok })).body.sponsor_prompt, false, 'day one on a fresh install: no ask');
+  db.prepare("UPDATE users SET created_at = strftime('%s','now') - 3*86400 - 60 WHERE id = ?").run(u.id);
+  assert.equal((await call('GET', '/me', { token: tok })).body.sponsor_prompt, true, 'three days in: ask');
+  db.prepare("UPDATE users SET created_at = strftime('%s','now') WHERE id = ?").run(u.id);
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('last_upgraded_at', strftime('%s','now'), strftime('%s','now'))").run();
+  assert.equal((await call('GET', '/me', { token: tok })).body.sponsor_prompt, true, 'upgraded install: ask straight away');
+  config.hideSponsor = true;
+  try { assert.equal((await call('GET', '/me', { token: tok })).body.sponsor_prompt, false, 'ST_HIDE_SPONSOR wins'); }
+  finally { config.hideSponsor = false; }
+});

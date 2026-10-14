@@ -249,6 +249,9 @@ module.exports = {
   // 3.0: what LATER signups get on a self-hosted instance (the first account is always enterprise).
   // 'enterprise' (default): no trial clock, no limits - the operator owns the box. 'trial': the 2.x
   // behaviour (14-day Pro trial, then Free), for an operator who uses plans to ration accounts.
+  // 3.0: self-hosted operators see an occasional, dismissible GitHub Sponsors ask (frontend
+  // plan-nudges.js). ST_HIDE_SPONSOR=true turns it off for the whole instance.
+  hideSponsor: ['1', 'true', 'yes'].includes(String(process.env.ST_HIDE_SPONSOR || '').toLowerCase()),
   selfHostedSignupPlan: String(process.env.SELF_HOSTED_SIGNUP_PLAN || 'enterprise').toLowerCase() === 'trial' ? 'trial' : 'enterprise',
   // #116: opt-in UI gate. When true, hides the Subscription nav item + billing view
   // and bounces #/billing to the dashboard. Default off, so existing deployments are

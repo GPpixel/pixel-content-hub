@@ -25,6 +25,14 @@ db.pragma('foreign_keys = ON');
 
 // 3.0: a restore point on the first boot of every new version, BEFORE schema.sql and the migrations
 // touch anything (lib/upgrade-snapshot.js). Covers a 2.6 -> 3.0 upgrade however the code arrived.
+// Whether THIS boot is an upgrade of an existing install (read before the snapshot records the new
+// version). Remembered below as app_settings.last_upgraded_at, once the table exists.
+const _bootUpgraded = (() => {
+  try {
+    const last = require('../lib/upgrade-snapshot').readLastVersion(dbDir);
+    return dbExistedBefore && last !== require('../version');
+  } catch { return false; }
+})();
 require('../lib/upgrade-snapshot').snapshotOnVersionChange({
   db, dbPath: config.dbPath, existedBefore: dbExistedBefore, version: require('../version'), copy: copyFileBytes,
 });
@@ -4314,6 +4322,14 @@ const V3_EXISTING_USERS_ID = 'v3_0_existing_users';
     console.error(`[migrate] 3.0 existing-users step failed (will retry next boot): ${e.message}`);
   }
 })();
+
+// 3.0: remember that this install has been upgraded (the self-hosted sponsor ask treats an upgraded
+// install as an established one; routes/auth.js accountSummary).
+if (_bootUpgraded) {
+  try {
+    db.prepare("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('last_upgraded_at', strftime('%s','now'), strftime('%s','now'))").run();
+  } catch (e) { console.warn(`[boot] could not record the upgrade time: ${e.message}`); }
+}
 
 // `playsMigrationTouched`: did THIS boot build a play_logs index or add a play_logs column?
 // Read once by services/heartbeat to arm the 2.0.1 player defer (lib/boot-defer.js). The loop

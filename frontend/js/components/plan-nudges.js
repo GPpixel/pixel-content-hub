@@ -18,6 +18,7 @@
  */
 import { api } from '../api.js';
 import { t, tn } from '../i18n.js';
+import { isPlatformAdmin } from '../utils.js';
 
 const BANNER_ID = 'trialBanner';
 const DISMISS_KEY = 'st.trialBanner.dismissed';
@@ -73,6 +74,7 @@ export function trialBannerState(user) {
 }
 
 export function updateTrialBanner(user = cachedUser()) {
+  updateSponsorBanner(user);
   const existing = document.getElementById(BANNER_ID);
   // The first-run guide is the one place the trial is already explained in context.
   const onGuide = /^#\/(onboarding|add-screen)/.test(window.location.hash || '');
@@ -98,6 +100,62 @@ export function updateTrialBanner(user = cachedUser()) {
   b.appendChild(cta);
   const close = el('button', { type: 'button', class: 'trial-banner-close', 'aria-label': t('trial.banner.dismiss'), title: t('trial.banner.dismiss') }, '×');
   close.addEventListener('click', () => { dismiss(state); b.remove(); });
+  b.appendChild(close);
+  host.appendChild(b);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 1b. Self-hosted: the same banner, asking the OPERATOR to sponsor the project instead.
+//
+// Respectful by construction: platform admins only (the person who installed it, never their
+// team); only once the server says so — at once on an install upgraded from an earlier version, after
+// 3 days on a fresh one (routes/auth.js sponsorEligible); only after setup; never on the guides; "Not now" hides it for SPONSOR_SNOOZE_DAYS, "Don't ask again" for good;
+// ST_HIDE_SPONSOR=true on the server turns it off for the instance (sponsor_prompt in /me).
+// ---------------------------------------------------------------------------------------------
+
+export const SPONSOR_URL = 'https://github.com/sponsors/screentinker?o=esb';
+const SPONSOR_ID = 'sponsorBanner';
+const SPONSOR_KEY = 'st.sponsorBanner';      // 'never' | snooze-until epoch ms
+const SPONSOR_SNOOZE_DAYS = 30;
+
+function sponsorSnoozed() {
+  try {
+    const v = localStorage.getItem(SPONSOR_KEY);
+    return v === 'never' || (v && Number(v) > Date.now());
+  } catch { return false; }
+}
+
+export function sponsorBannerVisible(user) {
+  if (!user || !user.self_hosted || !user.sponsor_prompt) return false;
+  if (!isPlatformAdmin(user) || String(user.id || '').includes(':')) return false;
+  if (!user.onboarded_at) return false;
+  if (/^#\/(onboarding|add-screen)/.test(window.location.hash || '')) return false;
+  return !sponsorSnoozed();
+}
+
+export function updateSponsorBanner(user = cachedUser()) {
+  const existing = document.getElementById(SPONSOR_ID);
+  if (!sponsorBannerVisible(user)) { if (existing) existing.remove(); return; }
+  if (existing) return;
+  const host = document.getElementById('banners');
+  if (!host) return;
+  const b = el('div', { id: SPONSOR_ID, class: 'trial-banner trial-banner--sponsor', role: 'status' });
+  b.appendChild(el('span', { class: 'trial-banner-text' }, t('sponsor.banner.text')));
+  b.appendChild(el('a', { class: 'btn btn-sm trial-banner-cta', href: SPONSOR_URL, target: '_blank', rel: 'noopener' }, t('sponsor.banner.cta')));
+  const snooze = (value) => () => {
+    try { localStorage.setItem(SPONSOR_KEY, value); } catch { /* shows again next load */ }
+    b.remove();
+  };
+  const later = el('button', { type: 'button', class: 'trial-banner-link' }, t('sponsor.banner.later'));
+  later.addEventListener('click', snooze(String(Date.now() + SPONSOR_SNOOZE_DAYS * 86400000)));
+  b.appendChild(later);
+  const never = el('button', { type: 'button', class: 'trial-banner-link' }, t('sponsor.banner.never'));
+  never.addEventListener('click', snooze('never'));
+  b.appendChild(never);
+  // Opening the sponsors page counts as an answer: no point asking again next week.
+  b.querySelector('.trial-banner-cta').addEventListener('click', snooze(String(Date.now() + 180 * 86400000)));
+  const close = el('button', { type: 'button', class: 'trial-banner-close', 'aria-label': t('sponsor.banner.later'), title: t('sponsor.banner.later') }, '×');
+  close.addEventListener('click', snooze(String(Date.now() + SPONSOR_SNOOZE_DAYS * 86400000)));
   b.appendChild(close);
   host.appendChild(b);
 }

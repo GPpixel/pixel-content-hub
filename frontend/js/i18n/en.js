@@ -909,6 +909,12 @@ export default {
   'trial.banner.cta_ending': 'Choose a plan',
   'trial.banner.cta_ended': 'Bring my screens back',
   'trial.banner.dismiss': 'Hide for today',
+  // 3.0 self-hosted: the operator is asked, occasionally, to sponsor the project.
+  'sponsor.banner.text': 'Enjoying ScreenTinker? It is free and open source. If it is useful to you, please consider sponsoring its development.',
+  'sponsor.banner.cta': 'Sponsor on GitHub',
+  'sponsor.about_link': 'Sponsor ScreenTinker on GitHub',
+  'sponsor.banner.later': 'Not now',
+  'sponsor.banner.never': "Don't ask again",
   'trial.first_screen_one': 'Your first screen is live! Add more screens, schedules and locations while your trial runs (1 day left).',
   'trial.first_screen_other': 'Your first screen is live! Add more screens, schedules and locations while your trial runs ({n} days left).',
   'trial.first_screen_cta': 'What the plans include',
