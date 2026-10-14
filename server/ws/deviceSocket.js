@@ -11,6 +11,8 @@ const enrolKey = require('../lib/enrol-key');     // #313 URL-carried display id
 const liveness = require('../lib/liveness'); // v4 core pass: pure ack/liveness/identity helpers
 const commandQueue = require('../lib/command-queue');
 const nowPlaying = require('../lib/now-playing');
+// 3.0 screen verification: judges the screenshots that pass through ingestScreenshot below.
+const screenVerify = require('../lib/screen-verify');
 const reconnectThrottle = require('../lib/reconnect-throttle');
 const contentAckLimiter = require('../lib/content-ack-limiter');
 const statusLogWriter = require('../lib/status-log-writer');
@@ -1407,6 +1409,8 @@ function ingestScreenshot(deviceId, imageB64) {
   } catch (err) {
     console.error('Screenshot relay error:', err);
   }
+  // Screen verification looks at the same frame. Throttled and off-thread inside; never throws.
+  try { screenVerify.noteFrame(deviceId, imageB64); } catch (_) { /* verification is best-effort */ }
   return true;
 }
 
@@ -1436,6 +1440,8 @@ const EVENT_APPLIERS = Object.freeze({
   'info'(deviceId, data, ctx) {
     const di = data && data.device_info;
     if (di) { try { applyDeviceInfo(deviceId, di); } catch (e) { /* never crash the socket on a bad info blob */ } }
+    // Optional panel state (power / input), for a player that can ask its panel. See lib/screen-verify.
+    if (di && di.panel) { try { screenVerify.notePanelReport(deviceId, di.panel); } catch (_) { /* best effort */ } }
   },
 
   'trigger-status'(deviceId, data, ctx) {
@@ -1479,6 +1485,8 @@ const EVENT_APPLIERS = Object.freeze({
     // goes dark until a human reloads it; that happened to a live screen. A heartbeat for a
     // device that no longer exists is not worth killing a connection over — skip the write and
     // let the register path answer with unpaired, which is what actually helps it recover.
+    // Optional panel state (power / input) for screen verification; no column of its own here.
+    if (telemetry && telemetry.panel) { try { screenVerify.notePanelReport(device_id, telemetry.panel); } catch (_) { /* best effort */ } }
     if (telemetry && deviceExists(device_id)) {
       db.prepare(`
         INSERT INTO device_telemetry (device_id, battery_level, battery_charging, storage_free_mb, storage_total_mb,
@@ -1713,6 +1721,8 @@ const EVENT_APPLIERS = Object.freeze({
       db.prepare("INSERT INTO device_events (device_id, type, reason, detail) VALUES (?, ?, ?, ?)")
         .run(deviceId, type, reason ? String(reason).slice(0, 64) : null, detail ? String(detail).slice(0, 500) : null);
     } catch (_) { /* incident feed is best-effort; never crash the socket */ }
+    // display_on / display_off is the panel power signal screen verification uses where nothing better is reported.
+    try { screenVerify.noteDisplayEvent(deviceId, type, reason ? String(reason).slice(0, 64) : null); } catch (_) { /* best effort */ }
   },
 
   /*
@@ -1791,6 +1801,7 @@ const EVENT_APPLIERS = Object.freeze({
         // View-only viewers join the screen where it is (lib/now-playing.js). Before the throttle:
         // a viewer needs every start, proof-of-play does not.
         nowPlaying.noteStart(device_id, { content_id, widget_id, zone_id }, eventTimeMs(data, ctx));
+        try { screenVerify.notePlayStart(device_id, { content_id, widget_id, zone_id }, eventTimeMs(data, ctx)); } catch (_) { /* best effort */ }
         // Throttle proof-of-play inserts per device so a runaway player
         // (0-second items) can't flood play_logs. Skipped cycles simply
         // don't create a row; the dashboard progress event below still fires.
@@ -2004,6 +2015,8 @@ const EVENT_APPLIERS = Object.freeze({
     logDeviceStatus(deviceId, 'offline', finalReason, null);
     // Offline-cause log: also record the transition in the unified incident feed.
     try { db.prepare("INSERT INTO device_events (device_id, type, reason, detail) VALUES (?, 'offline', ?, NULL)").run(deviceId, finalReason); } catch (_) { /* incident feed is best-effort */ }
+    // Offline alerts take over; an open screen-verification incident closes rather than double-paging.
+    try { screenVerify.noteOffline(deviceId); } catch (_) { /* best effort */ }
     emitToDeviceWorkspace(_dashboardNsRef, deviceId, 'dashboard:device-status', { device_id: deviceId, status: 'offline', liveness: 'offline', offline_reason: _off.offline_reason || 'silent', offline_detail: _off.offline_detail || null, client_type: _off.client_type || null });
 
     // If this device was leading a wall, reassign leadership to the next
@@ -2065,7 +2078,7 @@ const EVENT_APPLIERS = Object.freeze({
     applyHardwareIdentity(deviceId, d);
     applyCapabilities(deviceId, d);
     heartbeat.registerConnection(deviceId, ctx.closingSocketId || `mesh:${ctx.nodeId}`);
-    if (!d.refresh) { heartbeat.recordReconnect(deviceId); persistIdentity(deviceId, d); }
+    if (!d.refresh) { heartbeat.recordReconnect(deviceId); screenVerify.noteReconnect(deviceId); persistIdentity(deviceId, d); }
     logDeviceStatus(deviceId, 'online');
     emitToDeviceWorkspace(_dashboardNsRef, deviceId, 'dashboard:device-status', { device_id: deviceId, status: 'online', liveness: heartbeat.livenessFor(deviceId), attached_node_id: ctx.nodeId || null });
     // Commands queued while the screen was away go through the relay; the playlist does not.
@@ -2087,6 +2100,18 @@ module.exports = function setupDeviceSocket(io) {
   const deviceNs = io.of('/device');
   _dashboardNsRef = io.of('/dashboard');   // so ingestScreenshot() can relay from an HTTP route too
   _deviceNsRef = deviceNs;
+  /*
+   * Screen verification asks for its own occasional screenshot, through exactly the path the
+   * dashboard's button uses (dashboardSocket 'dashboard:request-screenshot'): only to a screen
+   * connected to THIS node, and only one that declares remote.screenshot (the caller checks).
+   * Its state changes go to the device's own workspace room, like every other device event.
+   */
+  screenVerify.setRequester((deviceId) => {
+    if (!heartbeat.getConnection(deviceId)) return false;
+    deviceNs.to(deviceId).emit('device:screenshot-request', {});
+    return true;
+  });
+  screenVerify.setEmitter((deviceId, payload) => emitToDeviceWorkspace(_dashboardNsRef, deviceId, 'dashboard:verification-state', payload));
   const dashboardNs = io.of('/dashboard');
 
 
@@ -2628,7 +2653,7 @@ module.exports = function setupDeviceSocket(io) {
                 }
                 currentDeviceId = existing.device_id;
                 heartbeat.registerConnection(existing.device_id, socket.id);
-                heartbeat.recordReconnect(existing.device_id);   // FIX 2: churn signal
+                heartbeat.recordReconnect(existing.device_id); screenVerify.noteReconnect(existing.device_id);   // FIX 2: churn signal
                 persistIdentity(existing.device_id, data);       // FIX 3: identity capture
                 socket.join(existing.device_id);
                 logDeviceStatus(existing.device_id, 'online');
@@ -2672,7 +2697,7 @@ module.exports = function setupDeviceSocket(io) {
                   // showing its (still-valid) code for the operator to claim.
                   currentDeviceId = existing.device_id;
                   heartbeat.registerConnection(existing.device_id, socket.id);
-                  heartbeat.recordReconnect(existing.device_id);
+                  heartbeat.recordReconnect(existing.device_id); screenVerify.noteReconnect(existing.device_id);
                   persistIdentity(existing.device_id, data);
                   socket.join(existing.device_id);
                   logDeviceStatus(existing.device_id, 'online');
@@ -2807,7 +2832,7 @@ module.exports = function setupDeviceSocket(io) {
           // churn (A2 — else healthy refreshers cross DEGRADED_RECONNECTS and show Degraded) and don't
           // re-write identity (A1 — else a sync UPDATE + WAL churn every ~45-60s per device).
           if (!isPlaylistRefresh) {
-            heartbeat.recordReconnect(device_id);     // genuine reconnect only
+            heartbeat.recordReconnect(device_id); screenVerify.noteReconnect(device_id);     // genuine reconnect only
             persistIdentity(device_id, data);         // change-detected write (see persistIdentity)
           }
           socket.join(device_id);

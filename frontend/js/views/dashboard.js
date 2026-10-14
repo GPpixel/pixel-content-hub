@@ -17,6 +17,7 @@ import { frameDeviceOutput } from '../lib/device-frame.js';
 import { selectedRemoteOrg } from '../components/workspace-switcher.js';
 import * as cui from '../components/corporate-ui.js';
 import { openDeviceMoveDialog } from '../components/device-move-dialog.js';
+import * as screenVerify from '../components/screen-verify.js';
 
 const DESTRUCTIVE_COMMANDS = ['reboot', 'shutdown'];
 // Command types only — labels resolved through t('dashboard.cmd.<type>')
@@ -266,7 +267,8 @@ function renderDeviceCard(device) {
           </span>` : ''}${device.ota_status === 'manual_update_required' ? `
           <span class="device-ota-badge" title="${esc(t('dashboard.device_ota_stuck', { version: device.ota_target_version || '?', n: device.ota_attempts || 0 }))}" style="margin-left:6px;display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--warning);vertical-align:middle">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>update
-          </span>` : ''}</div>${Array.isArray(device.tags) && device.tags.length ? `
+          </span>` : ''}</div>
+        <div class="device-card-verify" data-sv-device="${esc(device.id)}"></div>${Array.isArray(device.tags) && device.tags.length ? `
         <div class="device-card-tags" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px">${device.tags.slice(0, 4).map((tg) => `<span style="font-size:10px;color:var(--text-secondary);background:var(--bg-primary);padding:1px 6px;border-radius:8px">#${esc(tg)}</span>`).join('')}${device.tags.length > 4 ? `<span style="font-size:10px;color:var(--text-muted)">+${device.tags.length - 4}</span>` : ''}</div>` : ''}
         ${device.plan_paused ? (plansVisible()
           ? `<a class="device-plan-paused" href="#/billing?from=paused_screen" onclick="event.stopPropagation()">⏸ ${esc(t(device.plan_paused.reason === 'trial_expired' ? 'dashboard.plan_paused.trial_expired' : 'dashboard.plan_paused.device_limit'))}</a>`
@@ -978,6 +980,7 @@ export function render(container) {
 
   on('device-status', statusHandler);
   on('screenshot-ready', screenshotHandler);
+  on('verification-state', screenVerify.applyLiveState);
   on('device-added', deviceAddedHandler);
   on('device-removed', deviceRemovedHandler);
   on('playback-progress', playbackHandler);
@@ -1344,6 +1347,8 @@ async function loadDashboard() {
 
     main.innerHTML = html;
     frameCardScreenshots();
+    // Screen verification badges fill in after the cards; a failure there leaves the cards as they are.
+    screenVerify.decorateCards(main);
     mountWallCards(walls || [], devices);
     attachGroupHandlers(groupsWithDevices);
 
@@ -1837,6 +1842,7 @@ export function cleanup() {
 
   if (statusHandler) off('device-status', statusHandler);
   if (screenshotHandler) off('screenshot-ready', screenshotHandler);
+  off('verification-state', screenVerify.applyLiveState);
   if (playbackHandler) off('playback-progress', playbackHandler);
   if (wallChangedHandler) off('wall-changed', wallChangedHandler);
   if (connectedHandler) off('connected', connectedHandler);

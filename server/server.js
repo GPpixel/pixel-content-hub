@@ -2605,6 +2605,9 @@ require('./lib/rooms/service').start();   // meeting rooms: release meetings nob
 // Start alert service
 const { startAlertService } = require('./services/alerts');
 startAlertService(io);
+// Screen verification (lib/screen-verify): panel checks, occasional verification screenshots and
+// its incident alerts, on its own minute tick. Frames are judged as they arrive via deviceSocket.
+require('./lib/screen-verify').start();
 
 // Start universal data sources background poller
 const { startDataSourcesPoller } = require('./lib/data-sources/service');

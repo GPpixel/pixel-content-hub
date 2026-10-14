@@ -2750,6 +2750,9 @@ html.nav-pending .main-wrapper { margin-left: 0 !important; }
 .simple-screen-status::before { content: '\25CF'; margin-right: 6px; }
 .simple-screen-status.on::before { color: var(--success); }
 .simple-screen-status.off::before { color: var(--text-muted); }
+/* Screen verification: online, but not showing what it should (components/screen-verify.js). */
+.simple-screen-status.warn { color: var(--warning); font-weight: 600; }
+.simple-screen-status.warn::before { color: var(--warning); }
 .simple-empty { text-align: center; padding: 28px; background: var(--bg-card); border: 1px dashed var(--border); border-radius: var(--radius-lg); }
 .simple-empty p { color: var(--text-secondary); margin-bottom: 14px; }
 .simple-muted { color: var(--text-muted); font-size: 13px; }

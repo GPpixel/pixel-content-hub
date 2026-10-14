@@ -33,6 +33,8 @@ export function connectSocket() {
   });
 
   // Screenshot ready
+  // Screen verification: a screen's verified/blank/frozen/... state changed (lib/screen-verify).
+  dashboardSocket.on('dashboard:verification-state', (data) => emit('verification-state', data));
   dashboardSocket.on('dashboard:screenshot-ready', (data) => {
     emit('screenshot-ready', data);
   });

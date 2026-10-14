@@ -24,6 +24,7 @@ import { isPlatformAdmin, inManagerApp, openOutsideApp, isTouchFirst } from '../
 import { renderStatsPrompt } from './dashboard.js';
 import { publishOrSubmit } from '../components/release.js';
 import { switchWorkspaceTo } from '../components/corporate-ui.js';
+import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -162,8 +163,17 @@ async function renderHome(container) {
     <${tag} class="simple-screen" ${canChange ? `href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}"` : ''}>
       <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
       <span class="simple-screen-name">${esc(d.name)}</span>
-      <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
+      <span class="simple-screen-status ${online(d) ? 'on' : 'off'}" data-sv-plain="${esc(d.id)}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
     </${tag}>`).join('');
+  // Screen verification, in plain words: a screen that is online but showing a blank or frozen
+  // picture says so here instead of "Playing". Silent when there is nothing to say.
+  const states = await loadVerification();
+  if (!document.contains(host)) return;
+  for (const d of devices) {
+    const words = online(d) && !d.plan_paused ? plainStatus(states.get(d.id)) : null;
+    const el = host.querySelector(`[data-sv-plain="${CSS.escape(d.id)}"]`);
+    if (el && words) { el.textContent = words; el.classList.remove('on'); el.classList.add('warn'); }
+  }
 }
 
 /*
