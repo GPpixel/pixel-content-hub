@@ -2453,5 +2453,6 @@ export default {
   'simple.menu.more_workspaces': '{n} de plus dans la vue avancée',
   'simple.home.in_workspace': 'Dans {name}',
   'simple.home.title_viewer': 'Vos écrans en un coup d’œil',
+  'simple.home.no_screens_viewer': 'Aucun écran disponible.',
   'simple.home.viewer_note': 'Vous pouvez consulter cet espace de travail. Pour changer ce qu’affichent les écrans, demandez un accès en modification à un administrateur de l’espace.',
 };

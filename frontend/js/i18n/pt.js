@@ -1737,5 +1737,6 @@ export default {
   'simple.menu.more_workspaces': 'Mais {n} na visão avançada',
   'simple.home.in_workspace': 'Em {name}',
   'simple.home.title_viewer': 'Suas telas num relance',
+  'simple.home.no_screens_viewer': 'Nenhuma tela disponível.',
   'simple.home.viewer_note': 'Você pode ver este espaço de trabalho. Para mudar o que as telas mostram, peça acesso de edição a um administrador do espaço.',
 };

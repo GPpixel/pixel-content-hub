@@ -2453,5 +2453,6 @@ export default {
   'simple.menu.more_workspaces': 'ほか {n} 件は詳細表示で',
   'simple.home.in_workspace': '{name}',
   'simple.home.title_viewer': '画面の一覧',
+  'simple.home.no_screens_viewer': '利用できる画面はありません。',
   'simple.home.viewer_note': 'このワークスペースは閲覧のみ可能です。画面の表示内容を変更するには、ワークスペースの管理者に編集権限を依頼してください。',
 };

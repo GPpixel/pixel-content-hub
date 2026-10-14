@@ -5679,5 +5679,6 @@ export default {
   'simple.menu.more_workspaces': '{n} more in Advanced view',
   'simple.home.in_workspace': 'In {name}',
   'simple.home.title_viewer': 'Your screens at a glance',
+  'simple.home.no_screens_viewer': 'No screens available.',
   'simple.home.viewer_note': 'You can view this workspace. To change what screens show, ask a workspace admin for edit access.',
 };

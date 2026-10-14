@@ -152,7 +152,7 @@ async function renderHome(container) {
   try { devices = await api.getDevices(); } catch { devices = []; }
   if (!document.contains(host)) return;
   if (!devices.length) {
-    host.innerHTML = `<div class="simple-empty"><p>${esc(t('simple.home.no_screens'))}</p>
+    host.innerHTML = `<div class="simple-empty"><p>${esc(t(canChange ? 'simple.home.no_screens' : 'simple.home.no_screens_viewer'))}</p>
       ${canChange ? `<a class="btn btn-primary" href="#/add-screen">${esc(t('simple.task.add'))}</a>` : ''}</div>`;
     return;
   }

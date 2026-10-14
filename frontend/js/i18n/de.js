@@ -1820,5 +1820,6 @@ export default {
   'simple.menu.more_workspaces': '{n} weitere in der erweiterten Ansicht',
   'simple.home.in_workspace': 'In {name}',
   'simple.home.title_viewer': 'Ihre Bildschirme im Überblick',
+  'simple.home.no_screens_viewer': 'Keine Bildschirme verfügbar.',
   'simple.home.viewer_note': 'Sie können diesen Arbeitsbereich ansehen. Um zu ändern, was Bildschirme zeigen, bitten Sie einen Admin des Arbeitsbereichs um Bearbeitungsrechte.',
 };

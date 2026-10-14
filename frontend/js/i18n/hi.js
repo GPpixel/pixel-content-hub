@@ -549,5 +549,6 @@ export default {
   'simple.menu.more_workspaces': '{n} और, उन्नत व्यू में',
   'simple.home.in_workspace': '{name} में',
   'simple.home.title_viewer': 'आपकी स्क्रीन एक नज़र में',
+  'simple.home.no_screens_viewer': 'कोई स्क्रीन उपलब्ध नहीं है।',
   'simple.home.viewer_note': 'आप यह वर्कस्पेस देख सकते हैं। स्क्रीन पर दिखने वाली चीज़ें बदलने के लिए, वर्कस्पेस के एडमिन से संपादन की अनुमति माँगें।',
 };

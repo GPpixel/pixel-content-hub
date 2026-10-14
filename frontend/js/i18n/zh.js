@@ -1364,5 +1364,6 @@ export default {
   'simple.menu.more_workspaces': '另有 {n} 个，请在高级视图中查看',
   'simple.home.in_workspace': '当前：{name}',
   'simple.home.title_viewer': '屏幕一览',
+  'simple.home.no_screens_viewer': '没有可用的屏幕。',
   'simple.home.viewer_note': '您可以查看此工作区。如需更改屏幕显示的内容，请向工作区管理员申请编辑权限。',
 };

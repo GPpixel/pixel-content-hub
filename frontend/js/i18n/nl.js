@@ -3418,5 +3418,6 @@ export default {
   'simple.menu.more_workspaces': 'Nog {n} in de geavanceerde weergave',
   'simple.home.in_workspace': 'In {name}',
   'simple.home.title_viewer': 'Je schermen in één oogopslag',
+  'simple.home.no_screens_viewer': 'Geen schermen beschikbaar.',
   'simple.home.viewer_note': 'Je kunt deze werkruimte bekijken. Vraag een beheerder van de werkruimte om bewerkrechten om te wijzigen wat schermen tonen.',
 };

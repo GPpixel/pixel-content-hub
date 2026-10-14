@@ -1771,5 +1771,6 @@ export default {
   'simple.menu.more_workspaces': '{n} más en la vista avanzada',
   'simple.home.in_workspace': 'En {name}',
   'simple.home.title_viewer': 'Sus pantallas de un vistazo',
+  'simple.home.no_screens_viewer': 'No hay pantallas disponibles.',
   'simple.home.viewer_note': 'Puede ver este espacio de trabajo. Para cambiar lo que muestran las pantallas, pida acceso de edición a un administrador del espacio.',
 };
