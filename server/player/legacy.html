@@ -4624,7 +4624,9 @@ function handlePlaylistUpdate(data) {
       if (newItem && newItem.widget_id && oldItem && (oldItem.widget_rev || 0) !== (newItem.widget_rev || 0)) {
         console.log("Widget edited - re-rendering in place");
         renderContent(newItem);
+        return;
       }
+      if (oldPlaylist.length <= 1 && playlist.length > 1) releaseSingleItemHold(newItem);
       return;
     }
   }
@@ -5203,6 +5205,33 @@ function reevaluateHeldWidget() {
     return;
   }
   nextItem();
+}
+function releaseSingleItemHold(item) {
+  try {
+    if (!item || isWallFollower() || groupSync) return;
+    if (typeof kioskHeld !== "undefined" && kioskHeld) return;
+    if (layout && layout.zones && layout.zones.length > 1 && !wallConfig) return;
+    const v = currentVideoEl;
+    if (v && v.loop && document.contains(v)) {
+      v.loop = false;
+      console.log("[playlist] items added to a one-item playlist \u2014 the looping clip ends this pass, then rotates");
+      return;
+    }
+    if (item.mime_type === "video/youtube" && activeYtPlayer) {
+      let remaining = 0;
+      try {
+        remaining = activeYtPlayer.getDuration() - activeYtPlayer.getCurrentTime();
+      } catch (e) {
+        remaining = 0;
+      }
+      const ms = remaining > 0 ? (remaining + 0.5) * 1e3 : Math.max(1, Number(item.duration_sec) || 10) * 1e3;
+      scheduleAdvance(nextItem, ms);
+      console.log("[playlist] items added to a one-item playlist \u2014 the looping YouTube item rotates in " + Math.round(ms / 1e3) + "s");
+      return;
+    }
+    if (item.widget_id) scheduleAdvance(nextItem, Math.max(1, Number(item.duration_sec) || 30) * 1e3);
+  } catch (e) {
+  }
 }
 function imgSrcFor(it) {
   return mediaUrl(it);

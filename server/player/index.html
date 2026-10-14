@@ -5768,7 +5768,12 @@
           if (newItem && newItem.widget_id && oldItem && (oldItem.widget_rev || 0) !== (newItem.widget_rev || 0)) {
             console.log('Widget edited - re-rendering in place');
             renderContent(newItem);
+            return;
           }
+          // #632: a one-item playlist that just gained items. The item on screen was rendered to
+          // HOLD (a video loops, a YouTube embed loops), so "advance naturally" never comes — the
+          // added item never played, for an hour in the report, until the browser was restarted.
+          if (oldPlaylist.length <= 1 && playlist.length > 1) releaseSingleItemHold(newItem);
           return;
         }
       }
@@ -6486,6 +6491,51 @@
         return;
       }
       nextItem();
+    }
+
+    /*
+     * #632 — A ONE-ITEM PLAYLIST HOLDS ITS ITEM, AND NOTHING USED TO LET GO WHEN ITEMS WERE ADDED.
+     *
+     * Single-item rendering never advances, deliberately: a video gets `loop = (playlist.length ===
+     * 1)` and so never fires `ended`, and a YouTube embed loops inside the IFrame player with its
+     * ENDED handler disabled. That decision is made ONCE, at render time. When the playlist then
+     * grows, the continuity branch of handlePlaylistUpdate keeps the surviving item playing and
+     * waits for its natural advance — which, for a held item, never comes. The report: an item
+     * added to the playlist, an hour later still not shown, a browser restart fixed it (because
+     * the restart rendered the clip with the NEW length and so without loop).
+     *
+     * Let go in place rather than restarting: the clip finishes its current pass and the playlist
+     * rotates on, exactly as if it had been rendered into a multi-item playlist. Same "never yank
+     * a live item mid-play" rule as #157.
+     *   - <video> (solo, or a wall leader): drop `loop`. Its onended was wired with the right
+     *     mayAdvance for its role, so it calls nextItem() at the end of this pass.
+     *   - YouTube: its loop is baked into the embed, so arm the advance for the end of this pass.
+     *   - A held widget re-checks every WIDGET_SOLO_REFRESH_MS and hands off on its own; arming its
+     *     ordinary dwell instead makes the new item show after the usual duration, not up to 60s.
+     *   - Images arm their dwell on every render already, and schedule-driven members (a wall
+     *     follower, a synced group) and zone layouts advance through their own clocks.
+     */
+    function releaseSingleItemHold(item) {
+      try {
+        if (!item || isWallFollower() || groupSync) return;
+        if (typeof kioskHeld !== 'undefined' && kioskHeld) return;   // kioskRelease() advances
+        if (layout && layout.zones && layout.zones.length > 1 && !wallConfig) return;
+        const v = currentVideoEl;
+        if (v && v.loop && document.contains(v)) {
+          v.loop = false;
+          console.log('[playlist] items added to a one-item playlist — the looping clip ends this pass, then rotates');
+          return;
+        }
+        if (item.mime_type === 'video/youtube' && activeYtPlayer) {
+          let remaining = 0;
+          try { remaining = activeYtPlayer.getDuration() - activeYtPlayer.getCurrentTime(); } catch (e) { remaining = 0; }
+          const ms = remaining > 0 ? (remaining + 0.5) * 1000 : Math.max(1, Number(item.duration_sec) || 10) * 1000;
+          scheduleAdvance(nextItem, ms);
+          console.log('[playlist] items added to a one-item playlist — the looping YouTube item rotates in ' + Math.round(ms / 1000) + 's');
+          return;
+        }
+        if (item.widget_id) scheduleAdvance(nextItem, Math.max(1, Number(item.duration_sec) || 30) * 1000);
+      } catch (e) { /* never let this break a playlist update; the held widget's own re-check still runs */ }
     }
 
     // feat/player-image-preload: warm the NEXT scheduled image (decoded) during the current dwell,
