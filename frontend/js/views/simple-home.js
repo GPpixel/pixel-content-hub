@@ -53,7 +53,7 @@ function shell(container, inner) {
           <div class="simple-account-menu">
             ${showPlan ? `<a href="#/billing">${esc(t('simple.menu.plan'))}</a>` : ''}
             <a href="#/settings">${esc(t('simple.menu.settings'))}</a>
-            <a href="#/help">${esc(t('simple.menu.help'))}</a>
+            <a href="#/simple/help">${esc(t('simple.menu.help'))}</a>
             <button type="button" data-simple-signout>${esc(t('auth.sign_out'))}</button>
           </div>
         </details>
@@ -97,7 +97,7 @@ async function renderHome(container) {
       <a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>
-      <a class="simple-task" href="#/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
+      <a class="simple-task" href="#/simple/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
     </div>
     <h2 class="simple-h2">${esc(t('simple.home.your_screens'))}</h2>
     <div id="simpleScreens" class="simple-screens"><p class="simple-muted">${esc(t('common.loading'))}</p></div>`);
@@ -124,19 +124,52 @@ async function renderHome(container) {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Show `contentIds` on `device`. 'replace': the screen stops following whatever list it had and gets
- * a fresh one of its own with only these items (the old list is left untouched for any other screen
- * using it). 'add': appended to the list the screen plays now. Published either way, through the
- * normal endpoint, so a workspace that reviews changes keeps them as a draft for review.
+ * Show `contentIds` on `device`, published through the normal endpoint (so a workspace that reviews
+ * changes keeps them as a draft for review).
+ *
+ * 'add': appended to the list the screen plays now.
+ * 'replace': the screen ends up playing exactly these items, WITHOUT minting a new playlist each
+ * time (Replace used to detach the screen and let the server create "<Screen> playlist" afresh on
+ * every use, so the Playlists page filled up with copies):
+ *   1. the screen's own auto-generated list, used by no other screen → emptied and refilled in place;
+ *   2. otherwise (it follows a shared or hand-made list) → its earlier own list is re-attached if one
+ *      exists that no screen uses ("<Screen> playlist", auto-generated), then refilled — so a screen
+ *      that went "same as" and back reuses its list;
+ *   3. only when neither exists is a list created, once per screen.
+ * A shared or hand-made list is never edited by Replace: another screen or a schedule may use it.
  */
-async function showOnScreen(device, contentIds, how) {
-  if (how === 'replace' && device.playlist_id) await api.clearDevicePlaylist(device.id);
-  let playlistId = null;
+async function showOnScreen(device, contentIds, how, ctx = {}) {
+  const devices = ctx.devices || [];
+  const playlists = ctx.playlists || [];
+  const usedByOthers = (pid) => devices.some((d) => d.id !== device.id && d.playlist_id === pid);
+  const current = playlists.find((p) => p.id === device.playlist_id);
+
+  if (how === 'replace') {
+    const ownAuto = current && current.is_auto_generated && !usedByOthers(current.id);
+    if (!ownAuto) {
+      const spare = playlists.find((p) => p.is_auto_generated && p.name === `${device.name} playlist`
+        && p.id !== device.playlist_id && !devices.some((d) => d.playlist_id === p.id));
+      if (spare) {
+        await api.assignPlaylistToDevice(spare.id, device.id);
+        device.playlist_id = spare.id;
+      } else if (device.playlist_id) {
+        await api.clearDevicePlaylist(device.id); // the next add creates this screen's own list, once
+        device.playlist_id = null;
+      }
+    }
+    if (device.playlist_id) {
+      const existing = await api.getAssignments(device.id).catch(() => []);
+      for (const item of existing || []) await api.deleteAssignment(item.id, device.id);
+    }
+  }
+
+  let playlistId = device.playlist_id || null;
   for (const id of contentIds) {
     const r = await api.addAssignment(device.id, { content_id: id });
     if (r && r.playlist_id) playlistId = r.playlist_id;
   }
   if (!playlistId) return { ok: true };
+  device.playlist_id = playlistId;
   try {
     await api.publishPlaylist(playlistId);
     return { ok: true };
@@ -295,7 +328,7 @@ async function renderChange(container, presetId) {
       try {
         const up = await api.uploadContent(files, (pct) => { status.textContent = `${tn('simple.uploading', files.length)} ${pct}%`; });
         const items = (Array.isArray(up) ? up : [up]).filter((c) => c && c.id);
-        const r = await showOnScreen(device, items.map((c) => c.id), how);
+        const r = await showOnScreen(device, items.map((c) => c.id), how, { devices, playlists });
         doneStep(r.review ? t('simple.done.review') : tn('simple.done.shown', items.length, { name: device.name }));
       } catch (err) { fail(err); }
     };
@@ -303,7 +336,7 @@ async function renderChange(container, presetId) {
     loadLibrary(container, async (ids) => {
       busy(t('simple.working'));
       try {
-        const r = await showOnScreen(device, ids, how);
+        const r = await showOnScreen(device, ids, how, { devices, playlists });
         doneStep(r.review ? t('simple.done.review') : tn('simple.done.shown', ids.length, { name: device.name }));
       } catch (err) { fail(err); }
     });
@@ -333,7 +366,8 @@ async function renderChange(container, presetId) {
 
 async function renderUpload(container) {
   let devices = [];
-  try { devices = await api.getDevices(); } catch { devices = []; }
+  let playlists = [];
+  try { [devices, playlists] = await Promise.all([api.getDevices(), api.getPlaylists()]); } catch { devices = devices || []; }
   const total = devices.length ? 3 : 2;
   let uploaded = [];
   let how = 'add';
@@ -388,7 +422,7 @@ async function renderUpload(container) {
           if (!d) continue;
           if (how === 'add' && d.playlist_id && seen.has(d.playlist_id)) continue;
           if (d.playlist_id) seen.add(d.playlist_id);
-          const r = await showOnScreen(d, uploaded.map((c) => c.id), how);
+          const r = await showOnScreen(d, uploaded.map((c) => c.id), how, { devices, playlists });
           review = review || !!r.review;
         }
         shell(container, guideFrame({ step: total - 1, total, icon: '&#127881;', title: t('onboarding.step.done.title'), back: false,
@@ -412,17 +446,110 @@ async function renderUpload(container) {
 
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Help, inside Simple view. The full Help page is about the whole product (widgets, layouts,
+// kiosks, video walls) and opens in the full shell; this one answers what Simple view does, keeps
+// the top bar, and always has a way home. Guide text is English like views/help.js (see its note);
+// the page chrome is translated.
+// ---------------------------------------------------------------------------------------------
+
+const SIMPLE_GUIDES = [
+  { icon: '&#10133;', title: 'Connect a screen', steps: [
+    'On the TV, tablet or computer you want to use, open the player: install the Android app, or open this site\'s /player page in its web browser.',
+    'No TV handy? Open the player in another browser tab to try it.',
+    'The player shows a 6-digit code. Here, choose "Add a screen" and type it in.',
+    'Give the screen a name you will recognise, like "Front window".',
+  ] },
+  { icon: '&#9998;', title: 'Change what a screen shows', steps: [
+    'Choose "Change what a screen shows", or tap the screen under "Your screens".',
+    'Pick "Replace" to show only the new things, or "Add" to keep what is already playing.',
+    'Upload photos or videos, pick ones you uploaded before, or show the same as another screen.',
+    'The screen updates within a few seconds.',
+  ] },
+  { icon: '&#128247;', title: 'Upload photos and videos', steps: [
+    'Choose "Upload photos" and pick as many files as you like, or drag them in.',
+    'Tick the screens that should show them, or untick them all to keep them for later.',
+    'Photos show for 10 seconds each; videos play to the end.',
+  ] },
+];
+
+const SIMPLE_FAQ = [
+  { q: 'What can I use as a screen?', a: 'Android TVs, TV boxes and tablets, Fire TV, LG and Samsung smart TVs, Raspberry Pi, Windows and ChromeOS — or any device with a web browser.' },
+  { q: 'My screen is not changing. What should I check?', a: 'Make sure the screen shows "Playing" on the home page. If it says "Offline", check that the device is on and connected to the internet; it picks up your changes as soon as it reconnects.' },
+  { q: 'What happens if the internet goes down?', a: 'Screens keep the content locally and carry on playing it. New changes arrive when the connection comes back.' },
+  { q: 'Which files can I upload?', a: 'Photos (JPEG, PNG, GIF, WebP) and videos (MP4 works best), plus audio. PDFs can be uploaded from the Content page in Advanced view.' },
+  { q: 'How do I rename or remove a screen?', a: 'Switch to Advanced (top right), open Screens, click the screen, then use Rename or Remove at the top of its page.' },
+  { q: 'Can I show different things at different times of day?', a: 'Yes — that is Schedule, in Advanced view. Simple view always shows the same content on a screen until you change it.' },
+];
+
+function renderHelp(container) {
+  const u = cachedUser() || {};
+  const trial = plansVisible(u)
+    ? [{ q: 'How does the free trial work?', a: 'You get 14 days of the Pro plan with every feature unlocked and no card required. When it ends you move to the Free plan: nothing is deleted, and screens beyond the Free plan pause until you choose a plan.' }]
+    : [];
+  shell(container, `
+    <div class="simple-help-top"><a href="#/" class="btn btn-secondary btn-sm">&larr; ${esc(t('simple.done.home'))}</a></div>
+    <h1 class="simple-h1">${esc(t('simple.help.title'))}</h1>
+    <div class="simple-help-guides">${SIMPLE_GUIDES.map((g) => `
+      <div class="simple-card">
+        <h3>${g.icon} ${esc(g.title)}</h3>
+        <ol>${g.steps.map((st) => `<li>${esc(st)}</li>`).join('')}</ol>
+      </div>`).join('')}
+    </div>
+    <h2 class="simple-h2">${esc(t('simple.help.faq'))}</h2>
+    <div class="simple-card simple-faq">${[...SIMPLE_FAQ, ...trial].map((f) => `
+      <details><summary>${esc(f.q)}</summary><p>${esc(f.a)}</p></details>`).join('')}
+    </div>
+    <div class="simple-card simple-help-more">
+      <p>${esc(t('simple.help.more'))}</p>
+      <button type="button" class="btn btn-secondary" data-help-advanced>${esc(t('simple.help.more_btn'))}</button>
+    </div>`);
+  container.querySelector('[data-help-advanced]').addEventListener('click', async () => {
+    await setUiMode('advanced');
+    window.location.hash = '#/help';
+  });
+}
+
+/*
+ * Simple view, on any OTHER page (Plan & billing, Account settings, a bookmark): no sidebar, and a
+ * slim bar with the way home and the view switch, so Simple never strands someone in the full shell.
+ * Mounted above #app by app.js; removed in Advanced view and on Simple's own pages (which have a
+ * top bar of their own).
+ */
+export function mountBackBar() {
+  if (document.getElementById('simpleBackBar')) return;
+  const app = document.getElementById('app');
+  if (!app || !app.parentNode) return;
+  const bar = document.createElement('div');
+  bar.id = 'simpleBackBar';
+  bar.className = 'simple-backbar';
+  bar.innerHTML = `
+    <a href="#/" class="btn btn-secondary btn-sm">&larr; ${esc(t('simple.done.home'))}</a>
+    <div class="ui-mode-switch simple-switch" role="radiogroup" aria-label="${esc(t('simple.view_label'))}">
+      <button type="button" role="radio" aria-checked="true">${esc(t('nav.view_simple'))}</button>
+      <button type="button" role="radio" aria-checked="false" data-simple-mode="advanced">${esc(t('nav.view_advanced'))}</button>
+    </div>`;
+  bar.querySelector('[data-simple-mode="advanced"]').addEventListener('click', () => setUiMode('advanced'));
+  app.parentNode.insertBefore(bar, app);
+}
+
+export function removeBackBar() {
+  document.getElementById('simpleBackBar')?.remove();
+}
+
 export function isSimpleRoute(hash) {
   return hash === '#/' || hash === '#' || hash === '' || hash.startsWith('#/simple/');
 }
 
 export function render(container, hash = window.location.hash || '#/') {
   cleanup();
+  removeBackBar();
   container.classList.add('simple-mode-app');
   document.documentElement.classList.add('simple-shell');
   const q = new URLSearchParams(hash.split('?')[1] || '');
   if (hash.startsWith('#/simple/change')) return renderChange(container, q.get('device'));
   if (hash.startsWith('#/simple/upload')) return renderUpload(container);
+  if (hash.startsWith('#/simple/help')) return renderHelp(container);
   return renderHome(container);
 }
 

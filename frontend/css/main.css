@@ -2817,3 +2817,26 @@ html.simple-shell .trial-banner { padding-left: 16px; justify-content: center; }
 .simple-lib-item[aria-pressed="true"] { border-color: var(--accent); }
 .simple-lib-item[aria-pressed="true"] .simple-lib-check { display: flex; }
 .simple-lib-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Simple view: help (js/views/simple-home.js renderHelp) */
+.simple-help-top { margin-bottom: 8px; }
+.simple-help-guides { display: grid; gap: 12px; }
+.simple-help-guides .simple-card { margin-bottom: 0; }
+.simple-help-guides h3 { font-size: 16px; margin-bottom: 8px; }
+.simple-help-guides ol { padding-left: 20px; list-style: decimal; }
+.simple-help-guides li { color: var(--text-secondary); font-size: 14px; line-height: 1.8; }
+.simple-faq { padding: 6px 22px; }
+.simple-faq details { border-bottom: 1px solid var(--border); padding: 12px 0; }
+.simple-faq details:last-child { border-bottom: 0; }
+.simple-faq summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.simple-faq p { color: var(--text-secondary); font-size: 13px; margin-top: 8px; line-height: 1.6; }
+.simple-help-more { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.simple-help-more p { color: var(--text-secondary); font-size: 13px; flex: 1; min-width: 220px; }
+
+/* Simple view on a non-Simple page: the way home (js/views/simple-home.js mountBackBar). */
+.simple-backbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary);
+}
+.simple-backbar .simple-switch { min-width: 170px; }
+.simple-backbar .simple-switch button:not([data-simple-mode]) { cursor: default; }

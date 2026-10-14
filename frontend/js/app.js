@@ -545,6 +545,7 @@ function route() {
   // Onboarding for new users
   // 3.0: #/add-screen is the same guide, for every later screen (Simple view's Add screen).
   if ((hash === '#/onboarding' || hash === '#/add-screen') && isAuthenticated()) {
+    simpleHome.removeBackBar();
     sidebar.style.display = 'none';
     if (mainWrapper) mainWrapper.style.marginLeft = '0';
     currentView = onboarding;
@@ -583,10 +584,19 @@ function route() {
 
   // Show sidebar for authenticated views (and drop nav-prime.js's first-paint hide).
   document.documentElement.classList.remove('nav-pending');
-  sidebar.style.display = '';
-  if (mainWrapper) mainWrapper.style.marginLeft = '';
   const mb = document.getElementById('mobileMenuBtn');
-  if (mb) mb.style.display = '';
+  if (isSimpleMode()) {
+    // 3.0 Simple view on any other page: no sidebar, and a bar with the way home (simple-home.js).
+    sidebar.style.display = 'none';
+    if (mainWrapper) mainWrapper.style.marginLeft = '0';
+    if (mb) mb.style.display = 'none';
+    simpleHome.mountBackBar();
+  } else {
+    simpleHome.removeBackBar();
+    sidebar.style.display = '';
+    if (mainWrapper) mainWrapper.style.marginLeft = '';
+    if (mb) mb.style.display = '';
+  }
 
   // Update user info in sidebar
   updateSidebarUser();

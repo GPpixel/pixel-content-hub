@@ -827,6 +827,10 @@ export default {
   'nav.view_simple': 'Simple',
   // 3.0 Simple view: guide-style home and tasks (views/simple-home.js)
   'simple.view_label': 'View',
+  'simple.help.title': 'How can we help?',
+  'simple.help.faq': 'Common questions',
+  'simple.help.more': 'Need schedules, layouts, widgets, video walls or reports? They are in Advanced view, with a full guide for each.',
+  'simple.help.more_btn': 'Open the full guides in Advanced view',
   'simple.menu.plan': 'Plan & billing',
   'simple.menu.settings': 'Account settings',
   'simple.menu.help': 'Help',
