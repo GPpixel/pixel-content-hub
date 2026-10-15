@@ -1385,10 +1385,9 @@ async function loadDevice(deviceId, activeTab = null) {
         ` : ''}
       </div>
 
-      ${(can('remote.stream') || can('remote.input') || can('remote.screenshot')) ? `
-      <!-- Remote Control Tab -->
       <!-- Web player Tab (#313). 3.0: on every display that is not itself a mirror — one without a
-           link offers to create one, and the display's mirrors are listed here. -->
+           link offers to create one, and the display's mirrors are listed here. Outside the remote
+           block below: a display without remote capabilities still has a link. -->
       ${!device.mirror_of ? `
       <div class="tab-content" id="tab-webplayer">
         <h3 style="font-size:16px;margin-bottom:4px">${t('device.enrol.label')}</h3>
@@ -1398,6 +1397,8 @@ async function loadDevice(deviceId, activeTab = null) {
       </div>
       ` : ''}
 
+      ${(can('remote.stream') || can('remote.input') || can('remote.screenshot')) ? `
+      <!-- Remote Control Tab -->
       <div class="tab-content" id="tab-remote">
         <div class="remote-container">
           ${can('remote.stream') ? `

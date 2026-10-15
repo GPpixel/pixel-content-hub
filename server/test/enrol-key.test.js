@@ -232,12 +232,14 @@ test('nothing mints an enrolment key unless it was asked for', () => {
     'the move mint must be gated on set_server_url + a browser player');
 });
 
-test('the Web player tab is shown only for a display that has a key', () => {
-  // Not "is this a web player" — an ordinary web player paired with a code has no key and no use
-  // for the tab. Gating on the key is what keeps the feature off by default.
+test('the Web player tab is on every original display; a key is minted only when asked for', () => {
+  // 3.0: any display can be given a link (a code-paired one included), so the tab is shown on every
+  // display that is not itself a mirror. The KEY is still never minted automatically: without one
+  // the tab offers "Create a web player link" (editors+), which is the deliberate action.
   const view = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'js', 'views', 'device-detail.js'), 'utf8');
-  assert.match(view, /\$\{device\.enrol_key \? `<div class="tab" data-tab="webplayer"/,
-    'the tab must be gated on device.enrol_key');
+  assert.match(view, /\$\{!device\.mirror_of \? `<div class="tab" data-tab="webplayer"/,
+    'the tab is gated on "not a mirror"');
+  assert.match(view, /if \(!device\.enrol_key\) \{[\s\S]{0,200}enrolCreateBtn/, 'no key: offer to create one, never mint on render');
   assert.ok(!/isWebPlayer/.test(view), 'the old platform-based gate should be gone, not left dangling');
   // Revoking would strand a display whose only way back IS the URL.
   assert.ok(!/enrolRevokeBtn/.test(view), 'no revoke button: it would brick the display it belongs to');
