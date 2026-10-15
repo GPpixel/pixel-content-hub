@@ -189,6 +189,10 @@ export async function wireGroupShareButtons(root = document) {
   let on = false;
   try { const st = await api.getServerStatus(); on = !!(st && st.features && st.features.screen_share); } catch (_) { on = false; }
   if (!on) return;
+  // A view-only member cannot start a share (the server refuses it): don't offer the button.
+  let viewer = false;
+  try { const u = JSON.parse(localStorage.getItem('user') || 'null'); viewer = !!(u && u.current_workspace_role === 'workspace_viewer' && !u.acting_as); } catch (_) { viewer = false; }
+  if (viewer) return;
   for (const b of btns) {
     if (!document.contains(b) || b.dataset.shareWired) continue;
     b.dataset.shareWired = '1';
