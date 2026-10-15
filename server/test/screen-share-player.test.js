@@ -27,7 +27,7 @@ function extract(name) {
   throw new Error('unbalanced');
 }
 
-function declare({ rtc = true, receiver = true, brightsign = false, host = false } = {}) {
+function declare({ rtc = true, receiver = true, brightsign = false, host = false, ios = false } = {}) {
   const sandbox = {
     console: { log() {}, warn() {} },
     navigator: {},
@@ -38,7 +38,8 @@ function declare({ rtc = true, receiver = true, brightsign = false, host = false
   // The receiver's own probe decides; this world just says what it would answer.
   if (receiver) sandbox.STScreenShare = { isSupported: () => rtc };
   vm.createContext(sandbox);
-  const prelude = `var ON_BRIGHTSIGN = ${brightsign}; var HOST = ${host ? '{ platform: "webos" }' : 'null'};`;
+  const prelude = `var ON_BRIGHTSIGN = ${brightsign}; var HOST = ${ios ? '{ platform: "ios" }' : host ? '{ platform: "webos" }' : 'null'};`
+    + (ios ? ' function onIOS() { return true; }' : '');
   vm.runInContext(`${prelude}\n${extract('declaredCapabilities')}\nvar __out = declaredCapabilities();`, sandbox);
   return sandbox.__out;
 }
@@ -52,9 +53,14 @@ test('no usable WebRTC receiver (e.g. Chromium < 69 without addTransceiver), or 
   assert.ok(!declare({ receiver: false }).includes('remote.screen_share'));
 });
 
-test('inside the BrightSign or a host shell (webOS / Vega / iOS) it is NOT declared — unverified there', () => {
+test('inside the BrightSign or the webOS / Vega shells it is NOT declared (no documented WebRTC there)', () => {
   assert.ok(!declare({ brightsign: true }).includes('remote.screen_share'));
   assert.ok(!declare({ host: true }).includes('remote.screen_share'));
+});
+
+test('the iOS app (WKWebView, iOS 16+) declares it — but only with a working receiver', () => {
+  assert.ok(declare({ ios: true }).includes('remote.screen_share'));
+  assert.ok(!declare({ ios: true, rtc: false }).includes('remote.screen_share'));
 });
 
 test('the extracted function still runs where the shell globals do not exist at all', () => {

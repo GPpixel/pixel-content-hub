@@ -4034,7 +4034,8 @@ function declaredCapabilities() {
   try {
     const SS = typeof window !== "undefined" ? window.STScreenShare : null;
     const rtc = !!(SS && typeof SS.isSupported === "function" && SS.isSupported());
-    const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST;
+    const ios = typeof onIOS === "function" && onIOS();
+    const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST && !ios;
     if (rtc && !shell) caps.push("remote.screen_share");
   } catch (e) {
   }

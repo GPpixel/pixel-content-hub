@@ -456,6 +456,24 @@
     socket.on('device:remote-start', function () { startStreaming(); });
     socket.on('device:remote-stop', function () { stopStreaming(); });
 
+    // 3.0 screen share (js/screen-share-tizen.js): the content steps aside exactly as for screen-off
+    // (AVPlay torn down, <video> paused) and comes back the same way when the share ends.
+    if (window.STShareTizen) {
+      STShareTizen.wire(socket, {
+        creds: function () { return deviceId && deviceToken ? { deviceId: deviceId, deviceToken: deviceToken, serverUrl: serverUrl } : null; },
+        pause: function () {
+          try { if (player && player.avActive && player.avStop) player.avStop(); } catch (e) {}
+          try { var v = elStage.querySelectorAll('video'); for (var i = 0; i < v.length; i++) { try { v[i].pause(); } catch (e2) {} } } catch (e) {}
+        },
+        resume: function () {
+          if (document.getElementById('screenOffOverlay')) return;   // blanked meanwhile: screen_on restores
+          if (stageOwner === 'wallzones') { replayCurrent(); return; }
+          try { if (player && player.playCurrent) player.playCurrent(); } catch (e) {}
+        },
+        log: function (level, msg) { try { reportCmd(level, 'screen_share', msg); } catch (e) {} },
+      });
+    }
+
     // Dashboard remote control (parity with the web player) — touch injection + D-pad/volume/mute keys
     // + real-time per-item mute. All wrapped so a malformed payload can never wedge the socket.
     socket.on('device:remote-touch', function (data) {
@@ -769,6 +787,15 @@
       } catch (e) {}
       return;
     }
+    // 3.0 screen share: the screen IS the share while one is up — say so, rather than show the
+    // paused playlist underneath (the shared <video> is on the hardware plane too).
+    try {
+      if (window.STShareTizen && STShareTizen.drawCard(ctx, 960, 540)) {
+        var sb = canvas.toDataURL('image/jpeg', 0.4).split(',')[1];
+        if (sb) socket.emit('device:screenshot', { device_id: deviceId, image_b64: sb });
+        return;
+      }
+    } catch (e) {}
     try {
       var img = elStage.querySelector('img');
       if (img && img.complete && img.naturalWidth > 0) {
