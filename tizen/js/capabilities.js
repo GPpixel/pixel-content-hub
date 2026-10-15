@@ -57,6 +57,10 @@
        * wall-positioned stage, each zone on the shared clock, HTML5 <video> only (never AVPlay, which
        * CSS cannot crop). Static: it needs nothing beyond what playback.zones already uses. */
       'playback.wall_zones',
+      /* 3.0 TV-safe video copies (js/video-plan.js): a tall video plays from the server's turned or
+       * fitted copy, because this TV's decoder cannot open a 1080x1920 stream. Declaring it is what
+       * makes the server make the copies at all. */
+      'playback.video_variants',
 
       /*
        * ⚠️ NOT trigger.http / trigger.udp, and this is a platform limit rather than an omission.

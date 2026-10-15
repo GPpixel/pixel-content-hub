@@ -589,6 +589,10 @@ export const api = {
   },
   getLibrarySummary: () => request('/content/library-summary'),
   getContentUsage: (id) => request(`/content/${id}/usage`),
+  // 3.0 TV-safe video copies (server/lib/video-variants.js)
+  getContentTvCopies: (id) => request(`/content/${id}/tv-copies`),
+  retryContentTvCopies: (id) => request(`/content/${id}/tv-copies/retry`, { method: 'POST' }),
+  setContentPrerotated: (id, on) => request(`/content/${id}`, { method: 'PUT', body: JSON.stringify({ video_prerotated: on ? 1 : 0 }) }),
   batchTagContent: (ids, add, remove) => request('/content/batch/tags', {
     method: 'POST',
     body: JSON.stringify({ ids, ...(add && add.length ? { add } : {}), ...(remove && remove.length ? { remove } : {}) })
@@ -1029,6 +1033,8 @@ export const api = {
   // #146: toggle the /api/status debug block exposure (platform-admin only).
   adminGetStatusDebug: () => request('/admin/status-debug'),
   adminSetStatusDebug: (enabled) => request('/admin/status-debug', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  adminGetVideoVariants: () => request('/admin/video-variants'),
+  adminSetVideoVariants: (settings) => request('/admin/video-variants', { method: 'PUT', body: JSON.stringify(settings) }),
   // Opt-in install statistics. GET returns { state, payload, last_report } — payload is the exact
   // body that would be sent, so the UI can show it rather than describe it.
   adminGetTelemetry: () => request('/admin/telemetry'),

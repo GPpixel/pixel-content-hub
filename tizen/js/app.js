@@ -1063,9 +1063,13 @@
       var mc = window.__stMediaCache;
       if (mc && serverUrl) {
         var mcItems = payload.assignments || [];
+        // 3.0 TV-safe video: a tall video that plays the server's copy here is cached AS that copy
+        // (its own key and revision); the original it replaces is one this TV cannot decode.
+        if (window.StVideoPlan) mcItems = window.StVideoPlan.cacheItems(mcItems, payload.wall_config ? 'landscape' : (payload.orientation || 'landscape'));
         var mcBase = serverUrl.replace(/\/+$/, '');
         setTimeout(function () {
           mc.sync(mcItems, function (it) {
+            if (it.__path) return mcBase + it.__path;
             return mcBase + '/api/content/' + it.content_id + '/file'
               + (it.content_rev ? '?rev=' + encodeURIComponent(it.content_rev) : '');
           });
@@ -1110,6 +1114,9 @@
       groupSync.exit();                 // wall and group are mutually exclusive
       player.setScheduleDriven(false);  // #157: wall gates on wallFollower, not scheduleDriven
       wallController.apply(payload.wall_config);
+      // No orientation transform on a wall, so none for video routing either: a screen that was
+      // portrait before joining must not keep playing AVPlay-rotated or turned (3.0 TV-safe) copies.
+      try { player.setOrientation('landscape'); } catch (e) {}
       player.setTimezone(payload.timezone || null);
       player.load(payload.assignments || [], payload.playback_order);
       stageOwner = 'player';

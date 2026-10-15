@@ -1330,6 +1330,16 @@ function showEditModal(contentItem, onSave, { focus = null } = {}) {
           <p id="editCaptionsNote" style="font-size:11px;color:var(--text-muted);margin-top:4px" hidden></p>
         </div>
         ` : ''}
+        ${isUploadedVideo ? `
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="editVideoPrerotated" ${contentItem.video_prerotated ? 'checked' : ''} style="width:auto;margin:0">
+            <span>${esc(t('content.tvsafe.prerotated'))}</span>
+          </label>
+          <p style="font-size:11px;color:var(--text-muted);margin-top:4px">${esc(t('content.tvsafe.prerotated_hint'))}</p>
+          <div id="editTvCopies" style="font-size:12px;color:var(--text-secondary);margin-top:8px" hidden></div>
+        </div>
+        ` : ''}
         ${!isRemote ? `
         <div class="form-group">
           <label>${t('content.label_replace_file')}</label>
@@ -1385,6 +1395,29 @@ function showEditModal(contentItem, onSave, { focus = null } = {}) {
   }
   overlay.querySelector('#editEditCaptions')?.addEventListener('click', () => openCaptionsEditor(contentItem.id));
 
+  // 3.0 TV-safe video copies (server/lib/video-variants.js): for a tall video, say whether the copy
+  // a Samsung TV plays is being prepared, ready or failed — and offer Retry on failure.
+  const tvEl = overlay.querySelector('#editTvCopies');
+  const renderTvCopies = (st) => {
+    if (!tvEl || !document.contains(tvEl) || !st || !st.tall) { if (tvEl) tvEl.hidden = true; return; }
+    const copies = st.copies || [];
+    let line;
+    if (!st.enabled) line = t('content.tvsafe.off');
+    else if (!copies.length && !(st.needs || []).length) line = t('content.tvsafe.not_needed');
+    else if (copies.some((c) => c.status === 'failed' || c.status === 'denied')) {
+      line = copies.some((c) => c.status === 'denied') ? t('content.tvsafe.allowance') : t('content.tvsafe.failed');
+    } else if (copies.length && copies.every((c) => c.status === 'ready')) line = t('content.tvsafe.ready');
+    else line = t('content.tvsafe.preparing');
+    const retry = copies.some((c) => c.status === 'failed' || c.status === 'denied');
+    tvEl.innerHTML = `<strong>${esc(t('content.tvsafe.title'))}</strong> ${esc(line)}${retry ? ` <button type="button" class="btn btn-secondary btn-sm" id="editTvRetry">${esc(t('content.tvsafe.retry'))}</button>` : ''}`;
+    tvEl.hidden = false;
+    overlay.querySelector('#editTvRetry')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try { renderTvCopies(await api.retryContentTvCopies(contentItem.id)); } catch (err) { showToast(err.message, 'error'); e.target.disabled = false; }
+    });
+  };
+  if (tvEl) api.getContentTvCopies(contentItem.id).then(renderTvCopies).catch(() => {});
+
   overlay.querySelector('#saveEditBtn').onclick = async () => {
     const filename = overlay.querySelector('#editFilename').value.trim();
     const mimeType = overlay.querySelector('#editMimeType').value;
@@ -1422,6 +1455,12 @@ function showEditModal(contentItem, onSave, { focus = null } = {}) {
       if (unstableEl) {
         const newUnstable = unstableEl.checked ? 1 : 0;
         if (newUnstable !== (contentItem.unstable_connection ? 1 : 0)) updateData.unstable_connection = newUnstable;
+      }
+      // 3.0 TV-safe video: "already rotated for portrait screens".
+      const prerotEl = overlay.querySelector('#editVideoPrerotated');
+      if (prerotEl) {
+        const v = prerotEl.checked ? 1 : 0;
+        if (v !== (contentItem.video_prerotated ? 1 : 0)) updateData.video_prerotated = v;
       }
       // #216: YouTube captions (checkbox + language).
       const captionsEl = overlay.querySelector('#editCaptionsEnabled');

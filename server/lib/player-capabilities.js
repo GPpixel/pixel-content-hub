@@ -57,6 +57,13 @@ const CAPABILITIES = [
    * type, shortening the timeline, so the deviceSocket strip keeps it off any screen that does not
    * declare it. */
   'playback.hold',
+  /* 3.0 TV-safe video copies (lib/video-variants.js): this player plays a tall (portrait-shaped)
+   * video from a server-made copy — turned into a landscape frame for a portrait-mounted screen,
+   * scaled to fit 1920x1080 for a landscape one — because its own decoder cannot open a 1080x1920
+   * stream (Samsung Tizen TVs: black screen, or an AVPlay prepare error). Declaring it is also what
+   * makes the server spend CPU on those copies: a workspace with no screen declaring it never gets
+   * one. In NO baseline — an older player would not know what to do with the copy. */
+  'playback.video_variants',
   /* Zones on a VIDEO WALL: the wall's layout, in percent of the wall's player rect, each zone paced
    * by the shared clock (lib/wall-layout.js). A wall member without it still plays the wall's
    * playlist across the whole wall, so the dashboard names the panels that lack it. In NO baseline. */

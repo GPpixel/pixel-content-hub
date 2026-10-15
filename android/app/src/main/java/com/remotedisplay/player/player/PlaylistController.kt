@@ -48,6 +48,9 @@ data class PlaylistItem(
     val weight: Int = 1,
     // #624: YouTube only — move on when the video ends (PlayToEnd). The server sends it only when set.
     val playToEnd: Boolean = false,
+    // 3.0 TV-safe video: the operator marked this file "already rotated for portrait screens", so a
+    // portrait screen plays it as-is (MainActivity turns the video view back). Sent only when set.
+    val videoPrerotated: Boolean = false,
     /* Slide voiceover + deck music bed. Metadata on the ITEM, not inside the slide document — a
      * player that only renders the widget iframe makes no sound, which is why this exists. */
     val slideAudio: SlideAudio? = null,
@@ -423,6 +426,7 @@ class PlaylistController(
                     meta = obj.optJSONObject("meta"),
                     weight = obj.optInt("weight", 1).coerceAtLeast(1),
                     playToEnd = obj.optInt("play_to_end", 0) == 1,
+                    videoPrerotated = obj.optInt("video_prerotated", 0) == 1,
                     transition = Transitions.parse(obj.optJSONObject("transition")),
                     slideAudio = parseSlideAudio(obj.optJSONObject("audio")),
                     interrupt = obj.optBoolean("interrupt", false)

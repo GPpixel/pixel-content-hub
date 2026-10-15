@@ -38,6 +38,12 @@
          stays unused. Sits above the (empty-during-AV) stage so the hole-punched plane is visible. -->
     <object id="avPlayer" type="application/avplayer" style="position:fixed;inset:0;width:100%;height:100%;z-index:5;display:none"></object>
 
+    <!-- 3.0 TV-safe video: an already-turned video for a portrait-mounted screen (the server's
+         rot_cw/rot_ccw copy, or a file marked pre-rotated) plays here, UNROTATED and full-screen —
+         inside the CSS-rotated #stage the video plane would black out (#170). Empty and hidden
+         otherwise; renderVideoFlat in the player script owns it. -->
+    <div id="flatVideo" class="flat-video"></div>
+
     <!-- Playback stage -->
     <div id="stage" class="screen stage hidden"></div>
 
@@ -75,6 +81,7 @@
     <script src="js/transitions.js"></script>
     <script src="js/kiosk-logic.js"></script>
     <script src="js/kiosk-session.js"></script>
+    <script src="js/video-plan.js"></script>
     <script src="js/player.js"></script>
     <script src="js/device-control.js"></script>
     <script src="js/pip-overlay.js"></script>

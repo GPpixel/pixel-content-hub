@@ -211,6 +211,9 @@ async function replaceContentBytes({ content, file, actor, writer = null, reqOrI
   })();
   storagePlan.cleanup();
 
+  // 3.0 TV-safe video: copies of the old bytes are stale (their source_file no longer matches);
+  // queue the new ones the workspace's TVs need before the payloads go out.
+  try { require('./video-variants').onContentIngested(db.prepare('SELECT * FROM content WHERE id = ?').get(content.id)); } catch (_) { /* lazily later */ }
   const affected = devicesPlayingContent(content.id);
   pushDevices(reqOrIo, affected);
   // CORPORATE: a replaced video can be LONGER than a store slot allows. Re-judge every slot fill that

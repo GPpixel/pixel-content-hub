@@ -201,6 +201,8 @@ const EXPORTED = {
 const EXCLUDED = {
   app_settings: 'instance configuration, not an organization\'s',
   a11y_media_checks: 'cached results of the accessibility checks on media: recomputed automatically',
+  content_video_variants: 'TV-safe re-encoded copies of tall videos (lib/video-variants.js): a cache, made again on demand on the new server',
+  video_variant_usage: 'per-month encode minutes for the hosted TV-safe copy allowance: instance accounting, not the organization\'s data',
   site_caches: 'a site cache box and the credential it signs in with: set the box up again on the new server (docs/site-cache.md)',
   site_cache_assignments: 'which screens use a site cache box: follows site_caches',
   migration_jobs: 'import jobs from another signage system: transient, and may still hold an encrypted source credential',

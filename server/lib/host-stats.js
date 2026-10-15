@@ -132,4 +132,6 @@ async function sample() {
 /** Test hook. */
 function _reset() { lastCpu = null; }
 
-module.exports = { sample, warningsNow, _reset, _pctBetween: pctBetween };
+// cpuTimes/pctBetween: lib/video-variants.js measures its own window with them, so its pause-while-busy
+// check never moves the baseline this module's own CPU figure is measured from.
+module.exports = { sample, warningsNow, _reset, _pctBetween: pctBetween, cpuTimes, pctBetween };

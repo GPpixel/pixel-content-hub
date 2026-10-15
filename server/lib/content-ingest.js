@@ -227,6 +227,9 @@ async function ingestUploadedFile({ file, userId, workspaceId, folderId = null }
   // certainly local, so the report and the publish warning usually have the answer before anyone
   // asks. Best-effort and queued (lib/a11y/media.js); never delays or fails the upload.
   try { require('./a11y/media').queueVideo(row); } catch { /* checked later, on demand */ }
+  // 3.0 TV-safe video: a tall video gets the copies this workspace's TVs need, queued in the
+  // background (lib/video-variants.js). Nothing is queued when no screen needs one.
+  try { require('./video-variants').onContentIngested(row); } catch { /* queued lazily later */ }
   return row;
 }
 

@@ -1649,6 +1649,7 @@ class MainActivity : AppCompatActivity() {
         if (item.isRemote) {
             Log.i("MainActivity", "Playing remote content: ${item.remoteUrl}")
             if (item.mimeType.startsWith("video/")) {
+                applyVideoTurn(item)
                 mediaPlayer.playVideoFromUrl(item.remoteUrl!!, item.muted) // remote video: plain (no wipe)
             } else if (item.mimeType.startsWith("image/")) {
                 mediaPlayer.showImageFromUrl(item.remoteUrl!!, item.transition)
@@ -1712,9 +1713,29 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    /*
+     * 3.0 TV-safe video: the quarter-turn to undo for a video the operator marked "already rotated
+     * for portrait screens" — the stage's own turn on a portrait screen, else 0. Never on a wall
+     * (currentOrientation is null there; the wall geometry owns rootView).
+     */
+    private fun prerotatedTurn(item: PlaylistItem): Float {
+        if (!item.videoPrerotated || currentOrientation == null) return 0f
+        val q = ((rootView.rotation % 360f) + 360f) % 360f
+        return if (q == 90f || q == 270f) q else 0f
+    }
+
+    private fun applyVideoTurn(item: PlaylistItem): Float {
+        val turn = prerotatedTurn(item)
+        val (w, h) = windowSize()
+        mediaPlayer.setVideoCounterTurn(turn, w.toInt(), h.toInt())
+        return turn
+    }
+
     private fun playFile(item: PlaylistItem, file: java.io.File) {
         if (item.mimeType.startsWith("video/")) {
-            mediaPlayer.playVideo(file, item.muted, item.transition)
+            // A counter-turned view cannot be composited into a wipe (the snapshot is the stage's).
+            val turn = applyVideoTurn(item)
+            mediaPlayer.playVideo(file, item.muted, if (turn != 0f) null else item.transition)
         } else if (item.mimeType.startsWith("image/")) {
             mediaPlayer.showImage(file, item.transition)
         } else {

@@ -985,6 +985,33 @@ class MediaPlayerManager(
     }
 
     /**
+     * 3.0 TV-safe video: turn the video view back by [deg] (90 / 270) inside the rotated stage, so a
+     * file the operator already turned for portrait screens fills the physical [screenW]x[screenH]
+     * panel upright instead of being turned a second time. 0 restores the normal full-stage view.
+     * The view is sized to the SCREEN and centred on the stage (which is [screenH]x[screenW] when
+     * swapped); rotating about its own centre then cancels the stage's turn exactly.
+     */
+    fun setVideoCounterTurn(deg: Float, screenW: Int, screenH: Int) {
+        val lp = playerView.layoutParams ?: return
+        if (deg == 0f) {
+            if (playerView.rotation == 0f && lp.width == android.view.ViewGroup.LayoutParams.MATCH_PARENT) return
+            lp.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            lp.height = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            playerView.layoutParams = lp
+            playerView.rotation = 0f
+            playerView.translationX = 0f
+            playerView.translationY = 0f
+            return
+        }
+        lp.width = screenW
+        lp.height = screenH
+        playerView.layoutParams = lp
+        playerView.translationX = (screenH - screenW) / 2f
+        playerView.translationY = (screenW - screenH) / 2f
+        playerView.rotation = -deg
+    }
+
+    /**
      * In wall mode the content fills its slice (object-fit:fill parity with the web/Tizen
      * players); restore the default fit on exit.
      */
