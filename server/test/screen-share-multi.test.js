@@ -329,3 +329,30 @@ test('the one-screen API is unchanged and its share id is its session id', async
   const stop = await call('editor', 'DELETE', `/api/screen-share/shares/${r.body.session_id}`);
   assert.deepEqual(stop.body, { stopped: 1 });
 });
+
+/*
+ * 3.0 display-link mirrors (lib/mirrors.js): a share to a display also reaches the places its link
+ * is open (expandShareTargets). A mirror is best-effort: one the sharer cannot reach is left out,
+ * never a reason to refuse the share to the display that was asked for.
+ */
+test('a share to a display also reaches its mirrors; an unreachable mirror is skipped, not refused', async () => {
+  const ins = "INSERT INTO devices (id, user_id, workspace_id, name, pairing_code, status, device_token, mirror_of) VALUES (?, ?, ?, ?, ?, 'offline', ?, ?)";
+  const M = { id: crypto.randomUUID(), token: 'devtok_' + crypto.randomBytes(12).toString('hex'), name: 'C (mirror 1)' };
+  run(ins, M.id, U.owner.id, U.owner.ws, M.name, crypto.randomUUID().slice(0, 6), M.token, D.C.id);
+  D.CM = M;
+  // A row naming C as its original from ANOTHER tenant cannot happen through the socket; if it did,
+  // it must not get the share, nor sink the share to C.
+  const X = crypto.randomUUID();
+  run(ins, X, U.outsider.id, U.outsider.ws, 'stray', crypto.randomUUID().slice(0, 6), 'devtok_' + crypto.randomBytes(12).toString('hex'), D.C.id);
+  M.sock = await connectDevice(M.id, M.token, ['playback.video', 'remote.screen_share']);
+
+  const r = await call('editor', 'POST', '/api/screen-share/shares', { device_ids: [D.C.id] });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body.legs.map((l) => l.device_id), [D.C.id, M.id], 'the display, then its mirror');
+  assert.ok(!r.body.legs.some((l) => l.device_id === X), 'never a screen the sharer cannot reach');
+  const leg = r.body.legs[1];
+  await connectLeg(leg, M);
+  await waitFor(() => M.sock.got.find((g) => g.ev === 'device:screenshare-start' && g.data.session_id === leg.session_id), 4000, 'the mirror told to show the share');
+  await stopAll();
+  run('DELETE FROM devices WHERE id = ?', X);
+});

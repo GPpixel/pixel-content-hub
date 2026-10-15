@@ -405,6 +405,11 @@ const PLAYER_I18N = {
     nothing_scheduled: "Nothing scheduled right now",
     preview_webpage_blocked: "If this area is blank, the site blocks being embedded and won\u2019t display on the device either. Try a page that allows embedding.",
     enrol_key_refused: "This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display\u2019s current link from the dashboard.",
+    mirror_removed_title: "This mirror was removed",
+    mirror_removed_body: "This screen was showing a display link that is also open somewhere else, and it was removed from the dashboard. Open the display link again to show it here.",
+    mirror_refused_title: "This display is already showing somewhere else",
+    mirror_show_again: "Show it here again",
+    mirror_try_again: "Try again",
     // 3.0: screen share (other languages fall back to these until translated)
     share_shared_by: "Shared by {name}",
     share_guest: "guest",
@@ -706,13 +711,153 @@ let viewerTimer = null;
 let viewerEnded = false;
 let viewerLastAnchor = null;
 let viewerJoin = null;
+function linkStorageSuffix(k) {
+  if (!k) return "";
+  const h = (seed) => {
+    let x = seed >>> 0;
+    for (let i = 0; i < k.length; i++) {
+      x ^= k.charCodeAt(i);
+      x = Math.imul(x, 16777619) >>> 0;
+    }
+    return ("0000000" + x.toString(16)).slice(-8);
+  };
+  return "::" + h(2166136261) + h(2538058380);
+}
+const LINK_SUFFIX = VIEWER_MODE ? "" : linkStorageSuffix(urlEnrolKey());
 const SCREEN_SUFFIX = VIEWER_MODE ? "__view" : (() => {
   try {
     return BS ? BS.storageSuffix() || "" : "";
   } catch (e) {
     return "";
   }
+})() + LINK_SUFFIX;
+(function migrateLinkStorage() {
+  if (!LINK_SUFFIX) return;
+  try {
+    const base = SCREEN_SUFFIX.slice(0, SCREEN_SUFFIX.length - LINK_SUFFIX.length);
+    if (localStorage.getItem("rd_web_player" + SCREEN_SUFFIX) !== null) return;
+    let old = null;
+    try {
+      old = JSON.parse(localStorage.getItem("rd_web_player" + base) || "null");
+    } catch (e) {
+      old = null;
+    }
+    if (!old || !old.deviceId || old.enrolKey !== urlEnrolKey()) return;
+    const moved = [];
+    for (const name of [
+      "rd_web_player",
+      "st_install_id",
+      "rd_playlist_cache",
+      "rd_layout_cache",
+      "rd_site_cache",
+      "rd_trigger_cfg",
+      "rd_triggers_cache",
+      "st_kiosk_sessions"
+    ]) {
+      const v = localStorage.getItem(name + base);
+      if (v === null) continue;
+      localStorage.setItem(name + SCREEN_SUFFIX, v);
+      moved.push(name);
+    }
+    for (const name of ["st_wall_config", "st_group_sync", "st_offline_plays"]) {
+      const v = localStorage.getItem(name);
+      if (v !== null) {
+        localStorage.setItem(name + LINK_SUFFIX, v);
+        moved.push(name);
+      }
+    }
+    localStorage.removeItem("rd_web_player" + base);
+    localStorage.removeItem("st_install_id" + base);
+    localStorage.removeItem("st_offline_plays");
+    console.log("[storage] moved this display link's identity into its own namespace:", moved.join(", "));
+  } catch (e) {
+  }
 })();
+const MIRROR_HOLD_KEY = "st_mirror_hold" + SCREEN_SUFFIX;
+let mirrorHold = (function() {
+  try {
+    return JSON.parse(sessionStorage.getItem(MIRROR_HOLD_KEY) || "null");
+  } catch (e) {
+    return null;
+  }
+})();
+function showMirrorHold(hold) {
+  try {
+    let el = document.getElementById("st-mirror-hold");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "st-mirror-hold";
+      el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483646;background:#111827;color:#e5e7eb;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vw;font-family:sans-serif";
+      document.body.appendChild(el);
+    }
+    const removed = hold && hold.kind === "removed";
+    el.innerHTML = "";
+    const h = document.createElement("h1");
+    h.style.cssText = "font-size:2.6rem;margin:0 0 1.2rem;color:#f9fafb";
+    h.textContent = _t(removed ? "mirror_removed_title" : "mirror_refused_title");
+    const p = document.createElement("p");
+    p.style.cssText = "font-size:1.4rem;max-width:46rem;line-height:1.5;color:#94a3b8;margin:0 0 2rem";
+    p.textContent = removed ? _t("mirror_removed_body") : String(hold && hold.error || "");
+    const b = document.createElement("button");
+    b.id = "st-mirror-again";
+    b.style.cssText = "font-size:1.2rem;padding:.8rem 1.6rem;border-radius:.5rem;border:0;background:#3b82f6;color:#fff;cursor:pointer";
+    b.textContent = _t(removed ? "mirror_show_again" : "mirror_try_again");
+    b.onclick = () => {
+      try {
+        sessionStorage.removeItem(MIRROR_HOLD_KEY);
+      } catch (e) {
+      }
+      location.reload();
+    };
+    el.appendChild(h);
+    el.appendChild(p);
+    el.appendChild(b);
+  } catch (e) {
+  }
+}
+function enterMirrorHold(hold) {
+  mirrorHold = hold;
+  console.warn("[mirror] holding: " + hold.kind + (hold.error ? " \u2014 " + hold.error : ""));
+  try {
+    if (socket) {
+      socket.io.reconnection(false);
+      socket.disconnect();
+    }
+  } catch (e) {
+  }
+  try {
+    stopReconnectSupervisor();
+  } catch (e) {
+  }
+  try {
+    if (throttleHoldTimer) {
+      clearTimeout(throttleHoldTimer);
+      throttleHoldTimer = null;
+    }
+  } catch (e) {
+  }
+  let stored = false;
+  try {
+    sessionStorage.setItem(MIRROR_HOLD_KEY, JSON.stringify(hold));
+    stored = true;
+  } catch (e) {
+  }
+  if (stored && !ON_BRIGHTSIGN) {
+    location.reload();
+    return;
+  }
+  try {
+    document.querySelectorAll("video,audio").forEach((m) => {
+      try {
+        m.muted = true;
+        m.pause();
+      } catch (e) {
+      }
+    });
+  } catch (e) {
+  }
+  showMirrorHold(hold);
+}
 const STORAGE_KEY = "rd_web_player" + SCREEN_SUFFIX;
 const HEARTBEAT_INTERVAL = 15e3;
 const PLAYLIST_REFRESH_INTERVAL = 6e4;
@@ -899,7 +1044,7 @@ function dropCacheForDeletedDisplay() {
     const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
     if (!sw) return;
     const keep = triggerItems(triggers).filter((it) => it && it.filepath && !it.remote_url).map((it) => mediaUrl(it));
-    sw.postMessage({ type: "st-device-deleted", keep });
+    sw.postMessage({ type: "st-device-deleted", keep, scope: SCREEN_SUFFIX });
   } catch (e) {
   }
 }
@@ -943,7 +1088,7 @@ function postSiteCache(items) {
       }
       cfg = { url: sc.url, token: sc.token, expires_at: Number(sc.expires_at) || 0, files };
     }
-    sw.postMessage({ type: "st-site-cache", config: cfg });
+    sw.postMessage({ type: "st-site-cache", config: cfg, scope: SCREEN_SUFFIX });
   } catch (e) {
   }
 }
@@ -954,7 +1099,7 @@ function requestOfflineCache(items, extraItems) {
     const all = (items || []).concat(extraItems || [], defaultContent ? [defaultContent] : []);
     const urls = all.filter((it) => it && it.filepath && !it.remote_url).map((it) => mediaUrl(it));
     postSiteCache(all);
-    sw.postMessage({ type: "st-cache-playlist", urls, prune: true });
+    sw.postMessage({ type: "st-cache-playlist", urls, prune: true, scope: SCREEN_SUFFIX });
     for (const it of all) {
       if (!it || it.mime_type !== BUNDLE_MIME || !it.content_id) continue;
       fetch(
@@ -1051,7 +1196,7 @@ function loadLayoutCache() {
   }
   if (!token) return;
   try {
-    if (localStorage.getItem("st_reset_applied") === token) return;
+    if (localStorage.getItem("st_reset_applied" + LINK_SUFFIX) === token) return;
     const cfg = getConfig();
     delete cfg.deviceId;
     delete cfg.deviceToken;
@@ -1061,8 +1206,8 @@ function loadLayoutCache() {
     localStorage.removeItem("st_install_id" + SCREEN_SUFFIX);
     localStorage.removeItem(PLAYLIST_CACHE_KEY);
     localStorage.removeItem(LAYOUT_CACHE_KEY);
-    localStorage.removeItem("st_group_sync");
-    localStorage.setItem("st_reset_applied", token);
+    localStorage.removeItem("st_group_sync" + LINK_SUFFIX);
+    localStorage.setItem("st_reset_applied" + LINK_SUFFIX, token);
     console.warn("[reset] identity cleared by ?reset=" + token + " \u2014 this panel will pair as a new device");
     try {
       if (typeof clearVegaIdentity === "function") clearVegaIdentity();
@@ -2112,7 +2257,7 @@ function generateBrowserFingerprint() {
 }
 let offlinePlayOpen = null;
 let offlinePlayFlushing = false;
-const OFFLINE_PLAY_KEY = "st_offline_plays";
+const OFFLINE_PLAY_KEY = "st_offline_plays" + LINK_SUFFIX;
 const offlineQueueAvailable = typeof OfflinePlayQueue === "function";
 const offlinePlays = offlineQueueAvailable ? new OfflinePlayQueue() : {
   restore() {
@@ -2215,6 +2360,8 @@ if (VIEWER_MODE) {
   bootViewer(VIEWER);
 } else if (_previewQS.get("preview") === "1" && (_previewQS.get("playlist") || _previewQS.get("device"))) {
   bootPreview(_previewQS);
+} else if (mirrorHold) {
+  showMirrorHold(mirrorHold);
 } else {
   if (!config.serverUrl) {
     config.serverUrl = window.location.origin;
@@ -2229,7 +2376,7 @@ if (VIEWER_MODE) {
       layout = loadLayoutCache();
       document.getElementById("setupScreen").style.display = "none";
       try {
-        const cw = localStorage.getItem("st_wall_config");
+        const cw = localStorage.getItem("st_wall_config" + LINK_SUFFIX);
         if (cw) applyWallMode(JSON.parse(cw));
       } catch (e) {
       }
@@ -2243,7 +2390,7 @@ if (VIEWER_MODE) {
         }
       }
       try {
-        const cg = localStorage.getItem("st_group_sync");
+        const cg = localStorage.getItem("st_group_sync" + LINK_SUFFIX);
         if (cg) applyGroupSync(JSON.parse(cg));
       } catch (e) {
       }
@@ -2612,7 +2759,7 @@ function shouldForceReconnect(connected, sinceMs, nowMs, graceMs) {
   return nowMs - sinceMs >= graceMs;
 }
 function startReconnectSupervisor() {
-  if (reconnectSupervisorTimer) return;
+  if (reconnectSupervisorTimer || mirrorHold) return;
   reconnectSupervisorTimer = setInterval(() => {
     if (PREVIEW_MODE) return;
     if (socket && socket.connected) {
@@ -2649,6 +2796,10 @@ if (typeof window !== "undefined") {
   window.__v4WatchdogShouldReconnect = watchdogShouldReconnect;
 }
 function connect(serverUrl) {
+  if (mirrorHold) {
+    console.log("[mirror] not connecting: " + mirrorHold.kind);
+    return;
+  }
   if (BS && !BS.isReady()) {
     BS.onReady(() => {
       try {
@@ -2719,6 +2870,7 @@ function connect(serverUrl) {
   socket.onAny(markAlive);
   socket.io.on("ping", markAlive);
   socket.on("device:throttled", (d) => {
+    if (mirrorHold) return;
     const asked = Number(d && d.retry_after_ms);
     const waitMs = Math.min(Math.max(Number.isFinite(asked) ? asked : 0, 1e3), 5 * 60 * 1e3);
     console.warn("[throttle] server asked us to wait " + waitMs + "ms (" + (d && d.reason || "unspecified") + ")");
@@ -2853,7 +3005,10 @@ function connect(serverUrl) {
       console.log("[settings] PIN updated from the dashboard");
     }
   });
+  socket.on("device:mirror-removed", () => enterMirrorHold({ kind: "removed" }));
+  socket.on("device:mirror-refused", (d) => enterMirrorHold({ kind: "refused", reason: d && d.reason || null, error: d && d.error || "" }));
   socket.on("device:unpaired", (data) => {
+    if (mirrorHold) return;
     console.warn("Device not found on server \u2014 clearing credentials");
     savePlaylistCache([]);
     if (data && data.reason === "deleted") dropCacheForDeletedDisplay();
@@ -4349,8 +4504,8 @@ function applyWallMode(config2) {
   }
   lastWallSync = null;
   try {
-    if (config2) localStorage.setItem("st_wall_config", JSON.stringify(config2));
-    else localStorage.removeItem("st_wall_config");
+    if (config2) localStorage.setItem("st_wall_config" + LINK_SUFFIX, JSON.stringify(config2));
+    else localStorage.removeItem("st_wall_config" + LINK_SUFFIX);
   } catch (e) {
   }
   if (!config2) {
@@ -4601,8 +4756,8 @@ function applyGroupSync(cfg) {
     groupSyncTimer = null;
   }
   try {
-    if (cfg) localStorage.setItem("st_group_sync", JSON.stringify(cfg));
-    else localStorage.removeItem("st_group_sync");
+    if (cfg) localStorage.setItem("st_group_sync" + LINK_SUFFIX, JSON.stringify(cfg));
+    else localStorage.removeItem("st_group_sync" + LINK_SUFFIX);
   } catch (e) {
   }
   if (!cfg) {
@@ -7716,7 +7871,7 @@ function unpairThisPlayer() {
   }
   setTimeout(() => {
     try {
-      UnpairGate.storageKeys(SCREEN_SUFFIX).forEach((k) => {
+      UnpairGate.storageKeys(SCREEN_SUFFIX, LINK_SUFFIX).forEach((k) => {
         try {
           localStorage.removeItem(k);
         } catch (e) {

@@ -3308,6 +3308,18 @@ const migrations = [
      started_at INTEGER,
      finished_at INTEGER,
      expires_at INTEGER)`,
+  /*
+   * 3.0 display-link mirrors (lib/mirrors.js, docs/web-player.md). One display link opened in a
+   * second browser while the first is live becomes a MIRROR: its own device row (own socket,
+   * status, screenshots, proof-of-play) that plays whatever `mirror_of` plays. mirror_fingerprint
+   * is the per-install fingerprint that owns the row, so the same browser reopening the link comes
+   * back as the same mirror instead of a new one. mirror_location is the "Chrome on Windows ·
+   * 10.0.0.5" hint the dashboard shows.
+   */
+  'ALTER TABLE devices ADD COLUMN mirror_of TEXT',
+  'ALTER TABLE devices ADD COLUMN mirror_fingerprint TEXT',
+  'ALTER TABLE devices ADD COLUMN mirror_location TEXT',
+  'CREATE INDEX IF NOT EXISTS idx_devices_mirror_of ON devices(mirror_of) WHERE mirror_of IS NOT NULL',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

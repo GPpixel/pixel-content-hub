@@ -89,17 +89,17 @@ let prefetchChain = Promise.resolve();
 self.addEventListener("message", (event) => {
   const data = event.data;
   if (data && data.type === "st-device-deleted" && Array.isArray(data.keep)) {
-    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.keep)).catch(() => {
+    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.keep, data.scope)).catch(() => {
     });
     return;
   }
   if (data && data.type === "st-site-cache") {
-    setSiteCache(data.config);
+    setSiteCache(data.config, data.scope);
     return;
   }
   if (!data || data.type !== "st-cache-playlist" || !Array.isArray(data.urls)) return;
   if (data.prune && data.urls.length > 0) {
-    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.urls)).catch(() => {
+    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.urls, data.scope)).catch(() => {
     });
   }
   for (const url of data.urls) {
@@ -202,10 +202,33 @@ function ensureCached(url) {
     yield sweepOldRevisions(cache, url);
   });
 }
-function pruneToPlaylist(urls) {
+const KEEP_SCOPES_KEY = "/__st_keep_scopes__";
+const KEEP_SCOPE_DAYS = 14;
+function keepSetFor(urls, scope) {
+  return __async(this, null, function* () {
+    const key = typeof scope === "string" ? scope.slice(0, 64) : "";
+    let scopes = {};
+    try {
+      const store = yield caches.open(SITE_CACHE_STORE);
+      const hit = yield store.match(KEEP_SCOPES_KEY);
+      if (hit) scopes = (yield hit.json()) || {};
+      scopes[key] = { urls, at: Date.now() };
+      for (const k of Object.keys(scopes)) {
+        if (!scopes[k] || !Array.isArray(scopes[k].urls) || Date.now() - (scopes[k].at || 0) > KEEP_SCOPE_DAYS * 864e5) delete scopes[k];
+      }
+      yield store.put(KEEP_SCOPES_KEY, new Response(JSON.stringify(scopes), { headers: { "Content-Type": "application/json" } }));
+    } catch (e) {
+      scopes = { [key]: { urls } };
+    }
+    const all = /* @__PURE__ */ new Set();
+    for (const k of Object.keys(scopes)) for (const u of scopes[k].urls) all.add(u);
+    return all;
+  });
+}
+function pruneToPlaylist(urls, scope) {
   return __async(this, null, function* () {
     const cache = yield caches.open(CONTENT_CACHE);
-    const keep = new Set(urls);
+    const keep = yield keepSetFor(urls, scope);
     for (const key of yield cache.keys()) {
       if (keep.has(key.url)) continue;
       if (POLICY.isInternalKey(key.url) && [...keep].some((u) => POLICY.assetKey(u) === POLICY.assetKey(key.url))) continue;
@@ -340,7 +363,7 @@ const SITE_INLINE_MAX_BYTES = 64 * 1024 * 1024;
 const SITE_FIRST_BYTE_MS = 4e3;
 const SITE_DOWN_MS = 60 * 1e3;
 const SITE_WARM_WAIT_MS = 3 * 60 * 1e3;
-let siteCache = null;
+let siteCaches = {};
 let siteCacheLoaded = null;
 let siteDownUntil = 0;
 function validSiteConfig(c) {
@@ -353,32 +376,45 @@ function validSiteConfig(c) {
   }
   return { url: c.url, token: c.token, expires_at: Number(c.expires_at) || 0, files };
 }
-function setSiteCache(config) {
-  siteCache = validSiteConfig(config);
-  siteCacheLoaded = Promise.resolve();
-  siteDownUntil = 0;
-  caches.open(SITE_CACHE_STORE).then((c) => siteCache ? c.put(SITE_CACHE_KEY, new Response(JSON.stringify(siteCache), { headers: { "Content-Type": "application/json" } })) : c.delete(SITE_CACHE_KEY)).catch(() => {
-  });
+function setSiteCache(config, scope) {
+  const sc = validSiteConfig(config);
+  const key = typeof scope === "string" ? scope.slice(0, 64) : "";
+  const apply = () => {
+    if (sc) siteCaches[key] = sc;
+    else delete siteCaches[key];
+    siteDownUntil = 0;
+    return caches.open(SITE_CACHE_STORE).then((c) => Object.keys(siteCaches).length ? c.put(SITE_CACHE_KEY, new Response(JSON.stringify({ scopes: siteCaches }), { headers: { "Content-Type": "application/json" } })) : c.delete(SITE_CACHE_KEY)).catch(() => {
+    });
+  };
+  siteCacheLoaded = loadSiteCache().then(apply);
 }
 function loadSiteCache() {
   if (!siteCacheLoaded) {
     siteCacheLoaded = caches.open(SITE_CACHE_STORE).then((c) => c.match(SITE_CACHE_KEY)).then((r) => r ? r.json() : null).then((j) => {
-      if (!siteCache) siteCache = validSiteConfig(j);
+      const stored = j && j.scopes && typeof j.scopes === "object" ? j.scopes : j ? { "": j } : {};
+      for (const k of Object.keys(stored)) {
+        const v = validSiteConfig(stored[k]);
+        if (v && !(k in siteCaches)) siteCaches[k] = v;
+      }
     }).catch(() => {
     });
   }
   return siteCacheLoaded;
 }
 function siteEntryFor(url) {
-  if (!siteCache) return null;
-  if (siteCache.expires_at && siteCache.expires_at * 1e3 < Date.now()) return null;
   let p;
   try {
     p = new URL(url, self.location.href).pathname;
   } catch (e) {
     return null;
   }
-  return siteCache.files[p] || null;
+  for (const k of Object.keys(siteCaches)) {
+    const sc = siteCaches[k];
+    if (!sc || sc.expires_at && sc.expires_at * 1e3 < Date.now()) continue;
+    const f = sc.files[p];
+    if (f) return { sha256: f.sha256, size: f.size, box: sc.url, token: sc.token };
+  }
+  return null;
 }
 function hexOf(buf) {
   const b = new Uint8Array(buf);
@@ -393,8 +429,8 @@ function siteCacheOnce(entry) {
     let timer = setTimeout(() => ctrl.abort(), SITE_FIRST_BYTE_MS);
     let res;
     try {
-      res = yield fetch(siteCache.url + "/cache/" + entry.sha256, {
-        headers: { Authorization: "Bearer " + siteCache.token },
+      res = yield fetch(entry.box + "/cache/" + entry.sha256, {
+        headers: { Authorization: "Bearer " + entry.token },
         mode: "cors",
         credentials: "omit",
         cache: "no-store",

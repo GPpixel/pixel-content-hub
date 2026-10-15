@@ -46,6 +46,64 @@ Since 3.0 the link always wins when it is valid:
 > those versions, clear the device browser's site data for your ScreenTinker address (or reinstall
 > the casting app) and open the link again. (GitHub #630)
 
+### Any display can have a display link
+
+A display paired with a code has no link to start with. Its **Web player** tab offers **Create a
+web player link** (editors and admins; view-only members see that there is none). The link is just
+another way to identify the same display: the player it already has keeps its own credentials and
+carries on undisturbed. Open the link anywhere else and that browser shows the same display.
+
+### Opening one link in several places: mirrors
+
+A display link may be open in more than one place at the same time, for example the lobby TV and
+the reception PC, or Chrome and Firefox on the same machine. The first place is the display itself.
+Every other place that opens the link while the display is on becomes a **mirror**:
+
+- It shows exactly what the display shows: playlist, layout, schedules, power schedule, background,
+  orientation, emergency alerts. Change content on the original display; a mirror has no content
+  settings of its own (its page says so and links back).
+- It is a screen of its own for everything about the physical screen: online/offline status,
+  screenshots and the live view, screen verification, proof-of-play (reports show where content
+  actually played), energy. It is named "*Display* (mirror 1)", shows where it is open
+  ("Chrome on Windows · 10.0.0.5"), and can be renamed.
+- The original's **Web player** tab lists its mirrors (status, where, last seen, **Remove**). Screen
+  cards show "+2 mirrors"; the Simple view lists them under their display.
+- **It counts as a screen** on your plan. If the plan has no screen to spare, the new place shows
+  "This display is already showing somewhere else" with the reason, instead of a blank "Waiting for
+  content".
+- The same browser reopening the link (a reload, a reboot) comes back as **the same mirror**, never a
+  new one. A browser restarting on the original's own machine is the original again, not a mirror:
+  only a *different* browser (a different install) opening the link while the original is on makes a
+  mirror.
+- **Remove** disconnects that place for good: it shows "This mirror was removed" and stops. Only
+  opening the link there again brings it back. (A player older than 3.0 does not know this message;
+  it re-pairs and, if the display is on, comes back as a new mirror. Update it or close the link
+  there.) Removing the original display removes its mirrors.
+- **New URL** on the original stops new mirrors (the old link no longer works). Existing mirrors keep
+  working with their own credentials until you remove them.
+
+Before 3.0 every opening of a link registered as the same display and pushed the previous one off;
+the screens took turns playing, the other one said "Waiting for content", and the remote view
+flipped between them. If one identity is still claimed by two live connections (two tabs of the
+same link in the same browser profile, or a copied player install), the server stops the
+alternation after a short burst and keeps the one that is connected.
+
+### Several display links in one browser
+
+Each display link keeps its own storage in the browser (identity, install id, playlist and layout
+caches, trigger and sync settings, offline proof-of-play), named after the link. Two different
+links open in two windows of one browser are two independent displays: reloading either one, or
+starting either one offline, never turns it into the other. Plain `/player` (no `k=`) keeps the
+storage it always had, so existing screens keep their identity. A link page from before 3.0 moves
+its identity into its own storage the first time it loads. Use separate windows, not background
+tabs, for screens people watch: a hidden tab is not drawn and browsers throttle it.
+
+The service worker's media cache is shared (files are named by their content), and it keeps what
+every display open in the browser needs rather than only the last one that asked.
+
+These mechanisms are standard browser storage and Socket.IO, so they behave the same in Chrome,
+Edge, Firefox and Safari. The automated end-to-end tests run in headless Chrome.
+
 ### Troubleshooting a display link
 
 | What the screen shows | What it means | What to do |
@@ -54,6 +112,8 @@ Since 3.0 the link always wins when it is valid:
 | A pairing code **with** a note about the display link | The server does not know this key | Copy the display's current link from its dashboard page into the device, or pair with the code |
 | A pairing code **without** that note | The device was not opened with a `?k=` link (check the start URL; some devices drop the query string) | Check the start URL carries `?k=…` |
 | "Tap anywhere to start" | Normal cold start, see sound below | Nothing, it continues by itself after 5 seconds |
+| "This mirror was removed" | Someone removed this place's mirror on the dashboard | Press **Show it here again**, or open the link again |
+| "This display is already showing somewhere else" | The link is open elsewhere and a mirror could not be added (the plan has no screen to spare) | Free a screen or upgrade, then **Try again** |
 
 ## Starting with sound (`?autoplay_audio=1`)
 

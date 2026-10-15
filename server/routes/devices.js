@@ -510,7 +510,7 @@ router.get('/:id', (req, res) => {
   // that never reported one, or whose block is unreadable — the card simply does not render.
   const edid = require('../lib/edid').parseEdid(device.hardware_edid);
 
-  res.json({ ...stripDeviceSecrets(device), tags: parseTags(device.tags), group_ids: groupIdsByDevice([device.id])[device.id] || [], local_weather: require('../lib/local-conditions').readingFor(device), capabilities, edid, telemetry, screenshot, assignments, active_layout_zones, playlist_status, playlist_has_published, uptimeData, statusLog, deviceEvents });
+  res.json({ ...stripDeviceSecrets(device), tags: parseTags(device.tags), group_ids: groupIdsByDevice([device.id])[device.id] || [], local_weather: require('../lib/local-conditions').readingFor(device), capabilities, edid, telemetry, screenshot, assignments, active_layout_zones, playlist_status, playlist_has_published, uptimeData, statusLog, deviceEvents, ...mirrorFields(device) });
 });
 
 /*
@@ -529,6 +529,23 @@ function corpDeviceRouteRefused(req, res, actionLabel) {
 // Phase 2.2a: replaces user_id + team_members check. Allows: platform_admin,
 // org_owner/admin of the device's org (acting-as), workspace_admin/editor of
 // the device's workspace. Denies workspace_viewer and non-members.
+/*
+ * 3.0 display-link mirrors (lib/mirrors.js) on the device detail: an original lists its mirrors, a
+ * mirror names the original it plays. Same workspace by construction (a mirror is created in its
+ * original's workspace), so the caller's read access to this device covers both.
+ */
+function mirrorFields(device) {
+  const mirrorsLib = require('../lib/mirrors');
+  if (device.mirror_of) {
+    const src = db.prepare('SELECT id, name, status FROM devices WHERE id = ? AND workspace_id IS ?').get(device.mirror_of, device.workspace_id);
+    return { mirror_source: src || null, mirrors: [] };
+  }
+  const list = mirrorsLib.mirrorsOf(device.id).map((m) => ({
+    id: m.id, name: m.name, status: m.status, last_heartbeat: m.last_heartbeat, location: m.mirror_location || null, created_at: m.created_at,
+  }));
+  return { mirror_source: null, mirrors: list };
+}
+
 function checkDeviceOwnership(req, res) {
   const device = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
   if (!device) { res.status(404).json({ error: 'Device not found' }); return null; }
@@ -1276,6 +1293,8 @@ router.post('/:id/settings-pin', (req, res) => {
 router.post('/:id/enrol-key', requireScope('full'), (req, res) => {
   const device = checkDeviceOwnership(req, res);
   if (!device) return;
+  // 3.0 mirrors: a link always names the ORIGINAL; a mirror is what a second opening of it becomes.
+  if (device.mirror_of) return res.status(409).json({ error: 'This screen is a mirror. Its display link is the original display’s link: open the original to see or replace it.', code: 'MIRROR' });
   const key = enrolKey.setEnrolKey(db, req.params.id);
   const rolled = !!device.enrol_key;
   console.warn(`[enrol] ${rolled ? 'rolled' : 'minted'} enrolment key for device ${req.params.id} (user ${req.user.id})`);
@@ -1456,32 +1475,46 @@ router.delete('/:id', (req, res) => {
   // #150: snapshot this device's settings (keyed by its fingerprint) BEFORE the row dies,
   // so a re-pair of the SAME physical device restores orientation/name/playlist/etc instead
   // of silently resetting to defaults. No-op if the device has no fingerprint link yet.
-  try { deviceSettings.snapshot(req.params.id); } catch (e) { console.warn(`[#150] settings snapshot failed for ${req.params.id}: ${e.message}`); }
+  // (Not for a mirror: it has no settings of its own to restore.)
+  if (!device.mirror_of) try { deviceSettings.snapshot(req.params.id); } catch (e) { console.warn(`[#150] settings snapshot failed for ${req.params.id}: ${e.message}`); }
 
   // Allowed on a head office screen (physical access is out of the threat model), but recorded.
   require('../lib/corporate/guard').auditMandatedAction(req, device, 'delete');
 
-  // Clean up related data (playlist is NOT deleted — may be shared with other devices)
-  db.prepare('DELETE FROM schedules WHERE device_id = ?').run(req.params.id);
-  // Head office mandates / slot content / emergency scopes naming this screen (no FK cascades them).
-  require('../lib/corporate/cleanup').removeTargets(db, 'device', req.params.id);
-  db.prepare('DELETE FROM screenshots WHERE device_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM device_telemetry WHERE device_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM video_wall_devices WHERE device_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM devices WHERE id = ?').run(req.params.id);
-
-  // Notify dashboard in real-time. Phase 2.3: scope to the device's
-  // (now-deleted but still-known) workspace room. `device.workspace_id`
-  // came from checkDeviceOwnership() above.
+  /*
+   * 3.0 mirrors: removing an original removes its mirrors (they play nothing without it), and
+   * removing a mirror tells that opening so — a player that understands it shows "This mirror was
+   * removed" and stops, instead of re-registering with the link and becoming a mirror again.
+   */
+  const removed = [req.params.id, ...(device.mirror_of ? [] : require('../lib/mirrors').mirrorsOf(req.params.id).map((m) => m.id))];
   const io = req.app.get('io');
-  if (io) {
-    const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
-    emitToWorkspace(io.of('/dashboard'), workspaceRoom(device.workspace_id), 'dashboard:device-removed', { device_id: req.params.id });
-    // Tell the screen now. Without this a connected player only learned on its next register (a
-    // reconnect, or an app restart), and sat on its old content until then. `reason: 'deleted'` is
-    // what lets a player wipe its downloads: the not_found a register gets is also what a restored
-    // backup or an unreplicated edge says, so players must never wipe on that.
-    io.of('/device').to(req.params.id).emit('device:unpaired', { reason: 'deleted' });
+  for (const id of removed) {
+    // Clean up related data (playlist is NOT deleted — may be shared with other devices)
+    db.prepare('DELETE FROM schedules WHERE device_id = ?').run(id);
+    // Head office mandates / slot content / emergency scopes naming this screen (no FK cascades them).
+    require('../lib/corporate/cleanup').removeTargets(db, 'device', id);
+    db.prepare('DELETE FROM screenshots WHERE device_id = ?').run(id);
+    db.prepare('DELETE FROM device_telemetry WHERE device_id = ?').run(id);
+    db.prepare('DELETE FROM video_wall_devices WHERE device_id = ?').run(id);
+    db.prepare('DELETE FROM devices WHERE id = ?').run(id);
+
+    // Notify dashboard in real-time. Phase 2.3: scope to the device's
+    // (now-deleted but still-known) workspace room. `device.workspace_id`
+    // came from checkDeviceOwnership() above.
+    if (io) {
+      const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
+      emitToWorkspace(io.of('/dashboard'), workspaceRoom(device.workspace_id), 'dashboard:device-removed', { device_id: id });
+      const mirrorGone = id !== req.params.id || !!device.mirror_of;
+      if (mirrorGone) io.of('/device').to(id).emit('device:mirror-removed', { device_id: id });
+      // Tell the screen now. Without this a connected player only learned on its next register (a
+      // reconnect, or an app restart), and sat on its old content until then. `reason: 'deleted'` is
+      // what lets a player wipe its downloads: the not_found a register gets is also what a restored
+      // backup or an unreplicated edge says, so players must never wipe on that.
+      io.of('/device').to(id).emit('device:unpaired', { reason: 'deleted' });
+    }
+  }
+  if (removed.length > 1 || device.mirror_of) {
+    require('../lib/audit').auditFromReq(req, 'device.mirror_removed', { workspace_id: device.workspace_id, device_id: req.params.id, removed: removed.length });
   }
 
   res.json({ success: true });

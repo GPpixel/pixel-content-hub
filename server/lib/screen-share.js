@@ -266,9 +266,9 @@ function sessionsForShare(shareId) {
  * [{ id, via }] where via is null for a screen that was asked for and 'mirror' for one added because
  * it mirrors one that was.
  *
- * TODO(mirrors): when MIRROR displays land (devices.mirror_of + mirrorsOf(deviceId)), add each
- * requested screen's mirrors here — the one line marked below. Every caller already treats a
- * 'mirror' entry as best-effort (skipped, not refused, when the sharer cannot reach it).
+ * Each requested screen's MIRRORS (lib/mirrors.js: the same display link open somewhere else) are
+ * added after it, so sharing to a display also reaches the places it is showing. Every caller
+ * treats a 'mirror' entry as best-effort (skipped, not refused, when the sharer cannot reach it).
  */
 function expandShareTargets(deviceIds) {
   const out = [];
@@ -276,7 +276,7 @@ function expandShareTargets(deviceIds) {
   const add = (id, via) => { const k = String(id || ''); if (k && !seen.has(k)) { seen.add(k); out.push({ id: k, via }); } };
   for (const id of deviceIds || []) {
     add(id, null);
-    const mirrors = [];   // TODO(mirrors): = require('./mirrors').mirrorsOf(id) — one line at merge
+    const mirrors = require('./mirrors').mirrorsOf(id);
     for (const m of mirrors) add(m && m.id ? m.id : m, 'mirror');
   }
   return out;

@@ -8,6 +8,10 @@ const config = require('../config');
 const heartbeat = require('../services/heartbeat');
 const bootDefer = require('../lib/boot-defer');   // 2.0.1 first-boot player defer
 const enrolKey = require('../lib/enrol-key');     // #313 URL-carried display identity
+const mirrors = require('../lib/mirrors');         // 3.0 display-link mirrors
+// A display whose socket has sent nothing for this long is treated as going away (players beat every
+// 15s): a new opening replaces it rather than becoming its mirror.
+const MIRROR_LIVE_MS = 40 * 1000;
 const liveness = require('../lib/liveness'); // v4 core pass: pure ack/liveness/identity helpers
 const commandQueue = require('../lib/command-queue');
 const nowPlaying = require('../lib/now-playing');
@@ -584,7 +588,39 @@ const { triggersForDevice, projectTrigger } = require('../lib/device-triggers');
  *   - trace: an object the builder fills with what it left out (items this player cannot play, and
  *     the items before the weather/area filter), so the preview can say WHY rather than guess.
  */
+/*
+ * 3.0 display-link mirrors (lib/mirrors.js): a mirror follows its original — playlist, layout,
+ * schedules, power schedule, background, orientation, overrides, everything about CONTENT is the
+ * original's, resolved at payload time like a group member inherits its group's. What stays the
+ * mirror's own is what belongs to a physical screen in one place:
+ *   - wall_config: the mirror is not a tile of the original's wall and never gets its wall:sync;
+ *   - trigger_config / local_api: LAN listener secrets for the original's network, not this one;
+ *   - site_cache: a token minted for the original's LAN box;
+ *   - audience: counted per screen.
+ * Capability filtering is the original's (the mirror is nearly always a browser showing a browser's
+ * link). `mirror_of` is additive; players ignore it.
+ */
+function asMirrorPayload(p, mirrorId, sourceId) {
+  if (!p || typeof p !== 'object' || p.suspended) return p;
+  p.wall_config = null;
+  p.trigger_config = null;
+  p.local_api = null;
+  delete p.site_cache;
+  try { p.audience = require('../lib/audience').payloadConfig(mirrorId); } catch (e) { p.audience = null; }
+  p.mirror_of = sourceId;
+  return p;
+}
+
 function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
+  if (!opts._mirrorHop) {
+    const mirrorSource = require('../lib/mirrors').sourceOf(deviceId);
+    if (mirrorSource) {
+      // A forecast's `resolved` describes the MIRROR's own (empty) resolution, which a mirror never
+      // plays; the original's is resolved afresh.
+      const { resolved, ...rest } = opts;
+      return asMirrorPayload(buildPlaylistPayloadUnchecked(mirrorSource, { ...rest, _mirrorHop: true }), deviceId, mirrorSource);
+    }
+  }
   /*
    * ⚠️ playlist_id comes from the RESOLVER, not from the devices row.
    *
@@ -1362,6 +1398,12 @@ function buildPlaylistPayload(deviceId) {
   const access = checkDeviceAccess(deviceId);
   if (!access.allowed) {
     return { assignments: [], suspended: true, reason: access.reason, message: access.message, detail: access.detail };
+  }
+  // A mirror is held to its own place in the plan (above) AND goes dark with its original.
+  const mirrorSource = require('../lib/mirrors').sourceOf(deviceId);
+  if (mirrorSource) {
+    const src = checkDeviceAccess(mirrorSource);
+    if (!src.allowed) return { assignments: [], suspended: true, reason: src.reason, message: src.message, detail: src.detail };
   }
   return buildPlaylistPayloadUnchecked(deviceId);
 }
@@ -2184,6 +2226,36 @@ module.exports = function setupDeviceSocket(io) {
     }
   }
 
+  /*
+   * 3.0 mirrors: what a `?k=` register for display `originalId` from install `fingerprint` is.
+   * { mirror, created } | { refused } | {} (= the original itself, today's path).
+   */
+  function mirrorDecision(originalId, fingerprint, socket) {
+    if (!fingerprint || typeof fingerprint !== 'string') return {};
+    const own = mirrors.findMirror(originalId, fingerprint);
+    if (own) return { mirror: own };
+    const conn = heartbeat.getConnection(originalId);
+    const incumbent = conn && conn.socketId !== socket.id ? deviceNs.sockets.get(conn.socketId) : null;
+    if (!incumbent) return {};
+    // A socket that has gone quiet is a dying one (a reboot, a vMix restart): replace it, as ever.
+    if (!(Date.now() - (conn.lastHeartbeat || 0) < MIRROR_LIVE_MS)) return {};
+    const theirs = incumbent.data && incumbent.data.stFingerprint;
+    if (!theirs || theirs === fingerprint) return {};
+    const original = db.prepare('SELECT * FROM devices WHERE id = ?').get(originalId);
+    if (!original || original.mirror_of) return {};   // links always point at an original
+    const out = mirrors.createMirror(original, {
+      fingerprint, userAgent: socket.handshake && socket.handshake.headers && socket.handshake.headers['user-agent'], ip: getClientIp(socket),
+    });
+    if (out.refused) return { refused: out.refused };
+    try {
+      require('../lib/audit').audit('device.mirror_created', { deviceId: out.mirror.id, workspaceId: original.workspace_id,
+        ip: getClientIp(socket), details: { mirror_of: original.id, location: out.mirror.mirror_location } });
+      emitToDeviceWorkspace(dashboardNs, out.mirror.id, 'dashboard:device-added',
+        require('../lib/device-sanitize').stripDeviceSecretsForList({ ...out.mirror }));
+    } catch (e) { /* the dashboard refreshes anyway */ }
+    return { mirror: out.mirror, created: true };
+  }
+
   deviceNs.on('connection', (socket) => {
     /*
      * ⚠️ BOOT DEFER REFUSES *AFTER* ACCEPTING, AND THAT DISTINCTION IS THE WHOLE FIX.
@@ -2398,6 +2470,9 @@ module.exports = function setupDeviceSocket(io) {
     socket.on('device:register', (data) => {
       // `let`, because the enrolment-key exchange below may fill in device_id/device_token.
       let { pairing_code, device_id, device_token, device_info, fingerprint, hw_fingerprint } = data;
+      // 3.0 mirrors: which install this socket is, so a later `?k=` register can tell "the same
+      // browser reconnecting" from "the link opened somewhere else" (mirrorDecision).
+      if (typeof fingerprint === 'string' && fingerprint) socket.data.stFingerprint = fingerprint.slice(0, 200);
 
       /*
        * #313 — ENROLMENT KEY EXCHANGE, and it is deliberately the FIRST thing in this handler.
@@ -2431,7 +2506,8 @@ module.exports = function setupDeviceSocket(io) {
        */
       const presentedKey = data.enrol_key;
       const resolvedKey = presentedKey && device_id ? enrolKey.resolveEnrolKey(db, presentedKey) : null;
-      if (resolvedKey && resolvedKey.id !== device_id) {
+      // (A mirror presenting its own stored id is not a replacement: it is resolved back below.)
+      if (resolvedKey && resolvedKey.id !== device_id && mirrors.sourceOf(device_id) !== resolvedKey.id) {
         console.log(`[enrol] ${resolvedKey.id} identified by enrolment key, replacing the player's stored identity ${String(device_id).slice(0, 36)}`);
       }
       if (resolvedKey) device_id = null;   // re-enter the exchange below with the key's identity
@@ -2493,6 +2569,31 @@ module.exports = function setupDeviceSocket(io) {
             console.log(`[enrol] ${resolved.id} had no device token — issued one`);
           }
           if (!resolvedKey) console.log(`[enrol] ${resolved.id} identified by enrolment key`);
+
+          /*
+           * 3.0 MIRRORS (lib/mirrors.js). The key names display X. If THIS install already owns a
+           * mirror of X, it is that mirror — whether or not X is on right now, so a mirror that
+           * reloads never turns into the original or into a second mirror. Otherwise, if X is LIVE
+           * on a socket from a DIFFERENT install, this opening becomes a new mirror instead of
+           * evicting it (which is what made two openings take turns). The same install
+           * reconnecting falls through to the ordinary eviction below, so a reload, a reboot or a
+           * vMix restart never spawns a mirror.
+           */
+          const m = mirrorDecision(resolved.id, fingerprint, socket);
+          if (m.refused) {
+            console.warn(`[mirror] ${resolved.id}: not opening a mirror from ${getClientIp(socket)} — ${m.refused.reason}`);
+            // New players show m.refused.error and stop; old ones honour the throttle and retry later.
+            socket.emit('device:mirror-refused', m.refused);
+            socket.emit('device:throttled', { retry_after_ms: 5 * 60 * 1000, reason: m.refused.reason });
+            evictedSockets.add(socket.id);
+            process.nextTick(() => { try { socket.disconnect(true); } catch (_) { evictedSockets.delete(socket.id); } });
+            return;
+          }
+          if (m.mirror) {
+            if (m.created) console.log(`[mirror] ${resolved.id}: opened in another place (${m.mirror.mirror_location}) — created mirror ${m.mirror.id}`);
+            device_id = m.mirror.id;
+            device_token = m.mirror.device_token;
+          }
         }
       }
 
@@ -2856,6 +2957,26 @@ module.exports = function setupDeviceSocket(io) {
             socket.emit('device:throttled', { retry_after_ms: config.sessionSettleWindowMs, reason: 'session_settle' });
             process.nextTick(() => { try { socket.disconnect(true); } catch (_) { evictedSockets.delete(socket.id); } });
             return;
+          }
+          /*
+           * 3.0 PING-PONG GUARD (lib/mirrors.js). Different installs on one link become mirrors;
+           * what can still alternate is one display claimed by two live sockets of the SAME
+           * identity (two tabs of one link in one browser profile, a cloned install). Each register
+           * would evict the other for ever. After a burst of such evictions keep the live incumbent
+           * and soft-refuse the newcomer, with a reason, through the same throttle the players
+           * already honour.
+           */
+          const incumbentFresh = incumbentAlive && (Date.now() - (priorConn.lastHeartbeat || 0) < MIRROR_LIVE_MS);
+          if (incumbentFresh) {
+            const pp = mirrors.pingPongVerdict(device_id);
+            if (pp.refuse) {
+              logCoalescer.record(`pingpong:${device_id}`, `[ping-pong] device ${device_id} is open in two places with one identity; keeping ${priorConn.socketId}, refusing ${socket.id}`);
+              evictedSockets.add(socket.id);
+              socket.emit('device:throttled', { retry_after_ms: pp.retryAfterMs, reason: 'display_open_elsewhere' });
+              process.nextTick(() => { try { socket.disconnect(true); } catch (_) { evictedSockets.delete(socket.id); } });
+              return;
+            }
+            mirrors.noteEviction(device_id);
           }
 
           currentDeviceId = device_id;

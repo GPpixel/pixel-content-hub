@@ -3163,6 +3163,11 @@ a.stock-credit:hover { text-decoration: underline; color: var(--text-secondary);
 .pat-table th { color: var(--text-muted); font-weight: 500; }
 .simple-screen-wrap { display: grid; gap: 4px; align-content: start; }
 .simple-coming { font-size: 13px; padding: 0 4px; }
+/* 3.0 display-link mirrors: the same display open in other places, listed under it. */
+.simple-mirrors { font-size: 13px; padding: 0 4px; display: grid; gap: 4px; }
+.simple-mirrors p { margin: 0; }
+.simple-mirror { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.simple-mirror .simple-screen-name { font-size: 13px; }
 .simple-coming summary { cursor: pointer; color: var(--text-secondary); padding: 4px 0; }
 .simple-coming ul { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 4px; }
 .simple-coming-now { margin: 4px 0; color: var(--text-primary); }

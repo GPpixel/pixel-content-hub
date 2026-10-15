@@ -212,6 +212,15 @@ function applyCardFields(root) {
   for (const f of CARD_FIELDS) root.classList.toggle(`hide-card-${f}`, hidden.includes(f));
 }
 
+let mirrorCounts = new Map();   // original id -> number of mirrors in the loaded list
+
+function mirrorBadge(device) {
+  const n = mirrorCounts.get(device.id) || 0;
+  const label = device.mirror_of ? t('dashboard.mirror_badge') : (n ? tn('dashboard.mirrors_badge', n) : '');
+  if (!label) return '';
+  return ` <span class="device-mirror-badge" title="${esc(t('dashboard.mirror_badge_tip'))}" style="margin-left:6px;font-size:11px;color:var(--text-secondary);background:var(--bg-primary);padding:1px 6px;border-radius:8px;vertical-align:middle">${esc(label)}</span>`;
+}
+
 function renderDeviceCard(device) {
   const token = localStorage.getItem('token');
   // ⚠️ NOT named screenshotUrl: that is the imported helper, and a const of the same name shadows
@@ -262,7 +271,7 @@ function renderDeviceCard(device) {
         </div>
       </div>
       <div class="device-card-body">
-        <div class="device-card-name">${esc(device.name)}${device.orphan_count > 0 ? `
+        <div class="device-card-name">${esc(device.name)}${mirrorBadge(device)}${device.orphan_count > 0 ? `
           <span class="device-orphan-badge" title="${tn('dashboard.device_orphan_tip', device.orphan_count)}" style="margin-left:6px;display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--danger);vertical-align:middle">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>${device.orphan_count}
           </span>` : ''}${device.ota_status === 'manual_update_required' ? `
@@ -1196,6 +1205,9 @@ async function loadDashboard() {
     const seen = new Map();
     for (const d of rawDevices) seen.set(d.id, d);
     const devices = Array.from(seen.values());
+    // 3.0 display-link mirrors: "+2 mirrors" on an original's card, "Mirror" on each mirror's.
+    mirrorCounts = new Map();
+    for (const d of devices) if (d.mirror_of) mirrorCounts.set(d.mirror_of, (mirrorCounts.get(d.mirror_of) || 0) + 1);
     await loadServedApkVersion();   // #467: before any card renders, so "behind" is decided once
     fillVersionFilter(devices);
     fillTagFilter(devices);

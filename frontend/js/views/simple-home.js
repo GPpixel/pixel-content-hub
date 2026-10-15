@@ -190,7 +190,27 @@ async function renderHome(container) {
   // 3.0 screen share: an editor gets "Share my screen" under each screen that can show one.
   const sharing = canChange && await screenShareOn();
   if (!document.contains(host)) return;
-  host.innerHTML = devices.map((d) => {
+  /*
+   * 3.0 display-link mirrors: a mirror is the same display open somewhere else, so it sits under
+   * its original (a smaller card that says where it is) rather than as a screen of its own.
+   */
+  const originals = new Set(devices.filter((d) => !d.mirror_of).map((d) => d.id));
+  const mirrorsByOriginal = new Map();
+  for (const d of devices) {
+    if (d.mirror_of && originals.has(d.mirror_of)) {
+      if (!mirrorsByOriginal.has(d.mirror_of)) mirrorsByOriginal.set(d.mirror_of, []);
+      mirrorsByOriginal.get(d.mirror_of).push(d);
+    }
+  }
+  const mirrorLines = (d) => {
+    const list = mirrorsByOriginal.get(d.id) || [];
+    if (!list.length) return '';
+    return `<div class="simple-mirrors"><p class="simple-muted">${esc(tn('simple.mirrors.title', list.length))}</p>${list.map((m) => `
+      <div class="simple-mirror"><span class="simple-screen-name">${esc(m.name)}</span>
+        <span class="simple-muted">${esc(m.mirror_location || '')}</span>
+        <span class="simple-screen-status ${online(m) ? 'on' : 'off'}">${esc(online(m) ? t('simple.status.online') : t('simple.status.offline'))}</span></div>`).join('')}</div>`;
+  };
+  host.innerHTML = devices.filter((d) => !(d.mirror_of && originals.has(d.mirror_of))).map((d) => {
     const card = `
     <${tag} class="simple-screen" ${canChange ? `href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}"` : ''}>
       <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
@@ -200,7 +220,7 @@ async function renderHome(container) {
     // Screen share (an editor, on a screen that can show one) and "What's coming up" under each card.
     const share = sharing && canShareTo(d) ? `
       <a class="btn btn-secondary btn-sm simple-screen-share" href="#/simple/share?device=${encodeURIComponent(d.id)}">&#128421;&#65039; ${esc(t('screen_share.start'))}</a>` : '';
-    return `<div class="simple-screen-wrap">${card}${share}
+    return `<div class="simple-screen-wrap">${card}${mirrorLines(d)}${share}
     <details class="simple-coming" data-coming="${esc(d.id)}"><summary>${esc(t('simple.coming.title'))}</summary><div class="simple-coming-body"></div></details>
     </div>`;
   }).join('');
