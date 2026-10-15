@@ -190,11 +190,11 @@ self.addEventListener('message', (event) => {
    * empty. Never sent for reason 'not_found', which a restored backup also produces.
    */
   if (data && data.type === 'st-device-deleted' && Array.isArray(data.keep)) {
-    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.keep)).catch(() => {});
+    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.keep, data.scope)).catch(() => {});
     return;
   }
   if (data && data.type === 'st-site-cache') {
-    setSiteCache(data.config);
+    setSiteCache(data.config, data.scope);
     return;
   }
   if (!data || data.type !== 'st-cache-playlist' || !Array.isArray(data.urls)) return;
@@ -215,7 +215,7 @@ self.addEventListener('message', (event) => {
   // kept too long costs disk the quota reclaims anyway; one dropped at the wrong moment is a dark
   // screen with no way back.
   if (data.prune && data.urls.length > 0) {
-    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.urls)).catch(() => {});
+    prefetchChain = prefetchChain.then(() => pruneToPlaylist(data.urls, data.scope)).catch(() => {});
   }
 
   for (const url of data.urls) {
@@ -329,9 +329,37 @@ async function ensureCached(url) {
   await sweepOldRevisions(cache, url);
 }
 
-async function pruneToPlaylist(urls) {
+/*
+ * 3.0: the content cache is shared by every display open in this browser (two display links in two
+ * tabs), and "everything not in MY list can go" deleted the other display's media on every sweep —
+ * then its offline cold start had nothing to play. Each page names its storage scope ('' for plain
+ * /player), the worker remembers the latest list per scope, and prunes to the UNION. A scope not
+ * heard from in KEEP_SCOPE_DAYS is forgotten, so a link closed for good stops pinning its media.
+ * With one scope this is exactly the old behaviour.
+ */
+const KEEP_SCOPES_KEY = '/__st_keep_scopes__';
+const KEEP_SCOPE_DAYS = 14;
+async function keepSetFor(urls, scope) {
+  const key = typeof scope === 'string' ? scope.slice(0, 64) : '';
+  let scopes = {};
+  try {
+    const store = await caches.open(SITE_CACHE_STORE);
+    const hit = await store.match(KEEP_SCOPES_KEY);
+    if (hit) scopes = (await hit.json()) || {};
+    scopes[key] = { urls, at: Date.now() };
+    for (const k of Object.keys(scopes)) {
+      if (!scopes[k] || !Array.isArray(scopes[k].urls) || Date.now() - (scopes[k].at || 0) > KEEP_SCOPE_DAYS * 86400000) delete scopes[k];
+    }
+    await store.put(KEEP_SCOPES_KEY, new Response(JSON.stringify(scopes), { headers: { 'Content-Type': 'application/json' } }));
+  } catch (e) { scopes = { [key]: { urls } }; }
+  const all = new Set();
+  for (const k of Object.keys(scopes)) for (const u of scopes[k].urls) all.add(u);
+  return all;
+}
+
+async function pruneToPlaylist(urls, scope) {
   const cache = await caches.open(CONTENT_CACHE);
-  const keep = new Set(urls);
+  const keep = await keepSetFor(urls, scope);
   for (const key of await cache.keys()) {
     if (keep.has(key.url)) continue;
     // An in-flight transfer's bookkeeping belongs to a URL that IS in the keep set; deleting it
@@ -506,7 +534,12 @@ const SITE_DOWN_MS = 60 * 1000;
 // before giving up and taking the asset from the origin — the whole point is one WAN download.
 const SITE_WARM_WAIT_MS = 3 * 60 * 1000;
 
-let siteCache = null;
+/*
+ * Keyed by the page's storage SCOPE (3.0: one per display link open in this browser; '' for plain
+ * /player). Two displays in two tabs each hand over their own box config, and a single global used
+ * to let the last tab to speak replace the other's — its media then always went to the origin.
+ */
+let siteCaches = {};
 let siteCacheLoaded = null;
 let siteDownUntil = 0;
 
@@ -521,14 +554,19 @@ function validSiteConfig(c) {
   return { url: c.url, token: c.token, expires_at: Number(c.expires_at) || 0, files: files };
 }
 
-function setSiteCache(config) {
-  siteCache = validSiteConfig(config);
-  siteCacheLoaded = Promise.resolve();
-  siteDownUntil = 0;
-  // Persisted so a worker the browser stopped and restarted still knows where the box is.
-  caches.open(SITE_CACHE_STORE).then((c) => siteCache
-    ? c.put(SITE_CACHE_KEY, new Response(JSON.stringify(siteCache), { headers: { 'Content-Type': 'application/json' } }))
-    : c.delete(SITE_CACHE_KEY)).catch(() => {});
+function setSiteCache(config, scope) {
+  const sc = validSiteConfig(config);
+  const key = typeof scope === 'string' ? scope.slice(0, 64) : '';
+  const apply = () => {
+    if (sc) siteCaches[key] = sc; else delete siteCaches[key];
+    siteDownUntil = 0;
+    // Persisted so a worker the browser stopped and restarted still knows where the box is.
+    return caches.open(SITE_CACHE_STORE).then((c) => Object.keys(siteCaches).length
+      ? c.put(SITE_CACHE_KEY, new Response(JSON.stringify({ scopes: siteCaches }), { headers: { 'Content-Type': 'application/json' } }))
+      : c.delete(SITE_CACHE_KEY)).catch(() => {});
+  };
+  // After the persisted map is in, or a fresh worker's first message would drop the other scopes.
+  siteCacheLoaded = loadSiteCache().then(apply);
 }
 
 function loadSiteCache() {
@@ -536,18 +574,30 @@ function loadSiteCache() {
     siteCacheLoaded = caches.open(SITE_CACHE_STORE)
       .then((c) => c.match(SITE_CACHE_KEY))
       .then((r) => (r ? r.json() : null))
-      .then((j) => { if (!siteCache) siteCache = validSiteConfig(j); })
+      .then((j) => {
+        // Before 3.0 this held ONE config, the shape plain /player still means by scope ''.
+        const stored = j && j.scopes && typeof j.scopes === 'object' ? j.scopes : (j ? { '': j } : {});
+        for (const k of Object.keys(stored)) {
+          const v = validSiteConfig(stored[k]);
+          if (v && !(k in siteCaches)) siteCaches[k] = v;
+        }
+      })
       .catch(() => {});
   }
   return siteCacheLoaded;
 }
 
 function siteEntryFor(url) {
-  if (!siteCache) return null;
-  if (siteCache.expires_at && siteCache.expires_at * 1000 < Date.now()) return null;
   let p;
   try { p = new URL(url, self.location.href).pathname; } catch (e) { return null; }
-  return siteCache.files[p] || null;
+  for (const k of Object.keys(siteCaches)) {
+    const sc = siteCaches[k];
+    if (!sc || (sc.expires_at && sc.expires_at * 1000 < Date.now())) continue;
+    const f = sc.files[p];
+    // The box and token that vouched for this path travel with the entry.
+    if (f) return { sha256: f.sha256, size: f.size, box: sc.url, token: sc.token };
+  }
+  return null;
 }
 
 function hexOf(buf) {
@@ -564,8 +614,8 @@ async function siteCacheOnce(entry) {
   let timer = setTimeout(() => ctrl.abort(), SITE_FIRST_BYTE_MS);
   let res;
   try {
-    res = await fetch(siteCache.url + '/cache/' + entry.sha256, {
-      headers: { Authorization: 'Bearer ' + siteCache.token },
+    res = await fetch(entry.box + '/cache/' + entry.sha256, {
+      headers: { Authorization: 'Bearer ' + entry.token },
       mode: 'cors', credentials: 'omit', cache: 'no-store', redirect: 'error', signal: ctrl.signal,
     });
   } catch (e) {

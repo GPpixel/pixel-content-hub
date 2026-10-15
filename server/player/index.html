@@ -373,6 +373,11 @@
         nothing_scheduled: 'Nothing scheduled right now',
         preview_webpage_blocked: 'If this area is blank, the site blocks being embedded and won’t display on the device either. Try a page that allows embedding.',
         enrol_key_refused: 'This screen was opened with a display link (the k= code in its address) that this server does not recognise. The display may have been deleted, its link replaced, or the link made on a different server. Pair with the code above, or open the display’s current link from the dashboard.',
+        mirror_removed_title: 'This mirror was removed',
+        mirror_removed_body: 'This screen was showing a display link that is also open somewhere else, and it was removed from the dashboard. Open the display link again to show it here.',
+        mirror_refused_title: 'This display is already showing somewhere else',
+        mirror_show_again: 'Show it here again',
+        mirror_try_again: 'Try again',
         // 3.0: screen share (other languages fall back to these until translated)
         share_shared_by: 'Shared by {name}',
         share_guest: 'guest',
@@ -568,9 +573,124 @@
     let viewerEnded = false;
     let viewerLastAnchor = null;
     let viewerJoin = null;          // one-shot { index, offsetMs, until } consumed by scheduleAdvance
+    /*
+     * 3.0 — PER-LINK STORAGE NAMESPACE (docs/web-player.md).
+     *
+     * Two different display links opened in tabs of one browser share this origin's localStorage.
+     * With one set of keys the tabs overwrote each other's identity, install id, playlist cache and
+     * sync config: the stored identity ping-ponged between them, both registered with the SAME
+     * per-install fingerprint, and a reload or an offline cold start could come back as the other
+     * display. So a page opened with ?k= keeps everything per-display under keys suffixed with a
+     * short hash of its link. Plain /player (no k) has an empty suffix and keeps today's keys
+     * exactly, so no existing install loses its identity.
+     *
+     * The hash only names a namespace (the key itself is stored in the config, as before); it is
+     * FNV-1a over two seeds, 64 bits, which is plenty to keep one browser's handful of links apart.
+     */
+    function linkStorageSuffix(k) {
+      if (!k) return '';
+      const h = (seed) => {
+        let x = seed >>> 0;
+        for (let i = 0; i < k.length; i++) { x ^= k.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; }
+        return ('0000000' + x.toString(16)).slice(-8);
+      };
+      return '::' + h(2166136261) + h(0x9747b28c);
+    }
+    const LINK_SUFFIX = VIEWER_MODE ? '' : linkStorageSuffix(urlEnrolKey());
     const SCREEN_SUFFIX = VIEWER_MODE ? '__view' : (() => {
       try { return BS ? (BS.storageSuffix() || '') : ''; } catch (e) { return ''; }
+    })() + LINK_SUFFIX;
+    /*
+     * Migration for a link opened before this namespace existed: its identity is in the
+     * un-namespaced keys, recognisable because the config there carries THIS link's key (every
+     * ?k= page stores it). Move that identity and its caches across once, so the screen keeps its
+     * install id (its fingerprint) and can still cold-start offline. Anything else in the old keys
+     * belongs to another display — or to plain /player — and is left exactly where it is.
+     */
+    (function migrateLinkStorage() {
+      if (!LINK_SUFFIX) return;
+      try {
+        const base = SCREEN_SUFFIX.slice(0, SCREEN_SUFFIX.length - LINK_SUFFIX.length);
+        if (localStorage.getItem('rd_web_player' + SCREEN_SUFFIX) !== null) return;   // already ours
+        let old = null;
+        try { old = JSON.parse(localStorage.getItem('rd_web_player' + base) || 'null'); } catch (e) { old = null; }
+        if (!old || !old.deviceId || old.enrolKey !== urlEnrolKey()) return;
+        const moved = [];
+        for (const name of ['rd_web_player', 'st_install_id', 'rd_playlist_cache', 'rd_layout_cache', 'rd_site_cache',
+                            'rd_trigger_cfg', 'rd_triggers_cache', 'st_kiosk_sessions']) {
+          const v = localStorage.getItem(name + base);
+          if (v === null) continue;
+          localStorage.setItem(name + SCREEN_SUFFIX, v);
+          moved.push(name);
+        }
+        for (const name of ['st_wall_config', 'st_group_sync', 'st_offline_plays']) {
+          const v = localStorage.getItem(name);
+          if (v !== null) { localStorage.setItem(name + LINK_SUFFIX, v); moved.push(name); }
+        }
+        // The identity MOVES (a second tab on another link must not find it and register as us);
+        // the caches are copies, harmless to leave.
+        localStorage.removeItem('rd_web_player' + base);
+        localStorage.removeItem('st_install_id' + base);
+        localStorage.removeItem('st_offline_plays');   // or the backlog would be reported twice
+        console.log('[storage] moved this display link\'s identity into its own namespace:', moved.join(', '));
+      } catch (e) { /* storage unavailable: the key in the URL is still an identity */ }
     })();
+
+    /*
+     * 3.0 display-link MIRRORS (docs/web-player.md). When a display link is open in more than one
+     * place, the server makes each extra opening a MIRROR of the display. Two things the server
+     * can say to one, and both STOP this opening until a person acts:
+     *   - device:mirror-removed — someone removed this mirror on the dashboard. Reconnecting would
+     *     present the link again and simply recreate it, so we hold instead; only opening the link
+     *     afresh (a new tab, or the button) brings it back;
+     *   - device:mirror-refused — no mirror could be made (the plan has no screen to spare). Said
+     *     plainly on the screen rather than as "Waiting for content".
+     * The hold lives in sessionStorage: per tab, survives this tab's reloads, gone in a new tab.
+     */
+    const MIRROR_HOLD_KEY = 'st_mirror_hold' + SCREEN_SUFFIX;
+    let mirrorHold = (function () {
+      try { return JSON.parse(sessionStorage.getItem(MIRROR_HOLD_KEY) || 'null'); } catch (e) { return null; }
+    })();
+    function showMirrorHold(hold) {
+      try {
+        let el = document.getElementById('st-mirror-hold');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'st-mirror-hold';
+          el.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#111827;color:#e5e7eb;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vw;font-family:sans-serif';
+          document.body.appendChild(el);
+        }
+        const removed = hold && hold.kind === 'removed';
+        el.innerHTML = '';
+        const h = document.createElement('h1');
+        h.style.cssText = 'font-size:2.6rem;margin:0 0 1.2rem;color:#f9fafb';
+        h.textContent = _t(removed ? 'mirror_removed_title' : 'mirror_refused_title');
+        const p = document.createElement('p');
+        p.style.cssText = 'font-size:1.4rem;max-width:46rem;line-height:1.5;color:#94a3b8;margin:0 0 2rem';
+        p.textContent = removed ? _t('mirror_removed_body') : String((hold && hold.error) || '');
+        const b = document.createElement('button');
+        b.id = 'st-mirror-again';
+        b.style.cssText = 'font-size:1.2rem;padding:.8rem 1.6rem;border-radius:.5rem;border:0;background:#3b82f6;color:#fff;cursor:pointer';
+        b.textContent = _t(removed ? 'mirror_show_again' : 'mirror_try_again');
+        b.onclick = () => { try { sessionStorage.removeItem(MIRROR_HOLD_KEY); } catch (e) {} location.reload(); };
+        el.appendChild(h); el.appendChild(p); el.appendChild(b);
+      } catch (e) { /* a missing body must not throw out of a socket handler */ }
+    }
+    function enterMirrorHold(hold) {
+      mirrorHold = hold;
+      console.warn('[mirror] holding: ' + hold.kind + (hold.error ? ' — ' + hold.error : ''));
+      try { if (socket) { socket.io.reconnection(false); socket.disconnect(); } } catch (e) {}
+      try { stopReconnectSupervisor(); } catch (e) {}
+      try { if (throttleHoldTimer) { clearTimeout(throttleHoldTimer); throttleHoldTimer = null; } } catch (e) {}
+      let stored = false;
+      try { sessionStorage.setItem(MIRROR_HOLD_KEY, JSON.stringify(hold)); stored = true; } catch (e) {}
+      // A reload is the clean way to stop everything that is playing; the boot path then shows the
+      // message without connecting. BrightSign does not reliably come back from a page reload, so
+      // there (and without sessionStorage) the message covers the page and the media is paused.
+      if (stored && !ON_BRIGHTSIGN) { location.reload(); return; }
+      try { document.querySelectorAll('video,audio').forEach((m) => { try { m.muted = true; m.pause(); } catch (e) {} }); } catch (e) {}
+      showMirrorHold(hold);
+    }
 
     const STORAGE_KEY = 'rd_web_player' + SCREEN_SUFFIX;
     const HEARTBEAT_INTERVAL = 15000;
@@ -839,7 +959,7 @@
         const keep = triggerItems(triggers)
           .filter((it) => it && it.filepath && !it.remote_url)
           .map((it) => mediaUrl(it));
-        sw.postMessage({ type: 'st-device-deleted', keep });
+        sw.postMessage({ type: 'st-device-deleted', keep, scope: SCREEN_SUFFIX });
       } catch (e) { /* best effort */ }
     }
     /*
@@ -884,7 +1004,7 @@
           }
           cfg = { url: sc.url, token: sc.token, expires_at: Number(sc.expires_at) || 0, files };
         }
-        sw.postMessage({ type: 'st-site-cache', config: cfg });
+        sw.postMessage({ type: 'st-site-cache', config: cfg, scope: SCREEN_SUFFIX });
       } catch (e) { /* never let the cache hint break playback */ }
     }
     function requestOfflineCache(items, extraItems) {
@@ -904,7 +1024,7 @@
         // the content cache as superseded. That is what reclaims a replaced asset: a replace writes
         // a new randomly-named file, so the old copy is not merely a different revision of the same
         // URL — it is a different URL entirely, and nothing keyed on the asset path can find it.
-        sw.postMessage({ type: 'st-cache-playlist', urls, prune: true });
+        sw.postMessage({ type: 'st-cache-playlist', urls, prune: true, scope: SCREEN_SUFFIX });
 
         /*
          * ⚠️ AND WARM EACH BUNDLE'S RENDER, because the archive alone is not playable.
@@ -1030,7 +1150,7 @@
       try { token = new URLSearchParams(location.search).get('reset'); } catch (e) { return; }
       if (!token) return;
       try {
-        if (localStorage.getItem('st_reset_applied') === token) return;   // already honoured
+        if (localStorage.getItem('st_reset_applied' + LINK_SUFFIX) === token) return;   // already honoured
         const cfg = getConfig();
         delete cfg.deviceId; delete cfg.deviceToken; delete cfg.pairingCode;
         cfg.paired = false;
@@ -1038,8 +1158,8 @@
         localStorage.removeItem('st_install_id' + SCREEN_SUFFIX);      // mint a NEW identity, not the old one
         localStorage.removeItem(PLAYLIST_CACHE_KEY);
         localStorage.removeItem(LAYOUT_CACHE_KEY);
-        localStorage.removeItem('st_group_sync');
-        localStorage.setItem('st_reset_applied', token);
+        localStorage.removeItem('st_group_sync' + LINK_SUFFIX);
+        localStorage.setItem('st_reset_applied' + LINK_SUFFIX, token);
         console.warn('[reset] identity cleared by ?reset=' + token + ' — this panel will pair as a new device');
         // The shell's copy outlives localStorage. Without this, the next host:ready adopts the
         // identity this reset just dropped. typeof: this IIFE is extracted and run on its own.
@@ -2421,7 +2541,7 @@
      */
     let offlinePlayOpen = null;
     let offlinePlayFlushing = false;
-    const OFFLINE_PLAY_KEY = 'st_offline_plays';
+    const OFFLINE_PLAY_KEY = 'st_offline_plays' + LINK_SUFFIX;   // per display link (3.0), '' for plain /player
     /*
      * ⚠️ GUARDED, BECAUSE THIS NOW RUNS AS THE PAGE LOADS (#460), not inside connect(). If
      * offline-play-queue.js ever failed to load — and a missing script on this server answers 200
@@ -2537,6 +2657,9 @@
       bootViewer(VIEWER);
     } else if (_previewQS.get('preview') === '1' && (_previewQS.get('playlist') || _previewQS.get('device'))) {
       bootPreview(_previewQS);
+    } else if (mirrorHold) {
+      // 3.0 mirrors: this tab was told its mirror is gone (or could not be made). Say so; do not connect.
+      showMirrorHold(mirrorHold);
     } else {
 
     // Auto-detect server URL from origin since player is served from the same server
@@ -2572,7 +2695,7 @@
          * connection that makes the player fixable. Whatever goes wrong in here, we still boot.
          */
         // A wall panel resumes as its slice of the wall (see applyWallMode), BEFORE the first render.
-        try { const cw = localStorage.getItem('st_wall_config'); if (cw) applyWallMode(JSON.parse(cw)); } catch (e) {}
+        try { const cw = localStorage.getItem('st_wall_config' + LINK_SUFFIX); if (cw) applyWallMode(JSON.parse(cw)); } catch (e) {}
         try {
           startPlaybackAt(0); // #74/#75: honour schedules from the first frame on cold-start
         } catch (e) {
@@ -2581,7 +2704,7 @@
         }
         // #group-sync: if this device was in a sync group, resume the schedule immediately from the
         // cached clock offset — so a reboot mid-outage comes back aligned WITHOUT waiting for a server.
-        try { const cg = localStorage.getItem('st_group_sync'); if (cg) applyGroupSync(JSON.parse(cg)); } catch (e) {}
+        try { const cg = localStorage.getItem('st_group_sync' + LINK_SUFFIX); if (cg) applyGroupSync(JSON.parse(cg)); } catch (e) {}
       }
 
       // Always show the tap overlay on cold load. Browser autoplay policy is
@@ -3063,7 +3186,7 @@
     }
 
     function startReconnectSupervisor() {
-      if (reconnectSupervisorTimer) return;
+      if (reconnectSupervisorTimer || mirrorHold) return;
       reconnectSupervisorTimer = setInterval(() => {
         if (PREVIEW_MODE) return;
         if (socket && socket.connected) { stopReconnectSupervisor(); return; }
@@ -3088,6 +3211,8 @@
 
     // ==================== Socket Connection ====================
     function connect(serverUrl) {
+      // 3.0 mirrors: a removed or refused mirror stays down until a person opens it again.
+      if (mirrorHold) { console.log('[mirror] not connecting: ' + mirrorHold.kind); return; }
       // BrightSign's registry is ASYNCHRONOUS (registry.read returns a Promise), so on a cold
       // boot the identity is not in hand yet when this first runs. Registering before it lands
       // would pair the panel as a NEW display and strand its real row — so wait once, then adopt
@@ -3178,6 +3303,7 @@
        * and a zero must not turn this into a busy loop.
        */
       socket.on('device:throttled', (d) => {
+        if (mirrorHold) return;   // a refused mirror waits for a person, not a timer
         const asked = Number(d && d.retry_after_ms);
         const waitMs = Math.min(Math.max(Number.isFinite(asked) ? asked : 0, 1000), 5 * 60 * 1000);
         console.warn('[throttle] server asked us to wait ' + waitMs + 'ms (' + ((d && d.reason) || 'unspecified') + ')');
@@ -3369,7 +3495,13 @@
         }
       });
 
+      // 3.0 mirrors (see enterMirrorHold). Arrives just before the device:unpaired a removal also
+      // sends, which is then ignored: re-pairing is exactly what a removed mirror must not do.
+      socket.on('device:mirror-removed', () => enterMirrorHold({ kind: 'removed' }));
+      socket.on('device:mirror-refused', (d) => enterMirrorHold({ kind: 'refused', reason: (d && d.reason) || null, error: (d && d.error) || '' }));
+
       socket.on('device:unpaired', (data) => {
+        if (mirrorHold) return;
         console.warn('Device not found on server — clearing credentials');
         savePlaylistCache([]);
         if (data && data.reason === 'deleted') dropCacheForDeletedDisplay();
@@ -5329,7 +5461,7 @@
       // Cached like st_group_sync, so a panel that reboots with no server comes back as ITS SLICE of
       // the wall. Without it a cold boot played the cached playlist uncropped across one panel — and
       // with a wall layout, drew the wall's zones squeezed onto this one screen.
-      try { if (config) localStorage.setItem('st_wall_config', JSON.stringify(config)); else localStorage.removeItem('st_wall_config'); } catch (e) {}
+      try { if (config) localStorage.setItem('st_wall_config' + LINK_SUFFIX, JSON.stringify(config)); else localStorage.removeItem('st_wall_config' + LINK_SUFFIX); } catch (e) {}
       if (!config) {
         wallConfig = null;
         container.classList.remove('wall-mode');
@@ -5569,7 +5701,7 @@
 
     function applyGroupSync(cfg) {
       if (groupSyncTimer) { clearInterval(groupSyncTimer); groupSyncTimer = null; }
-      try { if (cfg) localStorage.setItem('st_group_sync', JSON.stringify(cfg)); else localStorage.removeItem('st_group_sync'); } catch (e) {}
+      try { if (cfg) localStorage.setItem('st_group_sync' + LINK_SUFFIX, JSON.stringify(cfg)); else localStorage.removeItem('st_group_sync' + LINK_SUFFIX); } catch (e) {}
       if (!cfg) {
         applyNativeSync(null);
         if (groupSync) groupReport('info', 'group-sync exited'); groupSync = null; console.log('[group-sync] exited');
@@ -9362,7 +9494,7 @@
           // The list is in the module (UnpairGate.storageKeys) with the reasoning for each entry —
           // above all for st_install_id, without which the next register is reclaimed onto the row
           // we just unpaired and the whole wipe is theatre.
-          UnpairGate.storageKeys(SCREEN_SUFFIX).forEach((k) => {
+          UnpairGate.storageKeys(SCREEN_SUFFIX, LINK_SUFFIX).forEach((k) => {
             try { localStorage.removeItem(k); } catch (e) { /* keep going: one failure is not all */ }
           });
         } catch (e) { /* storage gone: nothing to clear, nothing to break */ }

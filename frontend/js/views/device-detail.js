@@ -782,6 +782,15 @@ async function loadDevice(deviceId, activeTab = null) {
         <button class="btn btn-secondary btn-sm" id="t2PowerMenu">${t('device.tier2.power_menu')}</button>
       </div>` : ''}
 
+      ${/* 3.0 display-link mirrors: a mirror plays its original's content, so say so up front. */
+        device.mirror_source ? `
+      <div class="info-card" id="mirrorBanner" style="margin:8px 0;padding:10px 14px;border-left:3px solid var(--accent, #3b82f6)">
+        ${esc(t('device.mirror.banner_prefix'))}
+        <a href="#/device/${esc(device.mirror_source.id)}"><strong>${esc(device.mirror_source.name)}</strong></a>.
+        ${esc(t('device.mirror.banner_body'))}
+        ${device.mirror_location ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">${esc(t('device.mirror.location', { location: device.mirror_location }))}</div>` : ''}
+      </div>` : ''}
+
       <!-- Step 4 sends you to this page to assign a playlist. Losing the checklist on arrival is
            the same dead end the Content, Playlists and playlist-detail pages had. -->
       <div id="gettingStarted"></div>
@@ -799,7 +808,7 @@ async function loadDevice(deviceId, activeTab = null) {
           gain nothing from this tab but a durable secret it never needed.
         -->
         <div class="tab" data-tab="forecast" data-advanced-ui>${t('forecast.tab')} <span class="help-tip" data-tip="${t('forecast.tab_tip')}">?</span></div>
-        ${device.enrol_key ? `<div class="tab" data-tab="webplayer">${t('device.tab.webplayer')} <span class="help-tip" data-tip="${t('device.tab.webplayer_tip')}">?</span></div>` : ''}
+        ${!device.mirror_of ? `<div class="tab" data-tab="webplayer">${t('device.tab.webplayer')} <span class="help-tip" data-tip="${t('device.tab.webplayer_tip')}">?</span></div>` : ''}
       </div>
 
       <!-- Preview at… (docs/preview-at-time.md): mounted on first open, it asks the server. -->
@@ -1378,12 +1387,14 @@ async function loadDevice(deviceId, activeTab = null) {
 
       ${(can('remote.stream') || can('remote.input') || can('remote.screenshot')) ? `
       <!-- Remote Control Tab -->
-      <!-- Web player Tab (#313) -->
-      ${device.enrol_key ? `
+      <!-- Web player Tab (#313). 3.0: on every display that is not itself a mirror — one without a
+           link offers to create one, and the display's mirrors are listed here. -->
+      ${!device.mirror_of ? `
       <div class="tab-content" id="tab-webplayer">
         <h3 style="font-size:16px;margin-bottom:4px">${t('device.enrol.label')}</h3>
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;max-width:70ch">${t('device.enrol.hint')}</div>
         <div id="enrolBody"></div>
+        <div id="mirrorList" style="margin-top:22px"></div>
       </div>
       ` : ''}
 
@@ -2168,19 +2179,78 @@ function renderPlaylist(assignments) {
  * none of this. A key created for all of them would be a durable secret sitting on rows that never
  * use one, for no benefit. So the operator asks for it on the screen that needs it.
  */
+/* A view-only member (workspace_viewer) can look but not change. The server enforces it. */
+function canEditWorkspace() {
+  try { const u = JSON.parse(localStorage.getItem('user') || 'null'); return !(u && u.current_workspace_role === 'workspace_viewer' && !u.acting_as); } catch { return true; }
+}
+
+/*
+ * 3.0 display-link mirrors: everywhere else this display's link is open right now (or was). Each is
+ * a screen of its own — status, where it is, last seen — and Remove disconnects that opening for
+ * good (only opening the link afresh there brings it back).
+ */
+function renderMirrors(device) {
+  const el = document.getElementById('mirrorList');
+  if (!el) return;
+  const list = Array.isArray(device.mirrors) ? device.mirrors : [];
+  if (!list.length) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--text-muted);max-width:70ch">${esc(t('device.mirrors.none'))}</div>`;
+    return;
+  }
+  const seen = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : t('device.mirrors.never'));
+  el.innerHTML = `
+    <h3 style="font-size:15px;margin-bottom:4px">${esc(t('device.mirrors.title', { n: list.length }))}</h3>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;max-width:70ch">${esc(t('device.mirrors.hint'))}</div>
+    <div class="mirror-rows" style="display:flex;flex-direction:column;gap:6px">
+      ${list.map((m) => { const b = livenessBadge(m); return `
+      <div class="mirror-row" data-mirror-id="${esc(m.id)}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--border);border-radius:8px">
+        <a href="#/device/${esc(m.id)}" style="font-weight:600">${esc(m.name)}</a>
+        <span class="device-status-badge ${esc(b.state)}">${esc(b.label)}</span>
+        <span style="font-size:12px;color:var(--text-muted)">${esc(m.location || '')}</span>
+        <span style="font-size:12px;color:var(--text-muted)">${esc(t('device.mirrors.last_seen', { when: seen(m.last_heartbeat) }))}</span>
+        ${canEditWorkspace() ? `<button class="btn btn-danger btn-sm" data-remove-mirror="${esc(m.id)}" style="margin-left:auto">${esc(t('device.mirrors.remove'))}</button>` : ''}
+      </div>`; }).join('')}
+    </div>`;
+  el.querySelectorAll('[data-remove-mirror]').forEach((btn) => btn.addEventListener('click', async () => {
+    const id = btn.getAttribute('data-remove-mirror');
+    const m = list.find((x) => x.id === id);
+    if (!confirm(t('device.mirrors.confirm_remove', { name: m ? m.name : '' }))) return;
+    try {
+      await api.deleteDevice(id);
+      device.mirrors = list.filter((x) => x.id !== id);
+      renderMirrors(device);
+      showToast(t('device.mirrors.removed'));
+    } catch (err) { showToast(err.message, 'error'); }
+  }));
+}
+
 function setupEnrolKey(device) {
   const host = document.getElementById('enrolBody');
   if (!host) return;
 
   const draw = () => {
-    if (!device.enrol_key) return;   // the tab only renders for a display that has one
+    renderMirrors(device);
+    /*
+     * 3.0: a display paired by code (or any display without a link) can be given one here. The
+     * key is just another way to identify the same display — its player keeps its own token and is
+     * not disturbed — so this is safe to offer on every original. Editors and up; a view-only
+     * member sees that there is no link yet.
+     */
+    if (!device.enrol_key) {
+      host.innerHTML = canEditWorkspace()
+        ? `<button class="btn btn-primary btn-sm" id="enrolCreateBtn">${esc(t('device.enrol.create'))}</button>
+           <div style="font-size:12px;color:var(--text-muted);margin-top:6px;max-width:70ch">${esc(t('device.enrol.create_hint'))}</div>`
+        : `<div style="font-size:13px;color:var(--text-muted)">${esc(t('device.enrol.none'))}</div>`;
+      host.querySelector('#enrolCreateBtn')?.addEventListener('click', () => mint(false));
+      return;
+    }
     const url = `${window.location.origin}/player?k=${encodeURIComponent(device.enrol_key)}`;
     host.innerHTML = `
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <input class="input" id="enrolUrl" readonly value="${esc(url)}"
                style="flex:1;min-width:260px;font-family:monospace;font-size:11px">
         <button class="btn btn-secondary btn-sm" id="enrolCopyBtn">${t('device.enrol.copy')}</button>
-        <button class="btn btn-secondary btn-sm" id="enrolRollBtn">${t('device.enrol.roll')}</button>
+        ${canEditWorkspace() ? `<button class="btn btn-secondary btn-sm" id="enrolRollBtn">${t('device.enrol.roll')}</button>` : ''}
       </div>
       <div style="font-size:11px;color:#fbbf24;margin-top:6px">${t('device.enrol.warning')}</div>`;
 
@@ -2192,7 +2262,7 @@ function setupEnrolKey(device) {
       try { document.execCommand('copy'); showToast(t('device.enrol.copied')); }
       catch { showToast(t('device.enrol.copy_failed'), 'error'); }
     });
-    host.querySelector('#enrolRollBtn').addEventListener('click', () => {
+    host.querySelector('#enrolRollBtn')?.addEventListener('click', () => {
       if (!confirm(t('device.enrol.confirm_roll'))) return;
       mint(true);
     });
