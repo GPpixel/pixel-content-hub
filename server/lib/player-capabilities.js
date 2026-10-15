@@ -126,6 +126,11 @@ const CAPABILITIES = [
    * a TV that ignores them, so the dashboard and the meeting-room code offer only screens that
    * declare it. */
   'remote.screen_share',
+  /* 3.0: the screen-share receiver can show up to four shares at once — side by side, stacked on a
+   * portrait screen, or a 2x2 grid — with one spotlighted and one presenter's sound at a time
+   * (device:screenshare-layout). Only a screen that declares it can let several people present at
+   * once; a screen without it shows one presenter at a time (lib/screen-share.js). In NO baseline. */
+  'remote.screen_share_tiles',
   /* #312 follow-up: the player can accept a server-URL rewrite from the dashboard AND verify the new
    * address is reachable before committing, rolling back if not. Declared only by a player that
    * implements that verify-then-commit path (so a fat-fingered URL cannot strand it), which is why

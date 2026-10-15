@@ -3413,6 +3413,13 @@ const migrations = [
      month TEXT NOT NULL,
      seconds REAL NOT NULL DEFAULT 0,
      PRIMARY KEY (organization_id, month))`,
+  /*
+   * 3.0: several presenters at once on one screen (lib/screen-share.js, docs/screen-share.md).
+   * Per display, OFF by default (one share at a time, as before); a workspace admin turns it on next
+   * to the meeting-room code. How many at once is platform-wide (app_settings
+   * screen_share_max_presenters, 1-4).
+   */
+  'ALTER TABLE devices ADD COLUMN screen_share_multi INTEGER NOT NULL DEFAULT 0',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

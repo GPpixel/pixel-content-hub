@@ -327,19 +327,29 @@ async function renderShare(container, presetId) {
   }
 
   function chooseStep() {
-    const why = screenShareUnsupportedText();
+    // In the ScreenTinker Manager app the PHONE's screen is shared by the app itself (a WebView cannot
+    // capture the screen): the app asks Android, shows "Share your screen to <server>?" and streams.
+    const bridge = inManagerApp() && typeof window !== 'undefined' ? window.STManager : null;
+    const viaApp = !!(bridge && typeof bridge.shareScreenTo === 'function');
+    const why = viaApp ? null : screenShareUnsupportedText();
     const one = chosen.length === 1 ? chosen[0] : null;
     const allOnline = chosen.every(online);
     shell(container, guideFrame({ step: skipPick ? 0 : 1, total, icon: '&#128421;&#65039;',
       title: one ? t('screen_share.simple.choose_title', { name: one.name }) : t('screen_share.simple.choose_title_n', { count: chosen.length }), back: !skipPick,
       body: `
-        <p class="simple-lead">${esc(t('screen_share.simple.choose_lead'))}</p>
+        <p class="simple-lead">${esc(t(viaApp ? 'screen_share.simple.app_lead' : 'screen_share.simple.choose_lead'))}</p>
         ${why ? `<p class="simple-status" style="color:var(--danger)">${esc(why)}</p>` : `
-        <label class="simple-share-audio"><input type="checkbox" data-share-audio> ${esc(t('screen_share.include_audio'))}</label>
+        ${viaApp ? '' : `<label class="simple-share-audio"><input type="checkbox" data-share-audio> ${esc(t('screen_share.include_audio'))}</label>`}
         <div class="simple-done-actions"><button type="button" class="btn btn-primary simple-share-go" data-share-go ${allOnline ? '' : 'disabled'}>${esc(t('screen_share.simple.choose_btn'))}</button></div>
         ${allOnline ? '' : `<p class="simple-status">${esc(t('screen_share.card.offline'))}</p>`}`}` }));
     wireBack(() => { chosen = []; draw(); });
     container.querySelector('[data-share-go]')?.addEventListener('click', async (e) => {
+      if (viaApp) {
+        let token = null;
+        try { token = localStorage.getItem('token'); } catch { token = null; }
+        if (token) bridge.shareScreenTo(JSON.stringify(chosen.map((d) => d.id)), chosen.map((d) => d.name).join(', '), token);
+        return;
+      }
       e.currentTarget.disabled = true;
       const audio = !!container.querySelector('[data-share-audio]')?.checked;
       const started = one

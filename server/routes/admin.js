@@ -561,6 +561,21 @@ router.put('/status-debug', requirePlatformAdmin, (req, res) => {
   res.json({ enabled });
 });
 
+// ===================== Screen share: presenters at once (3.0) =====================
+// Platform-admin only. How many people may present on one screen at once where a workspace admin has
+// turned "several people at once" on (1-4; docs/screen-share.md). Persisted in app_settings, so it
+// takes effect on the next join; SCREEN_SHARE_MAX_PRESENTERS is the default until it is set.
+router.get('/screen-share', requirePlatformAdmin, (req, res) => {
+  res.json({ max_presenters: require('../lib/screen-share').maxPresenters(), env_default: config.screenShareMaxPresenters });
+});
+router.put('/screen-share', requirePlatformAdmin, (req, res) => {
+  const n = parseInt(req.body && req.body.max_presenters, 10);
+  if (!Number.isInteger(n) || n < 1 || n > 4) return res.status(400).json({ error: 'max_presenters must be 1 to 4' });
+  appSettings.set('screen_share_max_presenters', String(n));
+  logActivity(req.user.id, 'admin_set_screen_share_presenters', `max_presenters: ${n}`, null, getClientIp(req), null);
+  res.json({ max_presenters: n });
+});
+
 // ===================== Opt-in install statistics =====================
 // Returns the decision state, the EXACT payload that would be sent, and what was last actually
 // sent. Handing over the real payload rather than a description is the point: an operator can

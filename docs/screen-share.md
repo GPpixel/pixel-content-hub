@@ -8,6 +8,11 @@ a lobby — and the screen goes back to its normal content the moment you stop.
 - **Guests** (no account) share in a meeting room with the **code the screen shows**: they open
   `/share` on their laptop (or scan the QR next to the code), type the code, and present. This is
   off by default and switched on per screen by a workspace admin.
+- **Phones** present too: their **camera** from the `/share` page (any phone browser), or — on
+  Android — their **screen** through the **ScreenTinker Manager** app, with no account
+  ([below](#phones-camera-and-the-android-app)).
+- **Several people at once** (up to 4) when a workspace admin allows it on that screen: the screen
+  tiles them ([below](#several-people-at-once)).
 
 While a share is running the screen shows it **fullscreen**, with a small *"Shared by &lt;name&gt;"*
 badge (*"· guest"* for a guest). Sound is optional (tick **Include sound**). The playlist underneath
@@ -57,11 +62,31 @@ button that would do nothing, and the meeting-room code is never shown on such a
 receiver gives up after 45 seconds without a picture and tells the sharer, so even a screen that
 claims the capability wrongly is never left black.
 
+### Several people at once: which screens can tile
+
+A screen shows more than one presenter only if its player declares `remote.screen_share_tiles`
+(in no baseline). Every other screen shows **one presenter at a time** — the spotlighted one, else
+the first — and the server tells the others *"This screen shows one presenter at a time"*.
+
+| Player | Tiles (up to 4) | Notes |
+|---|---|---|
+| Web player (browsers, ChromeOS, Pi/PC kiosk browser, desktop shell), legacy build | **Yes** | `/player/screen-share.js` tiles; verified end to end in headless Chrome (two guests + a phone camera). |
+| iPad / iPhone app | **Yes** | The web player in WKWebView. Not run on an iPad here. |
+| Samsung Tizen 10+ | No (one at a time) | Same receiver file (it could tile), not claimed: several WebRTC `<video>` decoders at once on a TV are unverified. |
+| Native Raspberry Pi / Windows / macOS | No (one at a time) | The QtWebEngine page loads the same receiver, but the QML code badge has no compact mode and a Pi decodes VP8/VP9 in software — four at once is not something to promise untested. |
+| Native Android player | No (one at a time) | One `ScreenShareReceiver`; a new start replaces the old one, which is exactly the fallback. |
+| webOS, BrightSign, Vega, Roku, tvOS, e-ink | — | No screen share at all (above). |
+
+The **display** must tile for its switch to mean anything: a display that cannot shows one presenter
+however the switch is set (its card says so). Its mirrors that cannot tile follow it as above.
+
 ## Which browsers can share
 
-Sharing (sending) needs `getDisplayMedia()`: current **Chrome, Edge, Firefox and Safari on a
-computer**. Phones and tablets mostly cannot share their screen from a browser (iOS Safari and
-Android Chrome do not offer `getDisplayMedia`); the page says so plainly rather than failing.
+Sharing a **screen** needs `getDisplayMedia()`: current **Chrome, Edge, Firefox and Safari on a
+computer**. Phones and tablets cannot share their screen from a browser (iOS Safari and Android
+Chrome do not offer `getDisplayMedia`). The `/share` page only offers what the device can do:
+a phone gets **Share my camera** (`getUserMedia`, Android and iPhone browsers) and, on Android,
+**Share my screen with the ScreenTinker app**.
 
 > ⚠️ **The sharer's page must be served over HTTPS** (or `localhost`). Browsers only allow screen
 > capture in a secure context. A self-hosted dashboard reached as `http://192.168.1.10:3001` can
@@ -156,6 +181,64 @@ longer holds), needs an H.264 capture (go2rtc's WebRTC engine is H.264-only), an
 receiver would need a pull mode. Until it lands, raise `SCREEN_SHARE_MAX_TARGETS` only for sharers on
 a wired uplink, and use several shares (or a playlist with a stream) for anything larger.
 
+### Several people at once
+
+A workspace admin ticks **Let several people share at once (up to 4)** next to **Meeting-room code**
+on the screen's card (the display; a mirror follows its display). How many is the platform's
+setting (**Admin → System → Screen sharing: people at once**, 1–4, default 4, or
+`SCREEN_SHARE_MAX_PRESENTERS`).
+
+- **Slots.** Guests and editors take slots alike: an editor's **Share my screen** joins a meeting in
+  progress, and a guest can join an editor's share. A full screen refuses the next one (`busy`).
+- **The code** stays on screen while a slot is free — shrunk to a small card in the top-right corner
+  so it does not cover the shares — and **every join spends it**: a new code appears at once. Full:
+  no code. Someone leaves: a fresh code comes back. Everyone leaves: normal content and a new code.
+- **Layout.** 1 → full screen; 2 → side by side (stacked on a portrait screen); 3–4 → a 2×2 grid.
+  Each share is letterboxed in its tile with its own label (*"Shared by Ann"*, *"Shared by Guest 2 ·
+  guest"* — guests who give no name are numbered). The remote viewer's capture draws the tiles.
+- **Sound:** one presenter at a time — the spotlighted one if they share sound, else the most recent
+  presenter who joined with sound.
+- **Spotlight ("Make full screen")** fills the screen with one presenter; the others stay connected
+  but hidden (no thumbnails: they would cover the presenter's content), and **Show everyone** puts
+  the tiles back. **Remove** takes one presenter off the screen and its mirrors (their page says *"You
+  were removed"*); the code they joined with was spent, so it cannot bring them back.
+- **Who controls:** the screen's owners (editors and admins of its workspace — on the card, or from
+  the sharer bar when they are presenting) and the **first presenter** (the one in the room longest)
+  from their `/share` page. Anyone else, guests included, is refused by the server.
+- **Mirrors:** every presenter reaches the display and each mirror that can take them — one leg per
+  presenter per screen, within `SCREEN_SHARE_MAX_TARGETS` per presenter (each leg is an upload from
+  that presenter's device). Skipped screens are reported as before.
+- **Turning it off mid-share** keeps everyone presenting and admits nobody new (no code) until the
+  room is empty.
+
+### Phones: camera and the Android app
+
+**Camera (any phone browser).** On `/share`, **Share my camera** sends the back camera (or the front
+one) with optional sound; **Switch camera** flips it during the share without reconnecting. It uses
+the same code, slots and pipeline as a screen. Point it at a whiteboard, a printout, a product.
+
+**The QR** on the screen opens `/share?code=<the code>` (it changes with the code), so scanning it
+fills the code in. Opening `/share` with a code shows the options that device actually has.
+
+**Android: the phone's own screen** goes through the **ScreenTinker Manager** app
+([manager-app.md](manager-app.md)), **without an account** and for **any** ScreenTinker server
+(hosted or self-hosted, any domain or IP, plain http on a LAN too):
+
+- On Android, `/share` offers **Share my screen with the ScreenTinker app**: an `intent://` link
+  carrying the server and the code (`screentinker://share?server=<origin>&code=<code>`); Android opens
+  the app, or the Play Store if it is not installed.
+- The app also handles `http(s)://<any host>/share` links (not verified App Links — a self-hosted
+  domain cannot be — so Android may simply open the browser, whose page then offers the button), and
+  its first screen and launcher shortcut have **Share my screen to a meeting-room screen**: scan the
+  QR (Google's code scanner, no camera permission) or type the address and code.
+- Before anything is captured the app shows **"Share your screen to <host>?"** — the host in ASCII
+  (punycode for international names), http/https only, never a `user@host` trick — then Android's own
+  capture prompt. The code is spent only after both.
+- While sharing, a notification says where the screen is going and has **Stop** (Android 15+'s
+  status-bar chip stops it too). The picture only — no sound. Turning the phone keeps the share going.
+- Signed in, the Simple view's **Share my screen** in the app uses the same capture for the screens
+  picked there.
+
 ### The meeting-room code (guests)
 
 A workspace admin switches on **Meeting-room code** in the screen's *Screen sharing* card. The screen
@@ -168,12 +251,13 @@ then shows, in its bottom-right corner:
 ```
 
 A guest opens that address (or scans the QR), types the code and an optional name, presses
-**Share my screen**, picks what to share — and is live. The code is hidden while someone is sharing
-and a new one appears afterwards.
+**Share my screen** (or **Share my camera**), picks what to share — and is live. The code is hidden
+while the screen is full (one sharer, unless several are allowed) and a new one appears afterwards.
 
-The address in the QR is `APP_URL` when set, otherwise the address the screen itself reaches the
-server on (the same rule as emailed links, `lib/public-origin.js`). Set `APP_URL` if the screens and
-the people in the room reach the server by different names.
+The QR encodes `<address>/share?code=<code>`. The address is `APP_URL` when set, otherwise the
+address the screen itself reaches the server on (the same rule as emailed links,
+`lib/public-origin.js`). Set `APP_URL` if the screens and the people in the room reach the server by
+different names.
 
 ---
 
@@ -186,6 +270,8 @@ the people in the room reach the server by different names.
 | Server env | `SCREEN_SHARE_MAX_TARGETS` — how many screens one share may reach at once (1–50). Each is an upload from the sharer's computer. | `6` |
 | Members page (workspace admin) | **Allow screen sharing in this workspace.** Turning it off ends any share in progress and hides every code. | on |
 | A screen's page (workspace admin) | **Meeting-room code** on this screen. | **off** |
+| A screen's page (workspace admin) | **Let several people share at once** on this display. | **off** |
+| Server env / Admin → System (platform admin) | `SCREEN_SHARE_MAX_PRESENTERS` — how many at once where allowed (1–4); the Admin setting overrides it. | `4` |
 | Admin → Organizations (platform admin) | The org's **ICE servers** (STUN/TURN) — the same per-org override live video and Talk use. | — |
 
 There is no separate permission: starting a share needs the same edit rights as changing what the
@@ -252,10 +338,15 @@ building is where a restreamer pays off — see *Sharing to many screens* above.
 - **Viewers cannot start or stop.** `workspace_viewer` gets 403 on every write. The meeting-room code
   and the workspace switch need a workspace admin.
 - **Audit log** (`activity_log`): `screen_share.start` (who, which screen), `screen_share.guest_join`
-  (the name the guest typed and their address), `screen_share.stop` (why: stopped by sharer / owner,
-  time limit, screen offline, connection failed …, who stopped it, and how long it ran),
-  `screen_share.guest_toggle`, `screen_share.workspace_toggle`. The ticket and the code are never
+  (the name the guest typed, their address, and `source`: screen / camera / app), `screen_share.stop`
+  (why: stopped by sharer / owner, removed, time limit, screen offline, connection failed …, who
+  stopped it, and how long it ran), `screen_share.presenter_remove` and `screen_share.spotlight` (who
+  did it: an owner, or the first presenter by name), `screen_share.guest_toggle`,
+  `screen_share.multi_toggle`, `screen_share.workspace_toggle`. The ticket and the code are never
   logged.
+- **The Android app's no-account share** acts on a link from anywhere, so it validates the server
+  (http/https, a host, no userinfo) and shows it — in ASCII — before Android's capture prompt; it sends
+  the code only to that server. Unit tests: `android-admin/app/src/test/.../share/ShareLinkTest.kt`.
 - **XSS.** The sharer's name is cleaned (control and bidi-override characters removed, 40 characters)
   and is only ever rendered as text — on the screen with `textContent`, on the dashboard with `esc()`.
 - **No WebRTC, no breakage.** If the sharer's browser cannot capture, the page says why (not HTTPS,
@@ -270,13 +361,13 @@ can **see the screen**:
 
 | Control | How |
 |---|---|
-| Only on the screen | The code lives in server memory and on the screen. No API returns it — not even to an admin. The QR carries it in the URL *fragment*, which the browser never sends to the server (so it is not in access logs), and the `/share` page strips it from the address bar. |
+| Only on the screen | The code lives in server memory and on the screen. No API returns it — not even to an admin. The QR carries it as `/share?code=…` so phones and the Android app can read it; this server logs no request URLs, the `/share` page strips it from the address bar and sends no `Referer`, and a code is single-use and dead within ten minutes. (Before 3.0's phone support it rode in the fragment; `/share` still accepts that.) |
 | Hard to guess | 8 characters from a 32-symbol alphabet without look-alikes (Crockford: no I, L, O, U) — 40 bits. |
 | Rotates | Every 10 minutes even if unused, and **after every successful join** (a photographed code is useless afterwards). |
 | Rate-limited | `POST /api/share/join` allows 10 tries a minute per address. A wrong, expired or spent code all get the same answer. |
 | Off by default | Per screen, switched on by a workspace admin; the workspace switch and `SCREEN_SHARE_ENABLED` override it. |
-| One at a time | A screen takes one share; the code is hidden while it is busy. |
-| Owner can kick | Any editor can stop a share from the screen's page (**Stop this share**). |
+| Slots | A screen takes one share, or up to 4 where an admin allows several; the code is hidden while it is full and spent by every join. |
+| Owner can kick | Any editor can stop a share (**Stop this share** / **Stop all**) or **Remove** one presenter. The first presenter can remove others from `/share`; other guests cannot (server-enforced). A removed guest's code is already spent. |
 | Bounded | Every share ends at `SCREEN_SHARE_MAX_MINUTES`. |
 | Accountable | Each guest join is audited with the name they gave and their address. |
 
@@ -311,7 +402,17 @@ WS /api/screen-share/ws
   player can reuse the Talk leg it already has (Android `AudioTalker`), adding the first-message
   `auth`.
 - `device:screenshare-code` `{code, url, qr, expires_at}` (or `{code: null}`) tells a screen what to
-  show in its corner; `qr` is a PNG data URL.
+  show in its corner; `qr` is a PNG data URL of `url?code=<code>`.
+- **Several presenters** are several ordinary sessions on one screen, each with its own
+  `device:screenshare-start` and screen leg. Only a player that declares `remote.screen_share_tiles`
+  is ever sent a second one. `device:screenshare-layout` `{spotlight, audio, count}` names (in that
+  screen's session ids) the session that fills the screen (null: tiles) and the ONE session whose
+  sound plays. The sharer's socket gets `{type:'room', room, screen_name, slots, you, first,
+  can_control, presenters:[{id, name, guest, first, spotlight, audio, you}]}` (opaque ids) and may send
+  `{type:'room', action:'spotlight'|'remove', target:<id>|null}`; the server answers
+  `{type:'room_refused'}` to anyone but the first presenter or a signed-in editor. A one-at-a-time
+  mirror switched to the spotlighted presenter ends the old leg with `spotlight_changed` and hands
+  the new presenter `add_leg`.
 - A player declares `remote.screen_share` only when it implements the receiver.
 - **Multi share** changes nothing on this wire: it is N ordinary sessions with the same `share_id`,
   one per screen, each with its own single-use ticket, sharer socket and screen leg. A screen only
@@ -329,28 +430,34 @@ JWT only (`/api/screen-share`, not reachable with an API token):
 
 | Method | Path | Who | What |
 |---|---|---|---|
-| `GET` | `/api/screen-share/devices/:id` | any member | `{feature, workspace_enabled, supported, available, reason, can_share, can_admin, guest_enabled, max_seconds, session, max_targets, platform}`; `session` carries `share_id` and `screens` (how many screens that share is on). |
+| `GET` | `/api/screen-share/devices/:id` | any member | `{feature, workspace_enabled, supported, available, reason, can_share, can_admin, guest_enabled, max_seconds, session, max_targets, platform, multi, presenters}`; `session` (the oldest presenter) carries `share_id` and `screens` (how many screens that share is on); `multi` is `{enabled, supported, this_screen_tiles, slots, max_presenters}`; `presenters` is `[{share_id, shared_by, guest, audio, started_at, first, spotlight, live}]`. |
 | `POST` | `/api/screen-share/shares` | editor+ on every screen | Multi share. Body `{device_ids?, group_id?, audio}`. → `{share_id, ws_path, max_seconds, legs: [{device_id, screen_name, session_id, ticket, ice_servers}], skipped: [{id, name, reason, platform}]}`. A screen the caller cannot edit (or another tenant's) refuses the whole request (403/404) and creates nothing; screens that cannot take it are `skipped`; `409 {reason:"too_many_targets", max_targets}` above the limit; `409 {reason:"none_available", skipped}` when none can. |
 | `DELETE` | `/api/screen-share/shares/:shareId` | editor+ on every screen | Stop it everywhere. → `{stopped: n}`; 404 for an unknown share or another tenant's. |
 | `GET` | `/api/screen-share/groups/:groupId` | any member | `{feature, workspace_enabled, can_share, max_targets, screens: [{id, name, ok, reason, platform}]}` — which of a group's screens can take a share. |
 | `POST` | `/api/screen-share/devices/:id` | editor+ | Start. Body `{audio}`. → `{session_id, ticket, ws_path, ice_servers, max_seconds, screen_name}`; `409 {reason}` when `disabled`, `workspace_disabled`, `unsupported`, `offline` or `busy`. |
 | `DELETE` | `/api/screen-share/devices/:id` | editor+ | Stop whoever is sharing. → `{stopped}` |
 | `PUT` | `/api/screen-share/devices/:id/guest` | workspace admin | `{enabled}` — the meeting-room code. |
+| `PUT` | `/api/screen-share/devices/:id/multi` | workspace admin | `{enabled}` — several people at once (display only; `409 {reason:"mirror"}` on a mirror). → `{multi_enabled, slots}` |
+| `PUT` | `/api/screen-share/devices/:id/spotlight` | editor+ | `{share_id \| null}` — one presenter full screen, or tiles again. `404` for a presenter not on the screen. |
+| `DELETE` | `/api/screen-share/devices/:id/presenters/:shareId` | editor+ | Remove one presenter from the display and its mirrors. → `{removed}` |
+| `GET`/`PUT` | `/api/admin/screen-share` | platform admin | `{max_presenters}` (1–4). |
 | `GET`/`PUT` | `/api/screen-share/workspace/:wsId` | member / workspace admin | `{enabled}` — the workspace switch. |
 
 Public, rate-limited (10/min per address):
 
 | Method | Path | What |
 |---|---|---|
-| `POST` | `/api/share/join` | `{code, name?, audio?}` → same as a start; `404 {reason:"invalid_code"}` for any bad code. |
+| `POST` | `/api/share/join` | `{code, name?, audio?, source?}` → same as a start; `404 {reason:"invalid_code"}` for any bad code. `source` (`screen`/`camera`/`app`) is only recorded in the activity log. |
 | `GET` | `/share` | The meeting-room page. |
 
 `GET /api/status` reports `features.screen_share`.
 
 ## Limits
 
-- One share per screen; one share reaches up to `SCREEN_SHARE_MAX_TARGETS` screens (see *Several
-  screens at once*).
+- One share per screen (up to 4 where allowed, on players that tile); one share reaches up to
+  `SCREEN_SHARE_MAX_TARGETS` screens (see *Several screens at once*).
+- The Android app shares the picture only (no sound). Phone browsers share their camera, not their
+  screen.
 - **State is in memory** in the server process the screen is connected to. A restart ends running
   shares (both sides are told) and issues new codes. On a [scale-out](scale-out.md) replica, screens
   connect to the primary, so share from the primary's address.
@@ -364,7 +471,10 @@ Public, rate-limited (10/min per address):
 |---|---|
 | No **Share my screen** button | The screen's player does not declare `remote.screen_share` (see the card's note), the workspace switch is off, you are a viewer, or `SCREEN_SHARE_ENABLED=false`. |
 | *"needs a secure (https) address"* | Open the dashboard / `/share` over HTTPS. |
-| *"This browser cannot share its screen"* | A phone, or an old browser. Use a computer. |
+| *"This browser cannot share its screen"* | A phone, or an old browser. Share the camera, use the Android app, or a computer. |
+| No code while someone shares, though several are allowed | The screen is full, or its player cannot tile (the card says so), or the switch was turned off mid-share. |
+| *"… shows one presenter at a time"* | That screen's player cannot tile; it shows the spotlighted presenter, else the first. |
+| The Android app shares but nothing appears | Same as any share: no network path (add TURN). An emulator behind its own NAT cannot reach a browser that hides its address behind mDNS. |
 | *"The screen did not answer"* | The screen is offline or not connected to this server process. |
 | *"could not connect to the screen"* | No network path between the two. Same network, or add TURN. |
 | The code on the screen is not accepted | It changes after each use and every 10 minutes — use the one showing now. After 10 wrong tries wait a minute. |
@@ -402,6 +512,23 @@ Public, rate-limited (10/min per address):
   signalling never crosses), viewers and any other-tenant id refuse the whole request with nothing
   left behind, skipped screens named, the limit, groups, one screen disconnecting alone, stop one /
   stop all, and the one-screen API unchanged.
+- `server/test/screen-share-presenters.test.js` — several people at once against the real server:
+  off is today's behaviour; the switch (admin-only, display-only, tiling players only); slots, the
+  code staying while a slot is free, spent and replaced by every join (guests and editors), gone when
+  full, back on leave, new when empty; numbered guests; sound and spotlight in the layout event;
+  control by the owner and the first presenter, refused for another guest, viewers and other
+  tenants, removed guests cannot rejoin; the switch off mid-share; the platform limit; mirrors that
+  cannot tile showing one presenter and following the spotlight; target limits per presenter; a full
+  display not joinable through its mirror in a multi share.
+- `server/test/screen-share-presenters-e2e.test.js` — **headless Chrome, real media**: the QR encodes
+  `/share?code=` of the code on screen and fills it in; two guests (the second reading the new code off
+  the screen) → two playing tiles side by side; full → no code; the first presenter's page spotlights
+  and removes the other (whose code is then refused); a mobile-emulated page without screen capture is
+  offered the camera and the app link, and its camera share plays next to the first presenter, also
+  after switching cameras; everyone leaves → a fresh full code.
+- `android-admin/app/src/test/.../share/` (JUnit) — the app's link validation and signalling. Manually
+  on the Android 16 emulator: guest link, QR link and signed-in starts playing on a web player,
+  rotation, Stop from the notification, a bad link refused, the code scanner opening.
 - `server/test/screen-share-players.test.js` — every other player: Tizen (receiver copy byte-identical,
   Tizen 10+ gate, wiring, the remote-viewer card), Android and native declarations and wiring, no
   baseline ever granting the capability, and this table's sources.
