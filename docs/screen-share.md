@@ -295,8 +295,19 @@ If a share starts but never appears ("Your computer could not connect to the scr
 could not find a path: put them on the same network, or add a TURN server.
 
 > TURN credentials are given to whoever starts a share — including a guest who entered a valid
-> code — exactly as they are given to the screens and the dashboard for live video and Talk. Use a
-> TURN account limited to relaying, or short-lived credentials from your TURN server.
+> code — exactly as they are given to the screens and the dashboard for live video and Talk. So
+> prefer **short-lived credentials**: set `GO2RTC_TURN_SECRET` to the same secret as your TURN
+> server's `static-auth-secret` (coturn: `use-auth-secret`), and every hand-out gets its own
+> username/password that expires after `GO2RTC_TURN_TTL` seconds (default 6 hours). The secret
+> never leaves the server, and it takes precedence over `GO2RTC_TURN_USER` / `GO2RTC_TURN_PASS`.
+> `GO2RTC_TURN_URL` may list several URLs separated by commas, e.g.
+> `turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp`.
+>
+> A minimal coturn for this: `use-auth-secret`, `static-auth-secret=<secret>`, `realm=<your domain>`,
+> `listening-port=3478`, a relay port range (`min-port`/`max-port`) open in the firewall, and
+> `no-multicast-peers` plus `denied-peer-ip` for private ranges so the relay cannot be used to reach
+> your internal network. The TURN host must be reachable directly — not through a proxy such as
+> Cloudflare's orange cloud.
 
 ## Why peer-to-peer and not the go2rtc sidecar
 

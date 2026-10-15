@@ -604,6 +604,13 @@ module.exports = {
   go2rtcTurnUrl: process.env.GO2RTC_TURN_URL || null,
   go2rtcTurnUser: process.env.GO2RTC_TURN_USER || null,
   go2rtcTurnPass: process.env.GO2RTC_TURN_PASS || null,
+  // Short-lived TURN credentials (the "TURN REST API" scheme coturn calls use-auth-secret): with a
+  // shared secret set, every hand-out of ICE servers mints its own username/password that expires after
+  // GO2RTC_TURN_TTL seconds, so a guest who once started a share does not keep a working relay login.
+  // Takes precedence over GO2RTC_TURN_USER / GO2RTC_TURN_PASS. GO2RTC_TURN_URL may list several URLs
+  // separated by commas (e.g. the same server over UDP and TCP).
+  go2rtcTurnSecret: process.env.GO2RTC_TURN_SECRET || null,
+  go2rtcTurnTtl: Math.max(300, Math.min(7 * 86400, parseInt(process.env.GO2RTC_TURN_TTL, 10) || 6 * 3600)),
   // Live video must be switched on per workspace as well; this is the server-wide master gate. Off
   // by default so enabling the sidecar does not silently start offering video everywhere.
   liveVideoEnabled: process.env.LIVE_VIDEO_ENABLED === 'true',
