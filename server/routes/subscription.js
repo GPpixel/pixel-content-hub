@@ -1,0 +1,191 @@
+const express = require('express');
+const router = express.Router();
+const { db } = require('../db/database');
+const { requireAuth, requireSuperAdmin } = require('../middleware/auth');
+const { getUserPlan, getUserDeviceCount, getUserStorageMB } = require('../middleware/subscription');
+const config = require('../config');
+
+// Get all plans
+router.get('/plans', (req, res) => {
+  const plans = db.prepare('SELECT * FROM plans WHERE active = 1 ORDER BY sort_order ASC').all();
+  res.json(plans);
+});
+
+// The sale running now, if any (lib/promotions.js). Public: the pricing page shows it to visitors.
+// Only the public fields — no internal name, no Stripe ids. Cached briefly at the edge.
+router.get('/promotion', (req, res) => {
+  const promotions = require('../lib/promotions');
+  res.set('Cache-Control', 'public, max-age=60');
+  res.json({ promotion: promotions.publicCurrent() });
+});
+
+// Get current user's subscription info
+router.get('/me', requireAuth, (req, res) => {
+  const plan = getUserPlan(req.user.id);
+  const deviceCount = getUserDeviceCount(req.user.id);
+  const storageMB = getUserStorageMB(req.user.id);
+
+  /*
+   * ⚠️ getUserPlan RETURNS NULL FOR A CALLER WITH NO `users` ROW, and this route used to
+   * dereference it one line later (`plan.plan_id`).
+   *
+   * That caller is not hypothetical: a support session authenticates as `support:<jti>` and has
+   * no users row by design (the same reason dashboardSocket refuses break-glass identities), and
+   * so does a session whose account was deleted mid-flight. getUserPlan's own comment states the
+   * contract — null means "unrestricted", and checkDeviceAccess honours it — but this reader did
+   * not, so opening Subscription threw a TypeError.
+   *
+   * An unhandled throw in an API route reaches Express's DEFAULT error handler, which answers
+   * with an HTML error page. The dashboard's `r.json()` then dies on `Unexpected token '<',
+   * "<!DOCTYPE "... is not valid JSON` and the page reads "Failed to load" — so a null
+   * dereference is reported as a broken Subscription page, pointing nowhere near the cause.
+   * Seen on a customer's self-hosted instance on 2026-09-28 while signed in with a support token.
+   *
+   * Answering with the unrestricted shape rather than 404/500 keeps the contract in one place
+   * and keeps the page renderable: the view reads plan.display_name, plan.max_devices and
+   * usage.devices unconditionally, so `plan: null` would only move the same crash client-side.
+   */
+  if (!plan) {
+    return res.json({
+      plan: {
+        id: null, name: 'unbilled', display_name: 'Not billed',
+        max_devices: -1, max_storage_mb: -1,
+        remote_control: true, remote_url: true, priority_support: false,
+        price_monthly: 0, price_yearly: 0,
+      },
+      usage: { devices: deviceCount, devices_limit: -1, storage_mb: storageMB, storage_limit_mb: -1 },
+      subscription: { status: null, ends: null, stripe_customer_id: null, stripe_subscription_id: null },
+      trial: { active: false, days_left: 0, end: null, plan: null, expired_at: null },
+      self_hosted: config.selfHosted,
+      unbilled: true,   // this session has no billable account; the page says so rather than inventing one
+    });
+  }
+
+  res.json({
+    plan: {
+      id: plan.plan_id,
+      name: plan.plan_name,
+      display_name: plan.plan_display_name,
+      max_devices: plan.max_devices,
+      max_storage_mb: plan.max_storage_mb,
+      remote_control: !!plan.remote_control,
+      remote_url: !!plan.remote_url,
+      priority_support: !!plan.priority_support,
+      price_monthly: plan.price_monthly,
+      price_yearly: plan.price_yearly,
+    },
+    usage: {
+      devices: deviceCount,
+      devices_limit: plan.max_devices,
+      storage_mb: storageMB,
+      storage_limit_mb: plan.max_storage_mb,
+    },
+    subscription: {
+      status: plan.subscription_status,
+      ends: plan.subscription_ends,
+      stripe_customer_id: plan.stripe_customer_id,
+      stripe_subscription_id: plan.stripe_subscription_id,
+    },
+    trial: {
+      active: plan.trial_active || false,
+      days_left: plan.trial_days_left || 0,
+      end: plan.trial_end ? new Date(plan.trial_end * 1000).toISOString() : null,
+      plan: plan.trial_plan || null,
+      // Set once the trial has lapsed and the account was moved to Free (null while active or
+      // for accounts that never trialed). Lets the Billing page say "ended on" instead of nothing.
+      expired_at: plan.trial_expired_at ? new Date(plan.trial_expired_at * 1000).toISOString() : null,
+    },
+    self_hosted: config.selfHosted,
+  });
+});
+
+// 3.0: client-side funnel events (lib/conversion-events.js). Closed vocabulary, hosted only; on a
+// self-hosted instance this accepts and does nothing, so the client never has to ask which it is.
+router.post('/events', requireAuth, (req, res) => {
+  const conversion = require('../lib/conversion-events');
+  const { event, meta } = req.body || {};
+  if (!conversion.CLIENT_EVENTS.has(event)) return res.status(400).json({ error: 'Unknown event' });
+  if (String(req.user.id).includes(':')) return res.json({ ok: true, recorded: false }); // support/recovery
+  const recorded = conversion.record(db, { userId: req.user.id, workspaceId: req.jwtWorkspaceId || null, event, meta });
+  res.json({ ok: true, recorded });
+});
+
+// 3.0: the trial-to-paid funnel for platform admins (Platform > Overview).
+router.get('/funnel', requireAuth, requireSuperAdmin, (req, res) => {
+  const conversion = require('../lib/conversion-events');
+  res.json({ enabled: conversion.enabled(), ...conversion.funnel(db, { days: parseInt(req.query.days, 10) || 30 }) });
+});
+
+// Admin: assign plan to user
+router.post('/assign', requireAuth, requireSuperAdmin, (req, res) => {
+  const { user_id, plan_id } = req.body;
+  if (!user_id || !plan_id) return res.status(400).json({ error: 'user_id and plan_id required' });
+
+  const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(plan_id);
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(user_id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  /*
+   * ⚠️ A hand-granted plan has to stop BOTH clocks that would otherwise take it away again:
+   *   - the trial clock: expireTrial() drops anyone still on trial_plan with no subscription once
+   *     the 14 days are up, so comping a trialing user the plan their trial granted was silently
+   *     reverted to Free at day 14. trial_started = NULL ends the trial (trial_expired_at stays
+   *     as it is — it records a lapse that did happen, if one did).
+   *   - the dunning clock: downgradeLapsed() only asks whether past_due_since is old enough, so a
+   *     past-due account moved to an agreed plan by hand fell to Free at the next sweep and got
+   *     the lapse email. The email stamps go with it, as clearGrace does, so a genuine future
+   *     lapse is still announced.
+   */
+  db.prepare(`UPDATE users
+                 SET plan_id = ?, plan_comped = ?, subscription_status = 'active', trial_started = NULL,
+                     past_due_since = NULL, payment_failed_email_sent_at = NULL,
+                     subscription_lapsed_email_sent_at = NULL, updated_at = strftime('%s','now')
+               WHERE id = ?`)
+    .run(plan_id, plan_id === 'free' ? 0 : 1, user_id);
+
+  res.json({ success: true, plan: plan.display_name });
+});
+
+// Admin: update / create a plan. Kept for API callers; the same rules as the dashboard's
+// /api/admin/plans (lib/plan-admin.js) — validated, Stripe prices checked, platform admin only.
+router.put('/plans/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+  const planAdmin = require('../lib/plan-admin');
+  try {
+    const r = await planAdmin.updatePlan(db, require('../lib/stripe-client').get(), req.params.id, req.body);
+    res.json(r.plan);
+  } catch (e) {
+    if (e instanceof planAdmin.PlanError) return res.status(e.status).json({ error: e.message, field: e.field });
+    console.error('[subscription/plans]', e);
+    res.status(500).json({ error: 'The plan could not be saved' });
+  }
+});
+
+router.post('/plans', requireAuth, requireSuperAdmin, async (req, res) => {
+  const planAdmin = require('../lib/plan-admin');
+  try {
+    const r = await planAdmin.createPlan(db, require('../lib/stripe-client').get(), req.body);
+    res.status(201).json(r.plan);
+  } catch (e) {
+    if (e instanceof planAdmin.PlanError) return res.status(e.status).json({ error: e.message, field: e.field });
+    console.error('[subscription/plans]', e);
+    res.status(500).json({ error: 'The plan could not be saved' });
+  }
+});
+
+// Stripe webhook (if configured)
+router.post('/webhook/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+  if (!config.stripeSecretKey) return res.status(404).json({ error: 'Stripe not configured' });
+
+  // TODO: Implement Stripe webhook handling
+  // - customer.subscription.created -> activate plan
+  // - customer.subscription.updated -> update plan
+  // - customer.subscription.deleted -> downgrade to free
+  // - invoice.payment_succeeded -> extend subscription
+  // - invoice.payment_failed -> mark as past_due
+
+  res.json({ received: true });
+});
+
+module.exports = router;

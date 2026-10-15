@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Power BI on a TV Screen and Digital Signage (2026) | ScreenTinker</title>
+  <meta name="description" content="Put live Power BI reports on digital signage with your own service principal, rotating pages. Or use Publish to web for public data.">
+  <meta name="keywords" content="power bi digital signage, power bi on tv, power bi on tv screen, power bi dashboard wall, power bi publish to web, power bi embed signage, power bi kiosk display">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://screentinker.com/integrations/power-bi-digital-signage.html">
+  <link rel="alternate" type="text/markdown" href="https://screentinker.com/integrations/power-bi-digital-signage.md">
+
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://screentinker.com/integrations/power-bi-digital-signage.html">
+  <meta property="og:title" content="Power BI on a TV Screen and Digital Signage (2026)">
+  <meta property="og:description" content="Put live Power BI reports on digital signage with your own service principal, rotating pages. Or use Publish to web for public data.">
+  <meta property="og:image" content="https://screentinker.com/assets/dashboard-preview.png">
+  <meta property="og:site_name" content="ScreenTinker">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Power BI on a TV Screen and Digital Signage (2026)">
+  <meta name="twitter:description" content="Put live Power BI reports on digital signage with your own service principal, rotating pages. Or use Publish to web for public data.">
+  <meta name="twitter:image" content="https://screentinker.com/assets/dashboard-preview.png">
+
+  <meta name="theme-color" content="#111827">
+  <link rel="icon" href="/assets/icon-192.png">
+  <link rel="apple-touch-icon" href="/assets/icon-192.png">
+  <link rel="stylesheet" href="/css/seo-page.css">
+</head>
+<body>
+  <nav>
+    <div class="nav-inner">
+      <div class="nav-logo">
+        <a href="/" style="display:flex;align-items:center;gap:10px">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span class="nav-logo-text">ScreenTinker</span>
+        </a>
+      </div>
+      <div class="nav-links">
+        <a href="/#features">Features</a>
+        <a href="/solutions/">Solutions</a>
+        <a href="/integrations/">Integrations</a>
+        <a href="/certified-hardware">Certified Hardware</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/#compare">Compare</a>
+        <a href="/app#/login" class="btn btn-outline" style="margin-left:16px">Sign In</a>
+        <a href="/app#/login" class="btn btn-primary" style="margin-left:8px">Try Free</a>
+      </div>
+    </div>
+  </nav>
+
+    <main class="article">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a>
+      <span>/</span>
+      <a href="/integrations/">Integrations</a>
+      <span>/</span>
+      <span>Power BI</span>
+    </nav>
+
+    <h1>How to put a Power BI report on a TV screen</h1>
+    <p class="lead">Show the reports your teams already rely on, live, on lobby and office screens. The BI Dashboard widget embeds a Power BI report with your own Entra app, so private data stays private, and it can rotate through report pages on its own.</p>
+
+    <h2>How it works</h2>
+    <p>ScreenTinker uses Power BI&rsquo;s <strong>App owns data</strong> embedding with your own Entra ID app, a service principal. An organization owner or admin adds the connection once, in <strong>Settings &rarr; BI dashboards</strong>, and editors pick a report from it.</p>
+    <ul>
+      <li><strong>Credentials stay on the server.</strong> The app secret is encrypted and never sent to a screen.</li>
+      <li><strong>Screens get a view-only token</strong> for one report, which expires within the hour. The screen fetches a new one before it does.</li>
+      <li><strong>Pages rotate.</strong> List the pages you want, or tick <strong>Rotate through all visible pages</strong>, and set how long each one shows.</li>
+      <li><strong>Sandboxed.</strong> Every dashboard page runs with an isolated origin, so the report can&rsquo;t reach anyone&rsquo;s ScreenTinker session.</li>
+    </ul>
+
+    <h2 id="setup">Set it up</h2>
+    <ol>
+      <li><strong>In Entra ID</strong>, register an application and add a client secret. It needs no Microsoft Graph or Power BI API permissions.</li>
+      <li><strong>In the Power BI admin portal</strong>, under Tenant settings &rarr; Developer settings, turn on <strong>Service principals can use Fabric APIs</strong> (in older tenants, &ldquo;Allow service principals to use Power BI APIs&rdquo;). You can limit it to a security group that contains the app.</li>
+      <li><strong>In each Power BI workspace</strong> whose reports you want on screens, add the app (or that group) as a Viewer or higher.</li>
+      <li><strong>In ScreenTinker</strong>, open Settings &rarr; BI dashboards &rarr; Add a connection &rarr; Power BI, and enter the tenant ID, the client ID and the secret. <strong>Test</strong> signs in and counts the workspaces the app can see.</li>
+      <li><strong>Add a BI Dashboard widget</strong>, choose the connection, <strong>Browse</strong> for a report, and set page rotation and <strong>Refresh every</strong> if the dataset refreshes on a schedule.</li>
+      <li>Put the widget in a playlist and assign it to a screen.</li>
+    </ol>
+    <p>Full details are in <a href="https://github.com/screentinker/screentinker/blob/main/docs/bi-dashboards.md">docs/bi-dashboards.md</a>.</p>
+
+    <h2>The no-credentials option: Publish to web</h2>
+    <p>Power BI&rsquo;s <strong>File &rarr; Embed report &rarr; Publish to web (public)</strong> gives a link like <code>https://app.powerbi.com/view?r=...</code>. Choose <strong>A public link</strong> in the widget and paste it. No connection is needed.</p>
+    <h3>Security caveat: Publish to web makes the report public</h3>
+    <p><strong>&ldquo;Publish to web&rdquo; exposes your report and its data to anyone who has the link: no sign-in and no row-level security.</strong> Don&rsquo;t use it for confidential, personal or financial data. Many organizations turn it off in the Power BI admin portal for exactly this reason. For private reports, use a connection as above.</p>
+
+    <h2>Limits</h2>
+    <ul>
+      <li><strong>Capacity.</strong> Microsoft licenses service-principal embedding for reports in a capacity: an Embedded (A) SKU, Fabric (F) or Premium (P/EM). Outside one, embedding is limited to development and testing.</li>
+      <li><strong>Commercial cloud only.</strong> GCC and sovereign clouds are not supported.</li>
+      <li><strong>Live data needs the network.</strong> The page is cached for offline use, but the report itself needs a connection.</li>
+      <li><strong>Very old TV browsers</strong> may not run the Power BI embedding library. Test one screen first.</li>
+      <li><strong>Test before you roll out.</strong> Reports always run in a sandbox, so check that each one loads on a screen first.</li>
+    </ul>
+
+    <h2 id="faq">FAQ</h2>
+
+    <h3>How do I put a Power BI report on a TV screen?</h3>
+    <p>Add a Power BI connection in Settings &rarr; BI dashboards with your own Entra app, then add a BI Dashboard widget, browse for the report, and put the widget in a playlist for that screen.</p>
+
+    <h3>Do I have to make the report public?</h3>
+    <p>No. With a connection, the screen gets a view-only token for one report that expires within the hour, and the report stays private. Publish to web is only an option for data that is meant to be public.</p>
+
+    <h3>Is there a native Power BI widget?</h3>
+    <p>Yes. The BI Dashboard widget embeds Power BI reports, Tableau views and Grafana dashboards.</p>
+
+    <h3>What licence does Power BI embedding need?</h3>
+    <p>Microsoft licenses service-principal embedding for reports in a capacity: an Embedded (A), Fabric (F) or Premium (P/EM) SKU. Outside a capacity it is limited to development and testing. Publish to web needs no capacity but makes the report public.</p>
+
+    <h3>Can the screen rotate through report pages?</h3>
+    <p>Yes. List the pages you want, or tick Rotate through all visible pages, and set how long each page shows.</p>
+
+    <div class="related">
+      <h2>Related</h2>
+      <ul>
+        <li><a href="/integrations/tableau-digital-signage.html">Tableau dashboards on digital signage</a></li>
+        <li><a href="/integrations/grafana-digital-signage.html">Grafana dashboards on digital signage</a></li>
+        <li><a href="/integrations/microsoft-365-digital-signage.html">Microsoft 365: SharePoint, OneDrive and Office files</a></li>
+        <li><a href="/solutions/enterprise-digital-signage.html">Enterprise digital signage: SSO, roles, audit</a></li>
+        <li><a href="/integrations/">All digital signage integrations</a></li>
+      </ul>
+    </div>
+
+    <div class="cta">
+      <h2>Put your Power BI reports on a screen</h2>
+      <p>Connect your Entra app once and every editor can pick a report. Start a 14-day Pro trial on hosted ScreenTinker: up to 15 screens, every feature, no credit card.</p>
+      <p><a href="/app#/login" class="btn btn-primary" style="padding:14px 28px;font-size:16px">Start your free trial</a></p>
+      <p class="cta-alt">Or host it yourself, free and open source: <a href="/guides/self-hosted-digital-signage.html">self-hosting guide</a> &middot; <a href="https://github.com/screentinker/screentinker" target="_blank" rel="noopener">GitHub</a></p>
+    </div>
+  </main>
+
+  <footer>
+    <div style="color:var(--dim);font-size:13px">&copy; 2026 ScreenTinker. All rights reserved.</div>
+    <div class="links">
+      <a href="/solutions/">Solutions</a>
+      <a href="/integrations/">Integrations</a>
+      <a href="https://github.com/screentinker/screentinker" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://discord.gg/utTdsrqq4Z" target="_blank" rel="noopener">Discord</a>
+      <a href="/legal/terms.html">Terms</a>
+      <a href="/legal/privacy.html">Privacy</a>
+      <a href="/legal/third-party.html">Licenses</a>
+      <a href="/app#/login">Sign In</a>
+    </div>
+  </footer>
+
+  <script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      {
+        "@type": "ListItem",
+        "position": 1,
+        "name": "Home",
+        "item": "https://screentinker.com/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 2,
+        "name": "Integrations",
+        "item": "https://screentinker.com/integrations/"
+      },
+      {
+        "@type": "ListItem",
+        "position": 3,
+        "name": "Power BI",
+        "item": "https://screentinker.com/integrations/power-bi-digital-signage.html"
+      }
+    ]
+  }
+  </script>
+
+  <script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "How do I put a Power BI report on a TV screen?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Add a Power BI connection in Settings → BI dashboards with your own Entra app, then add a BI Dashboard widget, browse for the report, and put the widget in a playlist for that screen."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Do I have to make the report public?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. With a connection, the screen gets a view-only token for one report that expires within the hour, and the report stays private. Publish to web is only an option for data that is meant to be public."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is there a native Power BI widget?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. The BI Dashboard widget embeds Power BI reports, Tableau views and Grafana dashboards."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What licence does Power BI embedding need?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Microsoft licenses service-principal embedding for reports in a capacity: an Embedded (A), Fabric (F) or Premium (P/EM) SKU. Outside a capacity it is limited to development and testing. Publish to web needs no capacity but makes the report public."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can the screen rotate through report pages?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. List the pages you want, or tick Rotate through all visible pages, and set how long each page shows."
+        }
+      }
+    ]
+  }
+  </script>
+</body>
+</html>

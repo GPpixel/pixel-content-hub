@@ -1,0 +1,524 @@
+'use strict';
+
+/*
+ * The Pi installer generates another script (the kiosk launcher) and writes it to disk. Nothing
+ * ever executed either one in CI, so every defect in them was found by a user on real hardware —
+ * which is how #245 arrived: a menu that ignored the operator, a keyring prompt, X11 tools
+ * no-oping on a Wayland Pi, and a banner spelling the product's own name wrong.
+ *
+ * These tests check the two things a repo can check without a Pi: that the generated script is
+ * syntactically valid bash, and that the flags/guards the bug reports turned on are actually
+ * present. `bash -n` on the OUTER script would not have caught any of it — the kiosk script lives
+ * inside a heredoc, where a syntax error is just text until it reaches a screen.
+ */
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const ROOT = path.join(__dirname, '..', '..');
+const SCRIPT = path.join(ROOT, 'scripts', 'raspberry-pi-setup.sh');
+const SRC = fs.readFileSync(SCRIPT, 'utf8');
+
+// The kiosk launcher as the installer will write it, with the install-time expansions applied.
+function generatedKioskScript() {
+  const m = SRC.match(/cat > "\$PI_HOME\/screentinker-kiosk\.sh" << KIOSKEOF\n([\s\S]*?)\nKIOSKEOF/);
+  assert.ok(m, 'kiosk heredoc not found — did the installer restructure?');
+  return m[1]
+    .replace(/\$\{KIOSK_URL\}/g, 'http://localhost:3001/player')
+    .replace(/\$\{SCREENTINKER_PORT\}/g, '3001')
+    .replace(/\$\{CHROMIUM_BIN\}/g, '/usr/bin/chromium-browser')
+    .replace(/\\\$/g, '$')
+    .replace(/\\\\/g, '\\');
+}
+
+function bashSyntaxOk(text) {
+  const p = path.join(os.tmpdir(), `st-kiosk-${process.pid}-${Math.abs(text.length)}.sh`);
+  fs.writeFileSync(p, text);
+  try {
+    execFileSync('bash', ['-n', p], { stdio: 'pipe' });
+    return true;
+  } catch (e) {
+    throw new Error(`generated script is not valid bash:\n${e.stderr?.toString() || e.message}`);
+  } finally {
+    try { fs.unlinkSync(p); } catch { /* best-effort */ }
+  }
+}
+
+test('#245: the installer itself is valid bash', () => {
+  assert.ok(bashSyntaxOk(SRC));
+});
+
+test('#245: the kiosk launcher it generates is valid bash', () => {
+  assert.ok(bashSyntaxOk(generatedKioskScript()));
+});
+
+test('#245: prompts read the terminal, not the pipe', () => {
+  // `curl … | sudo bash` makes stdin the SCRIPT. bash has consumed it by the time any read
+  // runs, so a plain `read` gets EOF instantly and the menu "chooses" the default without the
+  // operator touching anything — reported as the menu being skipped, because it was.
+  assert.match(SRC, /exec 3<\/dev\/tty/, 'prompts must come from the controlling terminal');
+  // Any prompting `read` that is not the one inside ask() itself (which is the tty read).
+  const reads = SRC.match(/^\s*read (?!.*-u 3).*-p /gm) || [];
+  assert.equal(reads.length, 0, `every prompt must go through ask(); found a raw read: ${reads[0]}`);
+  assert.match(SRC, /read .*-u 3/, 'ask() must read from the tty fd');
+  // And when there is genuinely no terminal, it must SAY which way it went rather than let an
+  // empty answer look like a decision.
+  assert.match(SRC, /No terminal available for the menu/);
+});
+
+test('#245: Chromium is told not to ask for a keyring', () => {
+  // "Choose password for keyring" on every boot: Chromium reaching for gnome-keyring on a
+  // desktop session. A kiosk has nobody to answer it.
+  assert.match(generatedKioskScript(), /--password-store=basic/);
+});
+
+test('#245: X11-only tools are guarded by the session type', () => {
+  // Pi 5 on Bookworm defaults to Wayland, where xset/unclutter/xrandr are no-ops that log an
+  // error and silently do nothing — so the Pi got no blanking suppression and no cursor
+  // hiding while looking configured.
+  const kiosk = generatedKioskScript();
+  assert.match(kiosk, /SESSION_TYPE/, 'the launcher must detect the display server');
+  const x11Block = kiosk.slice(kiosk.indexOf('if [ "$SESSION_TYPE" = "wayland" ]'), kiosk.indexOf('# Clean Chromium crash flags'));
+  assert.ok(x11Block.length > 0, 'session-type branch not found');
+  for (const tool of ['xset', 'unclutter']) {
+    assert.ok(x11Block.includes(tool), `${tool} must live inside the session-type branch`);
+  }
+  assert.match(kiosk, /--ozone-platform=wayland/, 'Wayland needs the ozone backend named');
+});
+
+test('#245: the crash-restore surface is cleared, not just flagged', () => {
+  // The white page on every boot after the first: a kiosk is killed by shutdown, never exits
+  // cleanly, and Chromium returns with a restore surface over the player. ALT+F4 "fixed" it
+  // because it closed that surface, not the player. Rewriting the flags is not enough on its
+  // own — Chromium also replays the previous window set from Sessions/.
+  const kiosk = generatedKioskScript();
+  assert.match(kiosk, /exited_cleanly/, 'the clean-exit flag must be rewritten');
+  assert.match(kiosk, /rm -rf .*Sessions/, 'the stored session must be removed too');
+  assert.match(kiosk, /--disable-session-crashed-bubble/);
+});
+
+test('#245: the login banner spells the product name', () => {
+  // It read "Scree Tinker" — the n was missing from the ASCII art, and it is the first thing
+  // anyone sees over SSH.
+  const motd = SRC.slice(SRC.indexOf("cat > /etc/motd << 'MOTDEOF'"), SRC.indexOf('MOTDEOF\n', SRC.indexOf("cat > /etc/motd") + 30));
+  const lines = motd.split('\n').filter((l) => /[_\\\/|()]/.test(l) && l.trim().length > 20);
+  assert.ok(lines.length >= 5, 'expected the 5-row banner');
+  // Row 4 of figlet "standard" carries the distinguishing strokes: 'n' contributes "| | | |".
+  const banner = lines.join('\n');
+  assert.ok(banner.includes('| | | |'), 'the n glyph is missing from the banner — it reads "Scree Tinker"');
+});
+
+// ---------------------------------------------------------------------------------------------
+// #245 round two: the installer advertised what it had not installed.
+//
+// The MOTD is written unconditionally and listed three commands, but section 11 creates them only
+// on an All-in-One install. So a Player-Only Pi greeted its operator at every SSH login with three
+// commands that were not on it. Same failure shape as the first round — the script describing a
+// state it never reached — and the same reporter found both.
+
+// The generated MOTD for a given mode: the base heredoc plus whichever command block that mode
+// appends. Extracted rather than re-typed, so a future edit to either half shows up here.
+function motdFor(playerOnly) {
+  const base = SRC.match(/cat > \/etc\/motd << 'MOTDEOF'\n([\s\S]*?)\nMOTDEOF/);
+  assert.ok(base, 'MOTD heredoc not found — did the installer restructure?');
+  const blocks = [...SRC.matchAll(/cat >> \/etc\/motd << 'MOTDCMDEOF'\n([\s\S]*?)\nMOTDCMDEOF/g)];
+  assert.equal(blocks.length, 2, 'expected exactly two per-mode MOTD command blocks');
+  // The all-in-one block is written in the `if [ "$PLAYER_ONLY" = false ]` arm, which comes first.
+  return base[1] + (playerOnly ? blocks[1][1] : blocks[0][1]);
+}
+
+// Which management commands the installer actually creates in a given mode.
+function commandsCreated(playerOnly) {
+  const all = [...SRC.matchAll(/cat > \/usr\/local\/bin\/(screentinker-[a-z]+)/g)].map((m) => m[1]);
+  // Section 11 is an if/else: the all-in-one arm creates update, the player arm does not.
+  return playerOnly ? all.filter((c) => c !== 'screentinker-update') : all;
+}
+
+test('#245: the MOTD never advertises a command that mode did not install', () => {
+  for (const playerOnly of [false, true]) {
+    const motd = motdFor(playerOnly);
+    const created = commandsCreated(playerOnly);
+    const advertised = [...motd.matchAll(/(screentinker-[a-z]+)/g)].map((m) => m[1]);
+    assert.ok(advertised.length > 0, `${playerOnly ? 'player' : 'all-in-one'} MOTD lists no commands at all`);
+    for (const cmd of advertised) {
+      assert.ok(created.includes(cmd),
+        `the ${playerOnly ? 'Player-Only' : 'All-in-One'} MOTD advertises ${cmd}, which that mode does not install`);
+    }
+  }
+});
+
+test('#245: a Player-Only Pi is not left with no diagnostics at all', () => {
+  // The cheap fix would have been to print nothing on a player. That trades a wrong banner for a
+  // machine an operator cannot inspect over SSH, which is the harder support call.
+  const motd = motdFor(true);
+  assert.match(motd, /screentinker-status/, 'a player still needs to answer "is it running?"');
+  assert.match(motd, /screentinker-logs/, 'and "why did it stop?"');
+  assert.doesNotMatch(motd, /screentinker-update/,
+    'there is no local server to update on a player-only install, so it must not be offered');
+});
+
+test('#245: the Wayland cursor claim is backed by something that runs', () => {
+  // The launcher used to state that the installer wrote the compositor cursor config "below". It
+  // did not: wayfire.ini and hide_cursor each appeared exactly once, both inside that comment.
+  const code = SRC.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.match(code, /wayfire\.ini/, 'no wayfire.ini handling outside comments');
+  assert.match(code, /\[hide-cursor\]/, 'the hide-cursor section is never written');
+  assert.match(code, /hide_delay/, 'the plugin is configured without a delay');
+  // Non-destructive: a Pi whose owner already tuned wayfire must not silently lose it.
+  assert.match(code, /screentinker-bak/, 'wayfire.ini is edited without a backup');
+});
+
+// ---------------------------------------------------------------------------------------------
+// One launcher per install: the desktop "fallback" unit was the renderer leak.
+//
+// A Pi OS Desktop install used to get two launchers for the same Chromium profile: the desktop
+// autostart entry AND a systemd unit written "as fallback". The unit ran outside the Wayland
+// session, so its Chromium could not reach the compositor and exited; systemd restarted it every
+// ~10s; each retry found the autostart's browser holding SingletonLock, forwarded its URL into it
+// as a NEW TAB, and exited again. One more tab and one more renderer per cycle, forever. A six-Pi
+// headless deployment reported it as "a major memory leak in the renderers", and fixed it in the
+// field with `systemctl disable --now screentinker-kiosk.service` -- which also removed the only
+// crash recovery those Pis had. So: Desktop gets the autostart only, the launcher supervises
+// Chromium itself, and it refuses to start against a profile another instance already holds.
+
+// The two arms of section 8, so a test can say which launcher each Pi OS variant gets.
+function kioskLaunchArms() {
+  const start = SRC.indexOf('# 8. Kiosk launcher supervision');
+  const end = SRC.indexOf('# 9. Auto-login on tty1');
+  assert.ok(start > 0 && end > start, 'section 8 not found -- did the installer restructure?');
+  const sec = SRC.slice(start, end);
+  const split = sec.indexOf('\nelse\n');
+  assert.ok(split > 0, 'section 8 is expected to be one if/else on HAS_DESKTOP');
+  return { lite: sec.slice(0, split), desktop: sec.slice(split) };
+}
+
+test('one launcher: a Desktop install writes the autostart entry and NO systemd unit', () => {
+  const { lite, desktop } = kioskLaunchArms();
+  assert.match(lite, /cat > \/etc\/systemd\/system\/screentinker-kiosk\.service/,
+    'Lite has no session to autostart from; it still needs the unit that starts X');
+  assert.doesNotMatch(desktop, /cat > \/etc\/systemd\/system\/screentinker-kiosk\.service/,
+    'Desktop must not get a second launcher racing the autostart for the profile lock');
+  assert.match(desktop, /\.config\/autostart"\n[\s\S]*?screentinker\.desktop/, 'the autostart entry is THE launcher on Desktop');
+  assert.doesNotMatch(lite, /screentinker\.desktop/);
+});
+
+test('one launcher: re-running the installer removes the unit an earlier install left on a Desktop Pi', () => {
+  const { desktop } = kioskLaunchArms();
+  assert.match(desktop, /systemctl disable --now screentinker-kiosk\.service/);
+  assert.match(desktop, /rm -f \/etc\/systemd\/system\/screentinker-kiosk\.service/);
+});
+
+test('one launcher: the launcher refuses to start against a profile another Chromium already holds', () => {
+  const kiosk = generatedKioskScript();
+  const guard = kiosk.slice(kiosk.indexOf('SingletonLock'), kiosk.indexOf('while :; do'));
+  assert.ok(guard.length > 0, 'the lock guard must come before the restart loop');
+  assert.match(guard, /kill -0 "\$LOCK_PID"/, 'a stale lock (dead pid) must not block a start');
+  assert.match(guard, /exit 0/, 'a live lock is a clean no-op, not a failure to be retried');
+});
+
+test('one launcher: the launcher supervises Chromium itself instead of exec-ing it', () => {
+  // The unit's Restart=always was the only crash recovery Desktop had. With the unit gone the
+  // loop is it, so Chromium must NOT be exec'd (exec hands the process over and nothing restarts).
+  const kiosk = generatedKioskScript();
+  assert.doesNotMatch(kiosk, /\bexec \/usr\/bin\/chromium-browser/);
+  const loop = kiosk.slice(kiosk.indexOf('while :; do'), kiosk.lastIndexOf('\ndone'));
+  assert.match(loop, /\/usr\/bin\/chromium-browser \\\n\s+--kiosk/, 'Chromium runs inside the loop');
+  assert.match(loop, /sleep 5/, 'a crashed browser comes back after a pause, not in a busy loop');
+  assert.match(loop, /clean_crash_flags/,
+    'the crash flags must be cleaned before EVERY start, or the restart restores the "crashed" session');
+});
+
+test('one launcher: the management scripts no longer assume the kiosk unit exists', () => {
+  // screentinker-status / -logs / -update used to query the unit unconditionally; on a Desktop
+  // Pi that now reads "STOPPED" forever and follows an empty journal.
+  // Each use must be guarded somewhere between the start of ITS management script and the use.
+  const guarded = (idx) => {
+    const scriptStart = SRC.lastIndexOf('cat > /usr/local/bin/', idx);
+    assert.ok(scriptStart > 0, `kiosk-unit use at offset ${idx} is outside any management script`);
+    return /list-unit-files[^\n]*screentinker-kiosk\.service|KIOSK_UNIT/.test(SRC.slice(scriptStart, idx));
+  };
+  for (const m of SRC.matchAll(/systemctl (?:is-active|start|stop) screentinker-kiosk\.service/g)) {
+    // Section 8 itself may reference the unit; only the generated management scripts are in scope.
+    if (m.index < SRC.indexOf('# 11. Management scripts')) continue;
+    assert.ok(guarded(m.index), `'${m[0]}' at offset ${m.index} assumes the unit exists`);
+  }
+  for (const m of SRC.matchAll(/journalctl -u screentinker-kiosk\.service/g)) {
+    assert.ok(guarded(m.index), `journalctl on the kiosk unit at offset ${m.index} assumes the unit exists`);
+  }
+});
+
+const labwcBlock = () => {
+  const start = SRC.indexOf('elif [ "$HAS_DESKTOP" = true ]; then');
+  return SRC.slice(start, SRC.indexOf('# 10. Pi display and boot optimizations'));
+};
+
+test('#409: the labwc cursor config cannot abort the install', () => {
+  // The script runs under `set -euo pipefail`, so `cat > ~/.config/labwc/rc.xml` into a directory
+  // that does not exist does not skip the cursor, it kills the install.
+  const block = labwcBlock();
+  assert.ok(block.includes('command -v labwc'), 'the labwc branch moved — retarget this test');
+  assert.match(block, /mkdir -p "\$LABWC_DIR"/, 'the directory must exist before the redirect');
+  assert.ok(block.indexOf('mkdir -p') < block.indexOf('cat > "$LABWC_RC"'),
+    'and it must be created BEFORE the write, not after');
+  assert.match(block, /screentinker-bak/, 'an existing rc.xml must be backed up before any change');
+  assert.match(block, /chown -R "\$PI_USER"/, 'the pi user must own its own config');
+});
+
+test('#409: the stock <openbox_config/> stub IS replaced — refusing to is what broke this', () => {
+  /*
+   * ⚠️ The first version of this hardening said "never overwrite an existing rc.xml", reasoning
+   * from wayfire.ini that an existing file must hold the owner's keybindings. On Pi OS it does
+   * not: the shipped rc.xml is a STUB rooted at <openbox_config/>, and labwc ignores every
+   * keybinding while that root is present (labwc/labwc#3190) — silently, with no error. So the
+   * "safe" branch was the common branch, and the cursor never hid on a stock image.
+   *
+   * Replacing is only safe because that stub has nothing to lose, hence the `! grep '<keybind'`
+   * half of the condition: a file that DOES carry bindings must never take this path.
+   */
+  const block = labwcBlock();
+  assert.match(block, /grep -q '<openbox_config' "\$LABWC_RC" && ! grep -q '<keybind' "\$LABWC_RC"/,
+    'the stub is replaced only when it demonstrably carries no keybindings');
+  assert.doesNotMatch(block, /not overwriting it/,
+    'the old refuse-everything warning is what made this a no-op on a stock Pi');
+});
+
+test('#409: a real labwc config is MERGED into, never clobbered', () => {
+  const block = labwcBlock();
+  assert.match(block, /grep -q '<labwc_config' "\$LABWC_RC"/, 'a real config must be detected');
+  // Same contract as the wayfire.ini path directly above it: keep what the owner wrote.
+  assert.match(block, /awk -v kb="\$LABWC_KEYBIND"/, 'the merge must be an insert, not a rewrite');
+  assert.match(block, /mv "\$\{LABWC_RC\}\.st-tmp" "\$LABWC_RC"/,
+    'write via a temp file so a failed merge cannot truncate the config');
+});
+
+test('#409: the merge actually puts the keybind inside <keyboard> (runs the real awk)', () => {
+  /*
+   * A regex on the source only proves an awk call exists. This runs the awk program lifted OUT of
+   * the installer against a real config, so the test fails if the program itself is wrong.
+   */
+  const { execFileSync } = require('node:child_process');
+  const block = labwcBlock();
+  const prog = block.match(/awk -v kb="\$LABWC_KEYBIND" '([^']+)'\s*\\?\s*\n?\s*"\$LABWC_RC"/);
+  assert.ok(prog, 'could not lift the merge awk program out of the installer');
+
+  const KEYBIND = '  <keybind key="W-h">\n    <action name="HideCursor" />\n  </keybind>';
+  const existing = [
+    '<?xml version="1.0"?>', '<labwc_config>', '<keyboard>',
+    '  <keybind key="W-Return"><action name="Execute" command="lxterminal" /></keybind>',
+    '</keyboard>', '</labwc_config>', '',
+  ].join('\n');
+
+  const out = execFileSync('awk', ['-v', `kb=${KEYBIND}`, prog[1]], { input: existing }).toString();
+  assert.match(out, /HideCursor/, 'our binding must be added');
+  assert.match(out, /lxterminal/, "and the owner's own binding must survive");
+  assert.ok(out.indexOf('HideCursor') < out.indexOf('</keyboard>'),
+    'the binding has to land INSIDE the keyboard block, or labwc ignores it');
+});
+
+test('#409: rc.xml changes are applied without demanding a reboot', () => {
+  // labwc re-reads rc.xml only on SIGHUP, so writing the file while a session runs does nothing.
+  const block = labwcBlock();
+  assert.match(block, /labwc --reconfigure[^\n]*\|\| true/,
+    'reconfigure must be attempted, and must never fail the install when there is no session');
+});
+
+test('#409: the cursor keypress is guarded like every other optional tool', () => {
+  // wtype is not on every image, and the launcher runs on Lite as well as Desktop. Unguarded, it
+  // logs "command not found" and silently does not hide the cursor — the exact failure this
+  // section of the launcher was written to stop.
+  const code = SRC.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.match(code, /command -v wtype >\/dev\/null 2>&1 && wtype .* \|\| true/,
+    'wtype must be probed before it is called, and must never fail the launcher');
+});
+
+// The native-player arm of the installer: from `if [ "$NATIVE" = true ]` to its `exit 0`.
+function nativeArm() {
+  const m = SRC.match(/\nif \[ "\$NATIVE" = true \]; then\n([\s\S]*?)\n    exit 0\nfi\n/);
+  assert.ok(m, 'native arm not found — did the installer restructure?');
+  return m[1];
+}
+
+test('native: Desktop vs Lite is decided by what BOOTS, not by which packages are installed', () => {
+  // The browser kiosk (option 1/2) installs xserver-xorg on Lite. Reading that as Desktop left
+  // the native service disabled and the kiosk's X server holding the screen (DRM Permission denied).
+  const arm = nativeArm();
+  assert.doesNotMatch(arm, /dpkg -l (xserver-xorg|labwc)/, 'installed packages say nothing about whether a desktop runs');
+  assert.match(arm, /display-manager\.service/);
+  assert.match(arm, /systemctl get-default[^\n]*\n?[^\n]*graphical\.target/);
+  assert.match(arm, /if \[ -z "\$NATIVE_MODE" \]/, '--native-mode must override the detection');
+  assert.match(SRC, /--native-mode\)\n[\s\S]*?lite\|desktop\) NATIVE_MODE="\$2"/);
+});
+
+test('native: an earlier browser-kiosk install cannot keep the screen', () => {
+  const arm = nativeArm();
+  assert.match(arm, /systemctl disable --now screentinker-kiosk\.service/);
+  assert.match(arm, /rm -f \/etc\/systemd\/system\/screentinker-kiosk\.service/);
+  assert.match(arm, /\.config\/autostart\/screentinker\.desktop/);
+  assert.match(arm, /grep -q 'screentinker-kiosk\\\.sh'/, 'only remove an autostart entry that is the kiosk one');
+  assert.doesNotMatch(arm, /screentinker-server\.service/, 'the All-in-One server must keep running');
+  // The cleanup runs before either mode is set up, so both modes get it.
+  assert.ok(arm.indexOf('screentinker-kiosk.service') < arm.indexOf('screentinker-pi setup'));
+});
+
+test('native: the desktop autostart writes a log file (an autostart entry has no journal)', () => {
+  const launcher = fs.readFileSync(path.join(ROOT, 'native', 'packaging', 'linux', 'screentinker-pi'), 'utf8');
+  const fn = launcher.match(/def cmd_autostart\(args\):\n([\s\S]*?)\n\ndef /);
+  assert.ok(fn);
+  assert.match(fn[1], /player\.log/);
+  assert.match(fn[1], /os\.dup2\(fd, 2\)/);
+  assert.ok(fn[1].indexOf('dup2') < fn[1].indexOf('cmd_run(args)'), 'redirect before exec');
+});
+
+// Runs the native arm's REAL mode detection + kiosk cleanup against a fake root, with systemctl
+// stubbed: the scenario from the field (browser kiosk installed first, then the native player).
+function runNativeDetect({ files = {}, defaultTarget = 'multi-user.target', mode = '' }) {
+  const arm = nativeArm();
+  const start = arm.indexOf('    if [ -z "$NATIVE_MODE" ]; then');
+  const end = arm.indexOf('    if [ "$NATIVE_MODE" = desktop ]; then\n        screentinker-pi setup');
+  assert.ok(start > 0 && end > start, 'detection block not found');
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'st-native-'));
+  for (const [p, body] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(fake, p)), { recursive: true });
+    fs.writeFileSync(path.join(fake, p), body);
+  }
+  const block = arm.slice(start, end).replace(/(?<![\w.~])\/(etc|home|root)\//g, `${fake}/$1/`);
+  // ⚠️ Under the installer's OWN strict mode: without it a failing command in the block (Lite has no
+  // lightdm.conf) looked fine here while the real script died on it.
+  assert.match(SRC, /^set -euo pipefail$/m);
+  const script = [
+    'set -euo pipefail',
+    `NATIVE_MODE='${mode}'; SUDO_USER=sudoer`,
+    'log() { :; }',
+    `systemctl() { echo "systemctl $*" >> "${fake}/calls"; [ "$1" = get-default ] && echo ${defaultTarget}; return 0; }`,
+    'getent() { echo "uid1000:x:1000"; }',
+    block,
+    'echo "MODE=$NATIVE_MODE USER=$DESKTOP_USER"',
+  ].join('\n');
+  try {
+    const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    // Snapshot BEFORE the fake root is removed below.
+    const left = new Set(fs.readdirSync(fake, { recursive: true }).map(String));
+    const exists = (p) => left.has(p);
+    const calls = exists('calls') ? fs.readFileSync(path.join(fake, 'calls'), 'utf8') : '';
+    return { out: out.trim().split('\n').pop(), exists, calls };
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
+}
+
+const KIOSK_UNIT = 'etc/systemd/system/screentinker-kiosk.service';
+const KIOSK_ENTRY = 'home/pi/.config/autostart/screentinker.desktop';
+
+test('native (run): Lite after a browser-kiosk install → lite, and the kiosk unit is gone', () => {
+  // xserver-xorg is installed (the kiosk put it there) but no display manager boots.
+  const r = runNativeDetect({ files: { [KIOSK_UNIT]: '[Unit]\n', 'etc/keep': '' } });
+  assert.match(r.out, /^MODE=lite /);
+  assert.equal(r.exists('etc/keep'), true, 'snapshot sanity');
+  assert.equal(r.exists(KIOSK_UNIT), false);
+  assert.match(r.calls, /disable --now screentinker-kiosk\.service/);
+});
+
+test('native (run): a desktop that boots → desktop, user from the autologin, kiosk entry removed', () => {
+  const r = runNativeDetect({
+    defaultTarget: 'graphical.target',
+    files: {
+      'etc/systemd/system/display-manager.service': '',
+      'etc/lightdm/lightdm.conf': '[Seat:*]\nautologin-user=kioskuser\n',
+      [KIOSK_ENTRY]: '[Desktop Entry]\nExec=/home/pi/screentinker-kiosk.sh\n',
+      'home/pi/.config/autostart/other.desktop': 'Exec=/usr/bin/other\n',
+    },
+  });
+  assert.equal(r.out, 'MODE=desktop USER=kioskuser');
+  assert.equal(r.exists(KIOSK_ENTRY), false);
+  assert.equal(r.exists('home/pi/.config/autostart/other.desktop'), true, 'only the kiosk entry goes');
+});
+
+test('native (run): a desktop image set to boot to console → lite; an unrelated screentinker.desktop is kept', () => {
+  const r = runNativeDetect({
+    files: {
+      'etc/systemd/system/display-manager.service': '',
+      [KIOSK_ENTRY]: '[Desktop Entry]\nExec=/usr/bin/something-else\n',
+    },
+  });
+  assert.match(r.out, /^MODE=lite USER=sudoer$/);
+  assert.equal(r.exists(KIOSK_ENTRY), true);
+});
+
+test('native (run): --native-mode overrides the detection', () => {
+  const r = runNativeDetect({ mode: 'desktop' });
+  assert.match(r.out, /^MODE=desktop /);
+});
+
+test('native (run): Lite with NO lightdm.conf runs to the end under set -euo pipefail', () => {
+  // The field report: Option 3 on a clean Lite image after a kiosk install stopped right after
+  // "Native player mode: lite" — kiosk unit still there, setup never ran.
+  const r = runNativeDetect({ files: { [KIOSK_UNIT]: '[Unit]\n' } });
+  assert.equal(r.out, 'MODE=lite USER=sudoer');
+  assert.equal(r.exists(KIOSK_UNIT), false);
+});
+
+// ---------------------------------------------------------------------- clock: NTP + a real time zone
+// ⚠️ Pi OS's default zone IS Europe/London: a Pi in Chicago played its schedules on UK time.
+
+function runClock(src, { cur, body = '', tz = '' }) {
+  const fn = src.match(/^st_setup_clock\(\) \{[\s\S]*?^\}$/m);
+  assert.ok(fn, 'st_setup_clock not found');
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'st-clock-'));
+  const calls = path.join(fake, 'calls');
+  const script = [
+    'set -euo pipefail',
+    `TIMEZONE=${JSON.stringify(tz)}`,
+    'log() { echo "LOG $1"; }', 'warn() { echo "WARN $1"; }',
+    `timedatectl() { case "$1" in show) echo ${JSON.stringify(cur)};; *) echo "$*" >> "${calls}";; esac; }`,
+    `curl() { [ -n ${JSON.stringify(body)} ] && printf '%s' ${JSON.stringify(body)} || return 22; }`,
+    fn[0],
+    'st_setup_clock http://server',
+  ].join('\n');
+  try {
+    const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    const done = fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n') : [];
+    return { out, ntp: done.includes('set-ntp true'), set: done.filter((c) => c.startsWith('set-timezone')).map((c) => c.split(' ')[1]) };
+  } finally {
+    fs.rmSync(fake, { recursive: true, force: true });
+  }
+}
+
+for (const [name, file] of [['raspberry-pi-setup.sh', SCRIPT], ['debian-13-setup.sh', path.join(path.dirname(SCRIPT), 'debian-13-setup.sh')]]) {
+  const src = fs.readFileSync(file, 'utf8');
+  test(`${name}: clock — NTP on, a default zone is detected from our server`, () => {
+    for (const cur of ['Europe/London', 'Etc/UTC', '']) {
+      const r = runClock(src, { cur, body: '{"timezone":"America/Chicago"}' });
+      assert.ok(r.ntp, 'NTP is turned on');
+      assert.deepEqual(r.set, ['America/Chicago'], `from ${cur || '(none)'}`);
+    }
+  });
+  test(`${name}: clock — a zone somebody chose is kept; --timezone wins`, () => {
+    let r = runClock(src, { cur: 'Asia/Tokyo', body: '{"timezone":"America/Chicago"}' });
+    assert.deepEqual(r.set, []);
+    assert.ok(r.ntp);
+    r = runClock(src, { cur: 'Asia/Tokyo', tz: 'America/Denver' });
+    assert.deepEqual(r.set, ['America/Denver']);
+  });
+  test(`${name}: clock — no answer or a bad one keeps the zone, never fails the install`, () => {
+    for (const body of ['', '<html>404</html>', '{"timezone":"Mars/Olympus"}', '{"timezone":"../../etc/passwd"}', '{"timezone":"a; reboot"}']) {
+      const r = runClock(src, { cur: 'Etc/UTC', body });
+      assert.deepEqual(r.set, [], `body ${body || '(none)'}`);
+      assert.match(r.out, /WARN/);
+    }
+  });
+}
+
+test('the clock is set BEFORE the native player starts, and on the kiosk paths too', () => {
+  // Native: `screentinker-pi setup` sets it (before it starts the player — test_launcher.py), with
+  // --timezone passed through; the installer calling st_setup_clock too printed every warning twice.
+  const arm = SRC.slice(SRC.indexOf('if [ "$NATIVE" = true ]; then'), SRC.indexOf('# 8. Kiosk launcher supervision'));
+  assert.ok(!/^\s*st_setup_clock /m.test(arm), 'the native path leaves the clock to screentinker-pi setup');
+  assert.match(arm, /&& TZ_ARGS=\(--timezone "\$TIMEZONE"\)/);
+  for (const mode of ['desktop', 'lite']) {
+    assert.match(arm, new RegExp(`screentinker-pi setup "\\$SERVER_URL" --mode ${mode}[^\\n]*"\\$\\{TZ_ARGS\\[@\\]\\}"`));
+  }
+  assert.ok(SRC.lastIndexOf('st_setup_clock "$SERVER_URL"') > SRC.indexOf('# 8. Kiosk launcher supervision'), 'kiosk installs set it too');
+});

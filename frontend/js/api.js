@@ -1,0 +1,1163 @@
+const API_BASE = '/api';
+
+// The admin's own IANA zone, sent when pairing so a display still on its OS image's default zone
+// (Raspberry Pi OS ships Europe/London) can be set to where its admin is. A zone name only: no
+// location. undefined where the browser can't say.
+export function browserTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch (_) { return undefined; }
+}
+
+/*
+ * The Error a failed request throws. ⚠️ Its MESSAGE IS UNCHANGED from what every caller has always
+ * read (the server's `error` text), so `catch (e) { showToast(e.message) }` behaves exactly as
+ * before. What is new rides beside it: `status`, `code` and the whole `body`, so a caller that needs
+ * more — the corporate slot list, which mandate shadows a screen — no longer loses it here.
+ *
+ * Head office (corporate) refusals carry a `code` (CORPORATE_*, FILL_*) and are shown in the
+ * viewer's language from i18n (`corp.err.<CODE>`), falling back to the server's own text when no
+ * key exists — never the raw key.
+ *
+ * ⚠️ The translator is INJECTED (app.js calls setErrorTranslator(t) at startup) rather than imported:
+ * api.js is loaded on its own by tests and tools with nothing but fetch/localStorage stubbed, and an
+ * i18n import would drag navigator/locale state into every one of them.
+ */
+let translate = null;
+export function setErrorTranslator(fn) { translate = typeof fn === 'function' ? fn : null; }
+
+export function requestError(status, body) {
+  const b = body && typeof body === 'object' ? body : {};
+  let msg = b.error || 'Request failed';
+  const code = typeof b.code === 'string' ? b.code : null;
+  if (code && translate && /^(CORPORATE_|FILL_)/.test(code)) {
+    const t = translate;
+    const key = `corp.err.${code}`;
+    const corp = b.corporate || {};
+    const vars = {
+      name: corp.playlist_name || '', target: (corp.mandate_target && corp.mandate_target.label) || '',
+    };
+    const template = t(key);
+    if (template !== key) {
+      // Only when every placeholder the translation needs can be filled; otherwise the server's
+      // own sentence (which always names things correctly) is the better message.
+      const needed = [...template.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+      if (needed.every((k) => vars[k])) msg = t(key, vars);
+    }
+  }
+  const err = Object.assign(new Error(msg), { status, code, body: b });
+  /*
+   * 3.0: a plan limit is a moment to explain, not just an error. The upgrade prompt
+   * (components/plan-nudges.js) listens for this and calls preventDefault() when it takes over —
+   * hosted only; on a self-hosted instance nothing listens and the caller's toast stands. Callers
+   * check err.planPromptShown before toasting, so the person never gets both.
+   */
+  if (status === 403 && PLAN_LIMIT_CODES.has(code) && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function'
+      && typeof CustomEvent === 'function') {
+    err.planPromptShown = !window.dispatchEvent(new CustomEvent('st:plan-limit', { cancelable: true, detail: { code, body: b } }));
+  }
+  return err;
+}
+const PLAN_LIMIT_CODES = new Set(['DEVICE_LIMIT', 'STORAGE_LIMIT', 'FEATURE_LOCKED']);
+
+export function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/*
+ * ⚠️ WHEN A REMOTE ORG IS SELECTED, READS GO TO THAT SERVER — transparently, so a view does not
+ * have to know. That is what "a linked server behaves exactly like a local one" has to mean in
+ * practice: the alternative is every view growing an `if (remote)` branch, and the branches that
+ * get forgotten are the ones that quietly show local data under a remote heading.
+ *
+ * ⚠️ ONLY DATA PATHS ARE REDIRECTED. Anything about THIS server or THIS session — signing in, the
+ * account, the workspace list, the mesh routes themselves — must stay local, or selecting a
+ * customer would log you into their server. Those live in ALWAYS_LOCAL below, and that list is
+ * exhaustive: anything not on it is either routed to the customer or refused, never quietly served
+ * from here.
+ *
+ * ⚠️ WRITES ARE NEVER REDIRECTED, and are refused outright while a remote org is selected. Sending
+ * them locally would be far worse than failing: an edit meant for a customer's screen would land
+ * silently on one of your own.
+ */
+const REMOTE_READABLE = ['/devices', '/assignments/device/', '/groups', '/playlists'];
+
+/*
+ * ⚠️ WORKSPACE DATA WE CANNOT YET READ REMOTELY, AND MUST NOT SERVE LOCALLY.
+ *
+ * This is the failure mode the allowlist above would otherwise create: a path that is not routed
+ * falls through to the local server, so viewing a customer's org would render YOUR content library
+ * inside THEIR device page — with nothing on screen to say so. That is worse than an error, because
+ * it looks right.
+ *
+ * Resolved as empty rather than thrown: these feed pickers and side panels, and a rejection there
+ * takes the whole page down over a list nobody can act on in a read-only view anyway.
+ */
+const REMOTE_UNAVAILABLE = ['/content', '/walls', '/schedules', '/widgets', '/layouts'];
+
+/*
+ * ⚠️ PATHS ABOUT *THIS* SERVER AND *THIS* SESSION — always local, whatever is selected.
+ *
+ * Signing in, the account, the workspace list, billing, and the mesh routes themselves. Routing any
+ * of these at a customer's server would try to log you into it; refusing them would lock you out of
+ * your own session the moment you looked at a customer. They are neither remote data nor forbidden
+ * — they are simply not about the org being viewed.
+ *
+ * ⚠️ THIS LIST IS THE ONLY WAY A WRITE STAYS LOCAL while a remote org is selected. Everything else
+ * is refused (see remoteRoute), so adding a prefix here is granting it the right to be written on
+ * your own server while your screen says you are looking at someone else's. Add only session and
+ * server-scoped routes, never org data.
+ */
+const ALWAYS_LOCAL = ['/auth', '/admin', '/workspaces', '/tokens', '/subscription', '/provision', '/ai', '/mesh'];
+
+/*
+ * Segment-exact: '/devices' matches '/devices' and '/devices/x', never '/devices-archive'. The
+ * original used a bare startsWith, so a route named as a superstring of an allowlisted one would
+ * have been routed remotely by accident.
+ */
+function underPrefix(path, prefix) {
+  return path === prefix || path.startsWith(prefix.endsWith('/') ? prefix : prefix + '/');
+}
+
+/*
+ * Mirrors server/lib/mesh/write-proxy.js WRITABLE. Segment-exact, method pinned per rule.
+ * ⚠️ NOT a security boundary — see the note at its only call site.
+ */
+const MESH_WRITABLE = [
+  { pattern: '/playlists',                     method: 'POST' },
+  { pattern: '/playlists/:id',                 method: 'PUT' },
+  { pattern: '/playlists/:id/items',           method: 'POST' },
+  { pattern: '/playlists/:id/items/selection', method: 'POST' },
+  { pattern: '/playlists/:id/items/:itemId',   method: 'PUT' },
+  { pattern: '/playlists/:id/items/:itemId',   method: 'DELETE' },
+  { pattern: '/playlists/:id/publish',         method: 'POST' },
+  { pattern: '/playlists/:id/assign',          method: 'POST' },
+];
+
+function meshWritable(path, verb) {
+  const got = path.split('/');
+  return MESH_WRITABLE.some((rule) => {
+    if (rule.method !== verb) return false;
+    const want = rule.pattern.split('/');
+    if (want.length !== got.length) return false;
+    return want.every((seg, i) => (seg.startsWith(':') ? !!got[i] : seg === got[i]));
+  });
+}
+
+function remoteOrg() {
+  try { return JSON.parse(localStorage.getItem('st_remote_org') || 'null'); } catch (e) { return null; }
+}
+
+/*
+ * ⚠️ THE DEFAULT IS "NOT AVAILABLE", NOT "LOCAL". THIS INVERSION IS THE WHOLE POINT.
+ *
+ * It used to read: anything unlisted falls through to the local server. That is safe only for the
+ * four prefixes somebody remembered to list, and every route added afterwards inherited the wrong
+ * default — silently, because a local answer always looks like a real one. Three live consequences,
+ * all found in review of shipped code:
+ *
+ *   - GET /folders was in neither list, so a customer's content library rendered YOUR folder tree.
+ *   - POST/DELETE /folders created and DELETED folders on YOUR OWN server while the screen said
+ *     you were looking at a customer. Destructive, silent, wrong server.
+ *   - Writes to an UNAVAILABLE path returned {empty:true} BEFORE the method was examined, so
+ *     deleting a customer's content resolved as [] — the UI reported success and nothing happened
+ *     on any server at all.
+ *
+ * So: session routes stay local, every other write is refused, and every unrouted read is empty.
+ * A route added later is now unavailable-until-routed instead of local-until-noticed, which fails
+ * towards an empty panel rather than towards someone else's data.
+ */
+function remoteRoute(url, method) {
+  const org = remoteOrg();
+  if (!org) return null;
+  const path = String(url).split('?')[0];
+  const verb = (method || 'GET').toUpperCase();
+
+  if (ALWAYS_LOCAL.some((p) => underPrefix(path, p))) return null;
+
+  if (verb !== 'GET') {
+    /*
+     * ⚠️ THIS IS WHERE A COMMAND GOES TO THE CUSTOMER'S SERVER INSTEAD OF OURS.
+     *
+     * A write reaches the other node only if all three hold: the customer granted this hub write
+     * access (org.writable, which comes from what the CHILD announced — never from anything we
+     * decided), the path is one the child's own allowlist accepts, and the method matches. Anything
+     * else is refused exactly as before.
+     *
+     * ⚠️ The allowlist here is a MIRROR of server/lib/mesh/write-proxy.js and is not the
+     * enforcement. Its only job is to avoid sending a request that will certainly be refused; the
+     * copy that matters is on the machine that owns the screens, it is checked live per request,
+     * and it wins. If the two drift, the child simply refuses and the operator sees why — which is
+     * the correct direction for a client-side list to be wrong in.
+     */
+    if (org.writable && meshWritable(path, verb)) {
+      return { write: true, nodeId: org.nodeId, path: '/api' + path, method: verb };
+    }
+    return { refuse: 'This server is being viewed read-only. Switch back to make changes.' };
+  }
+
+  if (REMOTE_UNAVAILABLE.some((p) => underPrefix(path, p))) return { empty: true };
+  if (!REMOTE_READABLE.some((p) => underPrefix(path, p))) return { empty: true };
+  return { url: `/mesh/read/${encodeURIComponent(org.nodeId)}?path=${encodeURIComponent('/api' + url)}` };
+}
+
+/*
+ * ⚠️ FOR CALLERS THAT DO NOT GO THROUGH request().
+ *
+ * Several views (designer, widgets, video-wall, schedule, layout-editor) define their own fetch
+ * helper straight to /api, and the content library reaches for bare fetch in three places. Those
+ * bypass every rule above, which is how they stayed pointed at the LOCAL server while the screen
+ * said a customer's — reading your data under their heading and writing your data on their behalf.
+ *
+ * Throws rather than resolving empty: request() can return [] because it feeds pickers that cope
+ * with an empty list, but a raw caller has no such contract and would treat a silent [] as a real
+ * answer. A visible error is the honest outcome for a view that cannot work remotely yet.
+ */
+export function assertLocalCallAllowed(url, method) {
+  const routed = remoteRoute(url, method);
+  if (!routed) return;
+  throw new Error(routed.refuse
+    || 'That is not available while you are viewing a linked server. Switch back to your own.');
+}
+
+/*
+ * Send one change to a customer's server and report honestly what happened to it.
+ *
+ * ⚠️ THE OPERATION ID MUST SURVIVE A RETRY, and that is the whole reason this is a function rather
+ * than a fetch inline. The child records the outcome against the id and REPLAYS it rather than
+ * applying twice, so re-issuing with a fresh id on a timeout is precisely how an operator ends up
+ * with the same item in a playlist twice. The route mints an id per request body and echoes it
+ * back; the retry below reuses the one it was given.
+ *
+ * Three answers matter and they need three different things from a person:
+ *   503 not connected — nothing happened, try later
+ *   504 no acknowledgement — it MAY have applied; retry with the same id to find out which
+ *   403 refused — the customer has not granted this, and no retry will help
+ */
+async function meshWrite(routed, options) {
+  const body = options.body ? JSON.parse(options.body) : undefined;
+  const send = (opId) => fetch(`${API_BASE}/mesh/write/${encodeURIComponent(routed.nodeId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ path: routed.path, method: routed.method, body, ...(opId ? { opId } : {}) }),
+  });
+
+  let res = await send();
+  let payload = await res.json().catch(() => ({}));
+
+  /*
+   * ⚠️ ONE automatic retry, and ONLY on 504, and ONLY with the id we were given. A 504 means the
+   * answer is unknown rather than no — and because the child replays a recorded outcome, asking
+   * again with the same id is safe and is the only way to learn which it was. Retrying anything
+   * else, or retrying twice, turns an unknown into a second write.
+   */
+  if (res.status === 504 && payload.retryWithSameOpId && payload.opId) {
+    res = await send(payload.opId);
+    payload = await res.json().catch(() => ({}));
+  }
+
+  if (!res.ok) {
+    const err = new Error(payload.error || 'That server did not accept the change.');
+    err.status = res.status;
+    err.opId = payload.opId;
+    // Surfaced so a caller can say "may have applied" rather than "failed", which are different
+    // things to tell somebody standing in front of a screen.
+    err.indeterminate = res.status === 504;
+    throw err;
+  }
+  return payload.result ?? payload;
+}
+
+// DELETE has no body: an acknowledgement rides in the query string.
+function ackQuery(opts) { return opts && opts.acknowledge_impact ? '?acknowledge_impact=1' : ''; }
+
+async function request(url, options = {}) {
+  const routed = remoteRoute(url, options.method);
+  if (routed && routed.refuse) throw new Error(routed.refuse);
+  if (routed && routed.empty) return [];
+  if (routed && routed.write) return meshWrite(routed, options);
+  if (routed) {
+    const r = await fetch(API_BASE + routed.url, {
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || 'That server did not answer');
+    }
+    const body = await r.json();
+    /*
+     * ⚠️ Unwrapped to the shape the caller expects. The proxy envelope is a transport detail; a view
+     * asking for devices should get devices, not { ok, rows }, or every caller learns about the
+     * mesh and the transparency is lost.
+     */
+    return body.rows !== undefined ? body.rows : (body.row !== undefined ? body.row : body);
+  }
+
+  const res = await fetch(API_BASE + url, {
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders(), ...options.headers },
+    ...options,
+  });
+  if (res.status === 401) {
+    // Token expired or invalid - redirect to login
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    window.location.hash = '#/login';
+    window.location.reload();
+    throw new Error('Session expired');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw requestError(res.status, err);
+  }
+  return res.json();
+}
+
+/*
+ * #329: is a mesh route worth calling at all?
+ *
+ * The mesh routers are mounted CONDITIONALLY, and the dashboard used to discover that by calling
+ * them and reading the 404 — on every sidebar render and every /me refresh. /me now states it
+ * outright (server/routes/auth.js), and this reads the cached answer.
+ *
+ * `undefined` is NOT `false`: a cached user from before this shipped, or a server that predates it,
+ * says nothing either way. Those fall through to `null`, and callers keep the old probe-and-catch
+ * path, so an older server still lights up its Servers nav correctly.
+ */
+export function meshCapability(which) {
+  let u;
+  try { u = JSON.parse(localStorage.getItem('user') || 'null'); } catch (_) { return null; }
+  if (!u || !u.mesh || typeof u.mesh[which] !== 'boolean') return null;
+  return u.mesh[which];
+}
+
+// 3.0: a password or 2FA change revokes every session server-side (token_version) and returns a
+// fresh token for this one. Store it, or the tab that made the change would be signed out next.
+function keepSession(r) {
+  if (r && typeof r.token === 'string' && r.token) {
+    try { localStorage.setItem('token', r.token); } catch { /* storage blocked: next request re-auths */ }
+  }
+  return r;
+}
+
+export const api = {
+  /*
+   * ⚠️ GENERIC VERBS. Everything else here is a named helper, which is the right shape for a
+   * long-lived endpoint — but the mesh routes are mounted CONDITIONALLY, and a named helper per
+   * route would imply a surface that is usually not there.
+   *
+   * These were missing while views/servers.js already called api.get(), so the whole Servers
+   * section threw "api.get is not a function" on first render and had never worked in a browser.
+   * The tests around it assert on the view's SOURCE, so they confirmed it said the right things
+   * without ever executing it — see test/frontend-api-contract.test.js, which now checks that every
+   * api.X() a view calls actually exists here.
+   */
+  get: (path) => request(path),
+  post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
+
+  // Free stock photos and videos (server routes/stock-media.js). The provider keys stay on the
+  // server: the browser only ever sees results and the library items an import creates.
+  stockStatus: () => request('/stock/status'),
+  stockSearch: ({ provider = '', type = 'photo', q = '', page = 1, orientation = '' } = {}) => {
+    const p = new URLSearchParams({ type, q, page: String(page) });
+    if (provider) p.set('provider', provider);
+    if (orientation) p.set('orientation', orientation);
+    return request(`/stock/search?${p.toString()}`);
+  },
+  stockImport: ({ provider, type, id, folderId = null }) => request('/stock/import',
+    { method: 'POST', body: JSON.stringify({ provider, type, id, ...(folderId ? { folder_id: folderId } : {}) }) }),
+  adminGetStockKeys: () => request('/stock/settings'),
+  adminSetStockKey: (provider, key) => request('/stock/settings', { method: 'PUT', body: JSON.stringify({ provider, key }) }),
+  adminTestStockKey: (provider) => request('/stock/settings/test', { method: 'POST', body: JSON.stringify({ provider }) }),
+
+  // 3.0 switch to ScreenTinker (server routes/migrate.js). The other vendor's key goes up once, in
+  // the connect (or resume) body, and is never returned.
+  migrateVendors: () => request('/migrate/vendors'),
+  migrateJobs: () => request('/migrate/jobs'),
+  migrateJob: (id) => request(`/migrate/jobs/${encodeURIComponent(id)}`),
+  migrateConnect: (vendor, credentials) => request('/migrate/jobs', { method: 'POST', body: JSON.stringify({ vendor, credentials }) }),
+  migrateUpload: (formData) => api.postForm('/migrate/jobs/upload', formData),
+  migrateRun: (id, options, credentials = null) => request(`/migrate/jobs/${encodeURIComponent(id)}/run`,
+    { method: 'POST', body: JSON.stringify({ ...(options ? { options } : {}), ...(credentials ? { credentials } : {}) }) }),
+  migrateCancel: (id) => request(`/migrate/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
+  migratePlaceholders: () => request('/migrate/placeholders'),
+  migrateLinkPlaceholder: (id, deviceId) => request(`/migrate/placeholders/${encodeURIComponent(id)}/link`, { method: 'POST', body: JSON.stringify({ device_id: deviceId }) }),
+  migrateDeletePlaceholder: (id) => request(`/migrate/placeholders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Triggers: the listener settings, and the secret. Separate calls because they are separate
+  // decisions — rotating the credential that lets a LAN datagram change a screen must not be a
+  // side effect of editing a port number.
+  setTriggerConfig: (deviceId, body) => request(`/devices/${deviceId}/trigger-config`,
+    { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  setTriggerSecret: (deviceId, body) => request(`/devices/${deviceId}/trigger-secret`,
+    { method: 'POST', body: JSON.stringify(body ?? {}) }),
+
+  /*
+   * Display power schedules — the weekly BACKLIGHT clock. `effective` is the one worth knowing
+   * about: it answers "what will THIS screen actually do", after the device-beats-group rule, so
+   * the group editor can warn that a member is overriding it rather than implying an edit here
+   * reaches every screen in the group.
+   */
+  listPowerSchedules: () => request('/display-power-schedules'),
+  effectivePowerSchedule: (deviceId) => request(`/display-power-schedules/effective/${deviceId}`),
+  createPowerSchedule: (body) => request('/display-power-schedules',
+    { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  updatePowerSchedule: (id, body) => request(`/display-power-schedules/${id}`,
+    { method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  deletePowerSchedule: (id) => request(`/display-power-schedules/${id}`, { method: 'DELETE' }),
+  put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body ?? {}) }),
+  delete: (path) => request(path, { method: 'DELETE' }),
+
+  /*
+   * Multipart POST for anything that is not content.
+   *
+   * ⚠️ CHECKS remoteRoute FIRST, which is the duty the uploadContent comment above names: a helper
+   * that reaches for fetch or XHR directly bypasses the routing layer, and every upload made while
+   * viewing a customer's server would land silently in YOUR OWN workspace under a heading that said
+   * theirs. It happened once with content; this is the same shape.
+   *
+   * ⚠️ No Content-Type header is set, deliberately. FormData must set its own, including the
+   * multipart boundary — supplying one produces a request the server cannot parse and an error that
+   * points nowhere near the cause.
+   */
+  postForm: async (path, formData) => {
+    const routed = remoteRoute(path, 'POST');
+    if (routed && routed.refuse) throw new Error(routed.refuse);
+    const token = localStorage.getItem('token');
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const text = await res.text();
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch (e) { body = null; }
+    if (!res.ok) throw new Error((body && body.error) || `Upload failed (${res.status})`);
+    return body;
+  },
+
+  // Devices
+  getDevices: () => request('/devices'),
+  getDeviceLive: (id) => request(`/devices/${id}/live`),
+  // #go2rtc: public status carries features.live_video (the server master switch) so the UI
+  // only offers the live-video toggles when the server actually supports them.
+  getServerStatus: () => request('/status'),
+  reorderDevices: (order) => request('/devices/reorder', { method: 'POST', body: JSON.stringify({ order }) }),
+  getDevice: (id) => request(`/devices/${id}`),
+  // "What will this screen show at…?" (docs/preview-at-time.md). `extra` carries an optional
+  // what-if weather ({ weather: 'rain', temp_c: 12 }).
+  simulateDevice: (id, at, extra = {}) => request(`/devices/${id}/simulate?${new URLSearchParams({ at, ...extra })}`),
+  deviceTimeline: (id, from, to, extra = {}) => request(`/devices/${id}/timeline?${new URLSearchParams({ from, ...(to ? { to } : {}), ...extra })}`),
+  simulateGroup: (id, at) => request(`/groups/${id}/simulate?${new URLSearchParams({ at })}`),
+  getDeviceOwnerQR: () => request('/provision/device-owner-qr'),   // #161: device-owner provisioning
+  updateDevice: (id, data) => request(`/devices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteDevice: (id) => request(`/devices/${id}`, { method: 'DELETE' }),
+  // #146 Item D: operator block/unblock — refuses the device at its next register with
+  // no restart. Server enforces via the SNAT-safe identity chain (deviceSocket).
+  blockDevice: (id) => request(`/devices/${id}/block`, { method: 'POST' }),
+  unblockDevice: (id) => request(`/devices/${id}/unblock`, { method: 'POST' }),
+  // #150: fingerprint-keyed settings snapshots of previously-removed devices (this workspace),
+  // and the re-adopt action that applies a snapshot onto a newly-paired device.
+  getRemovedDevices: () => request('/devices/removed'),
+  reAdoptDevice: (id, fingerprint) => request(`/devices/${id}/re-adopt`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
+  setDevicePin: (id, body) => request(`/devices/${id}/settings-pin`, { method: 'POST', body: JSON.stringify(body) }),
+
+  // #109 PiP overlay: push/clear a floating overlay on a device or group. `id` may be a
+  // device id OR a group id (the server resolves + expands). Needs full scope (no-op for JWT).
+  sendPip: (id, opts) => request('/pip', { method: 'POST', body: JSON.stringify({ device_id: id, ...opts }) }),
+  clearPip: (id, pipId) => request('/pip/clear', { method: 'POST', body: JSON.stringify({ device_id: id, pip_id: pipId || undefined }) }),
+
+  // Provisioning
+  pairDevice: (pairing_code, name) => request('/provision/pair', {
+    method: 'POST',
+    body: JSON.stringify({ pairing_code, name, browser_timezone: browserTimezone() })
+  }),
+
+  // Content
+  getContent: (folderId, includeExpired = false, opts = {}) => {
+    const p = new URLSearchParams();
+    // #214: a text search spans the whole workspace, so folder_id is only sent when
+    // NOT searching (the server also ignores folder_id when q is present, but keeping
+    // the client in sync avoids a misleading URL).
+    const searching = opts.q && opts.q.trim();
+    if (!searching && folderId !== undefined) p.set('folder_id', folderId === null ? 'root' : folderId);
+    if (includeExpired) p.set('include_expired', '1');
+    if (searching) p.set('q', opts.q.trim());
+    if (opts.type && opts.type !== 'all') p.set('type', opts.type);
+    if (opts.sort) p.set('sort', opts.sort);
+    const qs = p.toString();
+    return request(`/content${qs ? '?' + qs : ''}`);
+  },
+  /**
+   * EVERY content item in the workspace, by paging until the server stops giving more.
+   *
+   * ⚠️ EXISTS BECAUSE `getContent()` SILENTLY RETURNS ONLY THE FIRST 100. The endpoint defaults to
+   * `LIMIT 100`, so any caller that wanted "all of it" and did not page was quietly working from a
+   * truncated list. The playlist picker was exactly that caller: a customer with 211 files could
+   * see a file in the library and not find it in the picker, which reads as "it won't let me pick
+   * from that folder" — and that is how it was reported.
+   *
+   * Bounded on purpose. `maxItems` stops a pathological library turning a modal into twenty
+   * requests and a frozen tab; the caller is told when the ceiling was hit so it can say so rather
+   * than pretend the list is complete — which is the whole bug being fixed here.
+   */
+  getAllContent: async (opts = {}) => {
+    const pageSize = 500;             // the server's own maximum
+    const maxItems = opts.maxItems || 5000;
+    const out = [];
+    let offset = 0;
+    for (let page = 0; page < Math.ceil(maxItems / pageSize); page++) {
+      const p = new URLSearchParams();
+      p.set('limit', String(pageSize));
+      p.set('offset', String(offset));
+      if (opts.type && opts.type !== 'all') p.set('type', opts.type);
+      const batch = await request(`/content?${p.toString()}`);
+      if (!Array.isArray(batch) || batch.length === 0) return { items: out, truncated: false };
+      out.push(...batch);
+      if (batch.length < pageSize) return { items: out, truncated: false };
+      offset += batch.length;
+    }
+    return { items: out, truncated: true };
+  },
+  getContentItem: (id) => request(`/content/${id}`),
+  deleteContent: (id) => request(`/content/${id}`, { method: 'DELETE' }),
+  updateContent: (id, data) => request(`/content/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  /*
+   * 3.0 content freshness (routes/freshness.js). The page's one-click actions (replace, remove, set
+   * an expiry) are NOT here: they use updateContent and the library's own replace, so approval and
+   * publishing apply exactly as they do from the library.
+   */
+  /*
+   * 3.0 energy & carbon (routes/energy.js, docs/energy.md). Estimates, not metering. The CSV and
+   * appendix downloads go through downloadEnergyFile below (a bearer header cannot ride on a link).
+   */
+  getEnergyReport: (start, end) => request(`/energy/report?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
+  getEnergySuggestions: (start, end, days) => request(`/energy/suggestions?start=${start}&end=${end}${days ? `&days=${encodeURIComponent(days)}` : ''}`),
+  getEnergyGlance: () => request('/energy/glance'),
+  getEnergyDevices: () => request('/energy/devices'),
+  setEnergyDevice: (id, body) => request(`/energy/devices/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  setEnergyGroup: (id, body) => request(`/energy/groups/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  getEnergySettings: () => request('/energy/settings'),
+  updateEnergySettings: (body) => request('/energy/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  getEnergyOrg: (start, end) => request(`/energy/org?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
+  getFreshness: () => request('/freshness'),
+  getFreshnessChips: () => request('/freshness/chips'),
+  updateFreshnessSettings: (data) => request('/freshness/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  snoozeFreshness: (type, id, days) => request('/freshness/snooze', { method: 'POST', body: JSON.stringify({ type, id, days }) }),
+  unsnoozeFreshness: (type, id) => request(`/freshness/snooze/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getFreshnessDigest: () => request('/freshness/digest'),
+  setFreshnessDigest: (enabled) => request('/freshness/digest', { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  // 3.0 accessibility checker (routes/accessibility.js)
+  getAccessibility: () => request('/accessibility'),
+  getAccessibilityBadges: () => request('/accessibility/badges'),
+  checkAccessibility: (type, id) => request(`/accessibility/check/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
+  checkSignAccessibility: (body) => request('/accessibility/check/sign', { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  updateAccessibilitySettings: (data) => request('/accessibility/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  updateAccessibilityScreen: (id, data) => request(`/accessibility/screens/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  getSttSettings: () => request('/accessibility/stt'),
+  saveSttSettings: (data) => request('/accessibility/stt', { method: 'PUT', body: JSON.stringify(data) }),
+  generateCaptions: (id, lang) => request(`/accessibility/captions/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify(lang ? { lang } : {}) }),
+  getCaptionsJob: (id) => request(`/accessibility/captions/${encodeURIComponent(id)}`),
+  getCaptionsText: (id) => request(`/accessibility/captions/${encodeURIComponent(id)}/vtt`),
+  saveCaptionsText: (id, vtt, lang) => request(`/accessibility/captions/${encodeURIComponent(id)}/vtt`, { method: 'PUT', body: JSON.stringify({ vtt, lang }) }),
+  moveContent: (id, folderId) => request(`/content/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ folder_id: folderId })
+  }),
+  // #213: batch operations — the whole batch succeeds or fails atomically server-side.
+  batchDeleteContent: (ids) => request('/content/batch/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids })
+  }),
+  batchMoveContent: (ids, folderId) => request('/content/batch/move', {
+    method: 'POST',
+    body: JSON.stringify({ ids, folder_id: folderId || null })
+  }),
+
+  // The Content Library page (server lib/content-library.js): one page of results with the real
+  // total and each row's usage. `opts` are the page's own state; only set values are sent.
+  // folderId: undefined = the whole workspace ("All content"), null = the root, <id> = that folder.
+  getLibraryPage: (opts = {}, signal) => {
+    const p = new URLSearchParams({ envelope: '1' });
+    const q = (opts.q || '').trim();
+    if (!q && opts.folderId !== undefined) p.set('folder_id', opts.folderId === null ? 'root' : opts.folderId);
+    if (q) p.set('q', q);
+    for (const k of ['type', 'status', 'usage', 'scope', 'sort']) if (opts[k] && opts[k] !== 'all') p.set(k, opts[k]);
+    p.set('limit', String(opts.limit || 48));
+    p.set('offset', String(opts.offset || 0));
+    return request(`/content?${p.toString()}`, signal ? { signal } : undefined);
+  },
+  getLibrarySummary: () => request('/content/library-summary'),
+  getContentUsage: (id) => request(`/content/${id}/usage`),
+  // 3.0 TV-safe video copies (server/lib/video-variants.js)
+  getContentTvCopies: (id) => request(`/content/${id}/tv-copies`),
+  retryContentTvCopies: (id) => request(`/content/${id}/tv-copies/retry`, { method: 'POST' }),
+  setContentPrerotated: (id, on) => request(`/content/${id}`, { method: 'PUT', body: JSON.stringify({ video_prerotated: on ? 1 : 0 }) }),
+  batchTagContent: (ids, add, remove) => request('/content/batch/tags', {
+    method: 'POST',
+    body: JSON.stringify({ ids, ...(add && add.length ? { add } : {}), ...(remove && remove.length ? { remove } : {}) })
+  }),
+
+  // Folders
+  getFolders: () => request('/folders'),
+  createFolder: (name, parentId) => request('/folders', {
+    method: 'POST',
+    body: JSON.stringify({ name, parent_id: parentId || null })
+  }),
+  renameFolder: (id, name) => request(`/folders/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name })
+  }),
+  moveFolder: (id, parentId) => request(`/folders/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ parent_id: parentId || null })
+  }),
+  deleteFolder: (id) => request(`/folders/${id}`, { method: 'DELETE' }),
+  // #212: accepts a single File or an array/FileList of Files. All go up in one request
+  // under the `files` field (the server also still accepts the legacy `file` field).
+  // onProgress reports aggregate percent across the whole batch. Resolves to the content
+  // object for a single file, or an array of them for a batch.
+  uploadContent: async (file, onProgress, folderId) => {
+    /*
+     * ⚠️ THIS ONE DOES NOT GO THROUGH request(), SO IT NEEDS ITS OWN GUARD.
+     *
+     * It is a raw XHR because it needs upload progress events, which fetch cannot give. That also
+     * means it bypasses remoteRoute entirely — so before this check, every upload made while
+     * viewing a customer landed silently in YOUR OWN library, under a heading that said theirs.
+     * Any other helper that reaches for XHR or bare fetch inherits the same duty.
+     */
+    const routed = remoteRoute('/content', 'POST');
+    if (routed && routed.refuse) throw new Error(routed.refuse);
+
+    const wasBatch = (file instanceof FileList || Array.isArray(file));
+    const files = wasBatch ? Array.from(file) : [file];
+
+    /*
+     * #317: send them in batches rather than all in one request.
+     *
+     * Somebody tried to upload 160 photos from a company party, got an error with no number in it,
+     * and ended up dragging them in sixteen at a time. The server capped one request's file count,
+     * and the whole selection went up as a single multipart body — so the cap was also a wall the
+     * dashboard walked straight into. Chunking here means the person never meets it: the number
+     * below only has to stay under the server's own limit, and a batch that is small enough to
+     * report progress in more than one step is friendlier anyway. Sequential on purpose — parallel
+     * requests would race the storage-limit check and make progress meaningless.
+     */
+    const CHUNK = 20;
+    const chunks = [];
+    for (let i = 0; i < files.length; i += CHUNK) chunks.push(files.slice(i, i + CHUNK));
+
+    const totalBytes = files.reduce((n, f) => n + (f && f.size ? f.size : 0), 0) || 1;
+    let doneBytes = 0;
+
+    const sendChunk = (batch) => new Promise((resolve, reject) => {
+      const formData = new FormData();
+      for (const f of batch) formData.append('files', f);
+      if (folderId) formData.append('folder_id', folderId);
+
+      const batchBytes = batch.reduce((n, f) => n + (f && f.size ? f.size : 0), 0);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/content`);
+      const token = localStorage.getItem('token');
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      if (onProgress) {
+        // Progress spans the WHOLE selection, not the current request, or a 160-file upload would
+        // run 0->100% eight times over.
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const sent = doneBytes + (e.loaded / e.total) * batchBytes;
+          onProgress(Math.min(99, Math.round((sent / totalBytes) * 100)));
+        };
+      }
+      xhr.onload = () => {
+        /*
+         * ⚠️ THE SERVER'S OWN WORDS, OR THE CALLER LEARNS NOTHING.
+         *
+         * This used to reject with a flat "Upload failed" for every non-2xx, throwing away the one
+         * thing the person needs: WHY. The server is specific — "Unsupported file type — only image
+         * and video files are accepted", a storage-limit refusal, "Switch to a workspace before
+         * uploading" — and all of it was replaced with a shrug, which is how a refused upload
+         * becomes "it just doesn't work".
+         */
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { return resolve(JSON.parse(xhr.responseText)); }
+          catch (e) { return reject(new Error('Upload succeeded but the response could not be read')); }
+        }
+        let body = {};
+        try { body = JSON.parse(xhr.responseText) || {}; } catch (e) { body = {}; }
+        const msg = body.error || `Upload failed (${xhr.status})`;
+        // requestError keeps the server's words AND its code, so a storage-limit refusal reaches
+        // the upgrade prompt like any other plan limit (3.0).
+        reject(requestError(xhr.status, { ...body, error: msg }));
+      };
+      xhr.onerror = () => reject(new Error('Upload failed'));
+      xhr.send(formData);
+    });
+
+    const out = [];
+    for (let i = 0; i < chunks.length; i++) {
+      let res;
+      try {
+        res = await sendChunk(chunks[i]);
+      } catch (err) {
+        // Say what already landed. Silently discarding that is how someone re-uploads 140 photos
+        // they already have, or assumes none of them arrived.
+        if (out.length) {
+          throw Object.assign(new Error(`${err.message} (${out.length} of ${files.length} file${files.length === 1 ? '' : 's'} were uploaded before this failed)`),
+            { status: err.status, code: err.code, planPromptShown: err.planPromptShown });
+        }
+        throw err;
+      }
+      if (Array.isArray(res)) out.push(...res); else out.push(res);
+      doneBytes += chunks[i].reduce((n, f) => n + (f && f.size ? f.size : 0), 0);
+      if (onProgress) onProgress(Math.min(99, Math.round((doneBytes / totalBytes) * 100)));
+    }
+    if (onProgress) onProgress(100);
+
+    // Unchanged contract: one content object for a single file, an array for a batch.
+    return wasBatch ? out : out[0];
+  },
+
+  // folderId (optional, the library's destination): the new item is filed there instead of the root.
+  addRemoteContent: (url, name, mime_type, folderId) => request('/content/remote', {
+    method: 'POST',
+    body: JSON.stringify({ url, name, mime_type, ...(folderId ? { folder_id: folderId } : {}) })
+  }),
+
+  addYoutubeContent: (url, name, folderId) => request('/content/youtube', {
+    method: 'POST',
+    body: JSON.stringify({ url, name, ...(folderId ? { folder_id: folderId } : {}) })
+  }),
+
+  // IPTV: add a live HLS stream (the player opens the .m3u8 on its LAN; the server never fetches it).
+  addHoldContent: (mode, name, folderId) => request('/content/hold', { method: 'POST', body: JSON.stringify({ mode, name, ...(folderId ? { folder_id: folderId } : {}) }) }),
+  addHlsContent: (url, name, folderId) => request('/content/hls', {
+    method: 'POST',
+    body: JSON.stringify({ url, name, ...(folderId ? { folder_id: folderId } : {}) })
+  }),
+
+  // Assignments
+  getAssignments: (deviceId) => request(`/assignments/device/${deviceId}`),
+  addAssignment: (deviceId, data) => request(`/assignments/device/${deviceId}`, {
+    method: 'POST',
+    body: JSON.stringify(data)
+  }),
+  // deviceId says WHICH screen is being edited. These endpoints are addressed by item, and a shared
+  // playlist has many screens, so without it an edit on a screen that inherits its playlist changes
+  // that item for every screen in the group. With it, the server forks first (see
+  // server/lib/fork-device-playlist.js). Optional: the playlist page edits items where they live.
+  updateAssignment: (id, data, deviceId) => request(`/assignments/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(deviceId ? { ...data, device_id: deviceId } : data),
+  }),
+  // DELETE carries no body here, so the device goes in the query string.
+  deleteAssignment: (id, deviceId) => request(
+    `/assignments/${id}${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ''}`,
+    { method: 'DELETE' },
+  ),
+  reorderAssignments: (deviceId, order) => request(`/assignments/device/${deviceId}/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ order })
+  }),
+
+  // Widgets
+  getWidgets: () => request('/widgets'),
+  getWidget: (id) => request('/widgets/' + id),
+  createWidget: (data) => request('/widgets', { method: 'POST', body: JSON.stringify(data) }),
+  // 3.0 news feeds (routes/news-feeds.js): "Find feeds" on a pasted site, and a feed's items.
+  newsDiscover: (url) => request('/news-feeds/discover', { method: 'POST', body: JSON.stringify({ url }) }),
+  newsPreview: (url, mode = 'feed') => request('/news-feeds/preview', { method: 'POST', body: JSON.stringify({ url, mode }) }),
+  getKioskPages: () => request('/kiosk'),
+
+  // Device Groups
+  getGroups: () => request('/groups'),
+  createGroup: (name, color) => request('/groups', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  updateGroup: (id, data) => request(`/groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  groupRulesPreview: (rules) => request('/groups/rules-preview', { method: 'POST', body: JSON.stringify({ rules }) }),
+  resyncGroup: (id) => request(`/groups/${id}/resync`, { method: 'POST' }),
+  // opts.acknowledge_impact: resend after the person ticked "I've checked these" (store triggers
+  // the change would hide — components/corporate-ui.js withImpactAck).
+  deleteGroup: (id, opts = {}) => request(`/groups/${id}${ackQuery(opts)}`, { method: 'DELETE' }),
+  getGroupDevices: (id) => request(`/groups/${id}/devices`),
+  addDeviceToGroup: (groupId, device_id, opts = {}) => request(`/groups/${groupId}/devices`, { method: 'POST', body: JSON.stringify({ device_id, ...opts }) }),
+  // Encoded: the dashboard's drag-and-drop reads deviceId from dataTransfer, which a drag from any
+  // other page can fill, and a raw `../` there would aim this DELETE at a different endpoint.
+  removeDeviceFromGroup: (groupId, deviceId, opts = {}) => request(`/groups/${encodeURIComponent(groupId)}/devices/${encodeURIComponent(deviceId)}${ackQuery(opts)}`, { method: 'DELETE' }),
+  sendGroupCommand: (groupId, type, payload) => request(`/groups/${groupId}/command`, { method: 'POST', body: JSON.stringify({ type, payload }) }),
+  // #312 follow-up: fan a command out to every device in a workspace (admin-gated server-side).
+  // Used for the workspace-wide server-URL rewrite when a server is relocated.
+  sendWorkspaceCommand: (workspaceId, type, payload) => request(`/workspaces/${workspaceId}/command`, { method: 'POST', body: JSON.stringify({ type, payload }) }),
+
+  // Video walls
+  getWalls: () => request('/walls'),
+  createWall: (data) => request('/walls', { method: 'POST', body: JSON.stringify(data) }),
+  setWallDevices: (id, devices, opts = {}) => request(`/walls/${id}/devices`, { method: 'PUT', body: JSON.stringify({ devices, ...opts }) }),
+  updateWall: (id, data) => request(`/walls/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteWall: (id, opts = {}) => request(`/walls/${id}${ackQuery(opts)}`, { method: 'DELETE' }),
+  // Move screens to another workspace of the same organization (admins of both).
+  previewMoveDevices: (ids, workspaceId, { bring = false } = {}) => request(`/devices/move-workspace/preview?device_ids=${encodeURIComponent(ids.join(','))}&workspace_id=${encodeURIComponent(workspaceId)}${bring ? '&bring_playlist=1' : ''}`),
+  moveDevices: (ids, workspaceId, opts = {}) => request('/devices/move-workspace', { method: 'POST', body: JSON.stringify({ device_ids: ids, workspace_id: workspaceId, ...opts }) }),
+
+  // Playlists
+  getPlaylists: () => request('/playlists'),
+  createPlaylist: (name, description, smart_rules) => request('/playlists', { method: 'POST', body: JSON.stringify({ name, description, ...(smart_rules ? { smart_rules } : {}) }) }),
+  smartPlaylistPreview: (smart_rules) => request('/playlists/smart-preview', { method: 'POST', body: JSON.stringify({ smart_rules }) }),
+  getPlaylist: (id) => request(`/playlists/${id}`),
+  updatePlaylist: (id, data) => request(`/playlists/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePlaylist: (id) => request(`/playlists/${id}`, { method: 'DELETE' }),
+  getPlaylistItems: (id) => request(`/playlists/${id}/items`),
+  addPlaylistItem: (id, data) => request(`/playlists/${id}/items`, { method: 'POST', body: JSON.stringify(data) }),
+  updatePlaylistItem: (id, itemId, data) => request(`/playlists/${id}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deletePlaylistItem: (id, itemId) => request(`/playlists/${id}/items/${itemId}`, { method: 'DELETE' }),
+  duplicatePlaylistItem: (id, itemId) => request(`/playlists/${id}/items/${itemId}/duplicate`, { method: 'POST' }),
+  // #318: many content items in one request. Returns { added: [...], skipped: [{content_id, reason}] } —
+  // a batch can partially succeed, and the caller is expected to say so.
+  addPlaylistItemsBulk: (id, content_ids, zone_id) => request(`/playlists/${id}/items/bulk`, {
+    method: 'POST', body: JSON.stringify(zone_id ? { content_ids, zone_id } : { content_ids }),
+  }),
+  playlistSelection: (id, body) => request(`/playlists/${id}/items/selection`, { method: 'POST', body: JSON.stringify(body) }),
+  reorderPlaylistItems: (id, order) => request(`/playlists/${id}/items/reorder`, { method: 'POST', body: JSON.stringify({ order }) }),
+  // #74/#75 per-item schedule blocks
+  getItemSchedules: (id, itemId) => request(`/playlists/${id}/items/${itemId}/schedules`),
+  setItemSchedules: (id, itemId, blocks) => request(`/playlists/${id}/items/${itemId}/schedules`, { method: 'PUT', body: JSON.stringify({ blocks }) }),
+  // #313: create a display that has no player yet, and get the URL that will become one.
+  createWebPlayerDisplay: (name) => request('/devices/web-player', { method: 'POST', body: JSON.stringify({ name }) }),
+  // #313: mint or roll the enrolment key that lets a storage-less web player identify itself.
+  createEnrolKey: (id) => request(`/devices/${id}/enrol-key`, { method: 'POST' }),
+  revokeEnrolKey: (id) => request(`/devices/${id}/enrol-key`, { method: 'DELETE' }),
+  // View-only access (server lib/view-access.js)
+  getViewAccess: (id) => request(`/devices/${id}/view`),
+  updateViewAccess: (id, body) => request(`/devices/${id}/view`, { method: 'PUT', body: JSON.stringify(body) }),
+  regenerateViewLink: (id) => request(`/devices/${id}/view/regenerate`, { method: 'POST' }),
+  assignPlaylistToDevice: (playlistId, device_id) => request(`/playlists/${playlistId}/assign`, { method: 'POST', body: JSON.stringify({ device_id }) }),
+  clearDevicePlaylist: (device_id) => request(`/devices/${device_id}/playlist`, { method: 'DELETE' }),
+  publishPlaylist: (id) => request(`/playlists/${id}/publish`, { method: 'POST' }),
+  discardPlaylistDraft: (id) => request(`/playlists/${id}/discard`, { method: 'POST' }),
+  // 3.0 playlist layouts: the layouts a playlist may choose, and where its zoned items would go.
+  getLayouts: () => request('/layouts'),
+  getPlaylistLayoutZoneMap: (id, layoutId) => request(`/playlists/${id}/layout-zone-map?layout_id=${encodeURIComponent(layoutId || '')}`),
+
+  // Content approval (optional per workspace) and version history. See docs/approvals-and-history.md.
+  getApprovalSettings: () => request('/approvals/settings'),
+  updateApprovalSettings: (data) => request('/approvals/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  getReviewQueue: (status = 'open') => request(`/approvals/queue?status=${encodeURIComponent(status)}`),
+  getMySubmissions: (status = 'open') => request(`/approvals/mine?status=${encodeURIComponent(status)}`),
+  getSubmission: (id) => request(`/approvals/${id}`),
+  submitForReview: (resource_type, resource_id, note) => request('/approvals/submit', { method: 'POST', body: JSON.stringify({ resource_type, resource_id, note }) }),
+  // 3.0 Make a sign (routes/signs.js) and the workspace brand kit (routes/brand-kit.js).
+  getSignTemplates: () => request('/signs/templates'),
+  // Community templates a platform admin has installed from a catalog (views/templates.js).
+  getInstalledTemplates: () => request('/templates/installed'),
+  previewSigns: (body) => request('/signs/preview', { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  createSign: (body) => request('/signs', { method: 'POST', body: JSON.stringify(body ?? {}) }),
+  getBrandKit: () => request('/brand-kit'),
+  saveBrandKit: (body) => request('/brand-kit', { method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  withdrawSubmission: (id) => request(`/approvals/${id}/withdraw`, { method: 'POST' }),
+  approveSubmission: (id, comment, version) => request(`/approvals/${id}/approve`, { method: 'POST', body: JSON.stringify({ comment, version }) }),
+  requestChanges: (id, comment, version) => request(`/approvals/${id}/request-changes`, { method: 'POST', body: JSON.stringify({ comment, version }) }),
+  publishSubmission: (id) => request(`/approvals/${id}/publish`, { method: 'POST' }),
+  getHistory: (type, id) => request(`/revisions/${type}/${id}`),
+  getRevision: (type, id, rev) => request(`/revisions/${type}/${id}/${rev}`),
+  diffRevision: (type, id, rev, against) => request(`/revisions/${type}/${id}/${rev}/diff${against ? `?against=${encodeURIComponent(against)}` : ''}`),
+  restoreRevision: (type, id, rev) => request(`/revisions/${type}/${id}/${rev}/restore`, { method: 'POST' }),
+  publishDraft: (type, id) => request(`/revisions/${type}/${id}/publish-draft`, { method: 'POST' }),
+  discardDraft: (type, id) => request(`/revisions/${type}/${id}/discard-draft`, { method: 'POST' }),
+
+  // Device Groups - Playlist
+  groupAssignPlaylist: (groupId, playlist_id) => request(`/groups/${groupId}/assign-playlist`, { method: 'POST', body: JSON.stringify({ playlist_id }) }),
+
+  // API Tokens (personal access tokens, workspace-scoped)
+  getTokens: () => request('/tokens'),
+  createToken: (data) => request('/tokens', { method: 'POST', body: JSON.stringify(data) }),
+  revokeToken: (id) => request('/tokens/' + id, { method: 'DELETE' }),
+  setTokenTargets: (id, target_playlist_ids) => request('/tokens/' + id + '/targets', { method: 'PUT', body: JSON.stringify({ target_playlist_ids }) }), // #73: re-designate agency token playlists
+  setTokenUploadFolder: (id, upload_folder_id) => request('/tokens/' + id + '/upload-folder', { method: 'PUT', body: JSON.stringify({ upload_folder_id }) }), // #158: rebind agency token upload folder (null = root)
+
+  // TOTP 2FA (#100) — opt-in per-user, local accounts only. See routes/auth.js.
+  totpStatus: () => request('/auth/totp/status'),
+  // Unlink an instance-wide SSO provider. The new password is required in the same call:
+  // the account must never sit between credentials.
+  ssoUnlink: (password) => request('/auth/oidc/unlink', { method: 'POST', body: JSON.stringify({ password }) }),
+  // Returns { url } to navigate to. Fetched rather than navigated to, because the session is
+  // a bearer token and a top-level navigation cannot carry one.
+  ssoLinkStart: (slug) => request(`/auth/oidc/${encodeURIComponent(slug)}/link/start`),
+  totpSetup: () => request('/auth/totp/setup', { method: 'POST' }),
+  // 3.0: these end every other session server-side and hand THIS one a fresh token (keepSession).
+  totpEnable: (code) => request('/auth/totp/enable', { method: 'POST', body: JSON.stringify({ code }) }).then(keepSession),
+  totpDisable: (code) => request('/auth/totp/disable', { method: 'POST', body: JSON.stringify({ code }) }).then(keepSession),
+  revokeOtherSessions: () => request('/auth/sessions/revoke-others', { method: 'POST' }).then(keepSession),
+  totpRegenRecovery: (code) => request('/auth/totp/recovery-codes/regenerate', { method: 'POST', body: JSON.stringify({ code }) }),
+
+  // 3.0 passkeys (server/routes/passkeys.js). Adding one asks for the password again (plus the TOTP
+  // code when 2FA is on). Removing one ends every other session and hands this one a fresh token.
+  passkeysList: () => request('/auth/passkeys'),
+  passkeyRegisterOptions: (password, code) => request('/auth/passkeys/register/options', { method: 'POST', body: JSON.stringify({ password, code }) }),
+  passkeyRegisterVerify: (challenge_id, response, name) => request('/auth/passkeys/register/verify', { method: 'POST', body: JSON.stringify({ challenge_id, response, name }) }),
+  passkeyRename: (id, name) => request('/auth/passkeys/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ name }) }),
+  passkeyDelete: (id) => request('/auth/passkeys/' + encodeURIComponent(id), { method: 'DELETE' }).then(keepSession),
+
+  // Email verification (signup). Resend is generic (never reveals whether the address exists).
+  resendVerification: (email) => request('/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) }),
+
+  // Current user
+  getMe: () => request('/auth/me'),
+  adminConversionFunnel: (days = 30) => request(`/subscription/funnel?days=${encodeURIComponent(days)}`),
+  // 3.0 trial-to-paid funnel (server: lib/conversion-events.js). Fire-and-forget by design: a
+  // dropped event must never surface as an error, and the server ignores it when self-hosted.
+  trackEvent: (event, meta = {}) => request('/subscription/events', { method: 'POST', body: JSON.stringify({ event, meta }) }).catch(() => null),
+  updateMe: (data) => request('/auth/me', { method: 'PUT', body: JSON.stringify(data) }).then(keepSession),
+  switchWorkspace: (workspaceId) => request('/auth/switch-workspace', { method: 'POST', body: JSON.stringify({ workspace_id: workspaceId }) }),
+  /*
+   * ⚠️ THE ORG IS NOT SENT. The server resolves it from the caller's own membership — a body-supplied
+   * organization_id is honoured only after it verifies the caller administers that org, so passing
+   * one from here would buy nothing and invite the mistake. See routes/workspaces.js.
+   */
+  createWorkspace: (data) => request('/workspaces', { method: 'POST', body: JSON.stringify(data ?? {}) }),
+  renameWorkspace: (id, data) => request(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  updateWorkspaceSecuritySettings: (workspaceId, data) => request(`/workspaces/${workspaceId}/security-settings`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  // Workspace members + invites (slice 2A read-only)
+  getWorkspaceMembers: (id) => request(`/workspaces/${id}/members`),
+  getOrganizationMembers: (workspaceId) => request(`/workspaces/${workspaceId}/organization-members`),
+  getWorkspaceInvites: (id) => request(`/workspaces/${id}/invites`),
+
+  // Workspace member/invite mutations (slice 2B). All admin-only server-side
+  // (canAdminWorkspace gate). Server returns translated English error messages
+  // mapped to i18n keys via mapMutationError() in workspace-members.js.
+  inviteWorkspaceMember: (workspaceId, data) => request(`/workspaces/${workspaceId}/invites`, { method: 'POST', body: JSON.stringify(data) }),
+  cancelWorkspaceInvite: (workspaceId, inviteId) => request(`/workspaces/${workspaceId}/invites/${inviteId}`, { method: 'DELETE' }),
+  updateWorkspaceMemberRole: (workspaceId, userId, role) => request(`/workspaces/${workspaceId}/members/${userId}`, { method: 'PUT', body: JSON.stringify({ role }) }),
+  removeWorkspaceMember: (workspaceId, userId) => request(`/workspaces/${workspaceId}/members/${userId}`, { method: 'DELETE' }),
+
+  // Slice 2C - accept a workspace invite by id (post-auth flow)
+  acceptInvite: (inviteId) => request(`/auth/accept-invite/${inviteId}`, { method: 'POST' }),
+
+  // Admin-provisioned user creation (#10). data: { email, name, password,
+  // workspaceId, role, mustChangePassword }
+  adminCreateUser: (data) => request('/admin/users', { method: 'POST', body: JSON.stringify(data) }),
+  adminCreateOrg: (name) => request('/admin/orgs', { method: 'POST', body: JSON.stringify({ name }) }),
+  adminListOrgs: () => request('/admin/orgs'),
+  // Platform-admin view: EVERY plan incl. hidden ones, with subscriber counts.
+  adminListPlans: () => request('/admin/plans'),
+  adminPlanImpact: (id) => request(`/admin/plans/${encodeURIComponent(id)}/impact`),
+  adminUpdatePlan: (id, data) => request(`/admin/plans/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  adminCreatePlan: (data) => request('/admin/plans', { method: 'POST', body: JSON.stringify(data) }),
+  adminListPromotions: () => request('/admin/promotions'),
+  adminCreatePromotion: (body) => request('/admin/promotions', { method: 'POST', body: JSON.stringify(body) }),
+  adminEndPromotion: (id) => request(`/admin/promotions/${encodeURIComponent(id)}/end`, { method: 'POST' }),
+  adminUpdatePromotion: (id, body) => request(`/admin/promotions/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+  adminDeletePromotion: (id) => request(`/admin/promotions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getPromotion: () => request('/subscription/promotion'),
+  adminOverview: () => request('/admin/overview'),
+  adminHost: () => request('/admin/host'),
+  adminAttention: (item) => request(`/admin/overview/attention/${encodeURIComponent(item)}`),
+  adminStaleAccounts: (days) => request(`/admin/cleanup/stale-accounts?days=${encodeURIComponent(days)}`),
+  adminPurgeStale: (body) => request('/admin/cleanup/stale-accounts', { method: 'POST', body: JSON.stringify(body) }),
+  adminWarnStale: (body) => request('/admin/cleanup/stale-accounts/warn', { method: 'POST', body: JSON.stringify(body) }),
+  adminDeleteOrg: (id) => request(`/admin/orgs/${id}`, { method: 'DELETE' }),
+  // #talk: per-org talk flag + optional per-org ICE (STUN/TURN) override. data = { talk_enabled, ice_servers }.
+  adminSetOrgTalk: (id, data) => request(`/admin/orgs/${id}/talk`, { method: 'PUT', body: JSON.stringify(data) }),
+  adminDeleteWorkspace: (id) => request(`/admin/workspaces/${id}`, { method: 'DELETE' }),
+  // 3.0 screen share (docs/screen-share.md). start returns a single-use ticket for the signalling socket.
+  getScreenShare: (deviceId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`),
+  startScreenShare: (deviceId, data) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  stopScreenShare: (deviceId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
+  setScreenShareGuest: (deviceId, enabled) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/guest`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  // 3.0: several people presenting on one screen at once.
+  setScreenShareMulti: (deviceId, enabled) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/multi`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  spotlightScreenShare: (deviceId, shareId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/spotlight`, { method: 'PUT', body: JSON.stringify({ share_id: shareId || null }) }),
+  removeScreenSharePresenter: (deviceId, shareId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/presenters/${encodeURIComponent(shareId)}`, { method: 'DELETE' }),
+  // 3.0 multi share: one share on several screens (device_ids and/or group_id); stop it everywhere.
+  startScreenShareMulti: (data) => request('/screen-share/shares', { method: 'POST', body: JSON.stringify(data || {}) }),
+  stopScreenShareAll: (shareId) => request(`/screen-share/shares/${encodeURIComponent(shareId)}`, { method: 'DELETE' }),
+  getScreenShareGroup: (groupId) => request(`/screen-share/groups/${encodeURIComponent(groupId)}`),
+  getScreenShareWorkspace: (wsId) => request(`/screen-share/workspace/${encodeURIComponent(wsId)}`),
+  setScreenShareWorkspace: (wsId, enabled) => request(`/screen-share/workspace/${encodeURIComponent(wsId)}`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  aiGetSettings: () => request('/ai/settings'),
+  aiSaveSettings: (data) => request('/ai/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  aiGenerateDesign: (prompt) => request('/ai/generate-design', { method: 'POST', body: JSON.stringify({ prompt }) }),
+  /* A whole SLIDE from a sentence: {template, fields}, ready to drop onto the editor's canvas.
+   * Shaped differently from generate-design because a slide keeps layout and words apart. */
+  aiGenerateSlide: (prompt) => request('/ai/generate-slide', { method: 'POST', body: JSON.stringify({ prompt }) }),
+  // Generates a picture AND ingests it into the content library, returning a real content_id — a
+  // slide references its background by id because the file has to reach a screen and be playable
+  // with the WAN down, which an inline data: URL never could.
+  aiGenerateBackground: (prompt, dims) => request('/ai/generate-background', { method: 'POST', body: JSON.stringify({ prompt, ...(dims || {}) }) }),
+  /*
+   * A background PLUS cut-out objects, each its own animatable element. One press is up to five
+   * paid generations upstream, so the caller must be single-flight about it.
+   */
+  aiGenerateLayered: (prompt, dims, objects) => request('/ai/generate-layered', {
+    method: 'POST', body: JSON.stringify({ prompt, ...(dims || {}), objects }),
+  }),
+  /*
+   * ScreenTinker-hosted images, paid in ORG credits (server/routes/ai-hosted.js). The caller always
+   * names provider/model/resolution/quality — the server has no default — and sends a fresh
+   * idempotency_key per click so a network retry cannot charge twice.
+   */
+  aiHostedStatus: () => request('/ai/hosted/status'),
+  aiHostedUsage: () => request('/ai/hosted/usage'),
+  aiHostedGenerate: (body) => request('/ai/hosted/generate', { method: 'POST', body: JSON.stringify(body) }),
+  aiHostedCheckout: (pack_id) => request('/ai/hosted/checkout', { method: 'POST', body: JSON.stringify({ pack_id }) }),
+  aiListModels: (base_url, api_key) => request('/ai/models', { method: 'POST', body: JSON.stringify({ base_url, api_key }) }),
+  /*
+   * 3.0 Private AI (server/routes/ai-private.js, docs/private-ai.md): a local / private provider,
+   * one allowed LAN host, the org's "only private AI", the AI starter set and auto-translate.
+   */
+  privateAiStatus: () => request('/ai/private/status'),
+  privateAiTest: (base_url, api_key) => request('/ai/private/test', { method: 'POST', body: JSON.stringify({ base_url, api_key }) }),
+  privateAiSave: (body) => request('/ai/private/settings', { method: 'PUT', body: JSON.stringify(body ?? {}) }),
+  privateAiAllowHost: (host) => request('/ai/private/allow-host', { method: 'POST', body: JSON.stringify({ host }) }),
+  privateAiPolicy: (only_private) => request('/ai/private/policy', { method: 'PUT', body: JSON.stringify({ only_private: !!only_private }) }),
+  aiStarterSet: (description) => request('/ai/private/starter', { method: 'POST', body: JSON.stringify({ description }) }),
+  aiTranslations: (deckId) => request(`/ai/private/translations${deckId ? `?deck_id=${encodeURIComponent(deckId)}` : ''}`),
+  aiTranslate: (deck_id, langs) => request('/ai/private/translate', { method: 'POST', body: JSON.stringify({ deck_id, langs }) }),
+  aiTranslationSave: (id, strings) => request(`/ai/private/translations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ strings }) }),
+  aiTranslationApprove: (id) => request(`/ai/private/translations/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
+  aiTranslationDelete: (id) => request(`/ai/private/translations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  aiScreenLanguages: () => request('/ai/private/screens'),
+  aiSetScreenLanguage: (deviceId, mode, langs) => request(`/ai/private/screens/${encodeURIComponent(deviceId)}`, { method: 'PUT', body: JSON.stringify({ mode, langs }) }),
+
+  // Instance-level default branding (#15, platform admin).
+  /*
+   * Server diagnostics (platform admin). The profile call is deliberately given a long timeout at
+   * the call site rather than here — it is a request that is SUPPOSED to take 30-60 seconds, and a
+   * default timeout would abort the one thing it exists to do.
+   */
+  // #320: operator-uploaded GLSL transitions, workspace-scoped like fonts.
+  listCustomShaders: () => request('/transitions/custom'),
+  uploadCustomShader: (source, name, licence_note) =>
+    request('/transitions/custom', { method: 'POST', body: JSON.stringify({ source, name, licence_note }) }),
+  deleteCustomShader: (id) => request(`/transitions/custom/${id}`, { method: 'DELETE' }),
+  adminDiagShape: () => request('/admin/diagnostics/shape'),
+  adminDiagLag: (days = 14) => request(`/admin/diagnostics/lag?days=${encodeURIComponent(days)}`),
+  adminDiagProfile: (seconds = 30) => request('/admin/diagnostics/cpu-profile', {
+    method: 'POST', body: JSON.stringify({ seconds }),
+  }),
+
+  adminGetBranding: () => request('/admin/branding'),
+  adminSetBranding: (data) => request('/admin/branding', { method: 'PUT', body: JSON.stringify(data) }),
+  // #146: toggle the /api/status debug block exposure (platform-admin only).
+  adminGetStatusDebug: () => request('/admin/status-debug'),
+  adminSetStatusDebug: (enabled) => request('/admin/status-debug', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  adminGetVideoVariants: () => request('/admin/video-variants'),
+  adminSetVideoVariants: (settings) => request('/admin/video-variants', { method: 'PUT', body: JSON.stringify(settings) }),
+  adminGetScreenShare: () => request('/admin/screen-share'),
+  adminSetScreenShare: (maxPresenters) => request('/admin/screen-share', { method: 'PUT', body: JSON.stringify({ max_presenters: maxPresenters }) }),
+  // Opt-in install statistics. GET returns { state, payload, last_report } — payload is the exact
+  // body that would be sent, so the UI can show it rather than describe it.
+  adminGetTelemetry: () => request('/admin/telemetry'),
+  adminSetTelemetry: (enabled) => request('/admin/telemetry', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+
+  // Per-user workspace membership management (platform Users page modal).
+  adminGetUserWorkspaces: (id) => request(`/admin/users/${id}/workspaces`),
+  adminAddUserWorkspace: (id, workspaceId, role) => request(`/admin/users/${id}/workspaces`, { method: 'POST', body: JSON.stringify({ workspaceId, role }) }),
+  adminSetUserWorkspaceRole: (id, workspaceId, role) => request(`/admin/users/${id}/workspaces/${workspaceId}`, { method: 'PUT', body: JSON.stringify({ role }) }),
+  adminRemoveUserWorkspace: (id, workspaceId) => request(`/admin/users/${id}/workspaces/${workspaceId}`, { method: 'DELETE' }),
+
+  // Admin - Users
+  getUsers: () => request('/auth/users'),
+  deleteUser: (id) => request(`/auth/users/${id}`, { method: 'DELETE' }),
+  resetUserPassword: (id, password) => request(`/auth/users/${id}/password`, {
+    method: 'PUT',
+    body: JSON.stringify({ password }),
+  }),
+  assignPlan: (user_id, plan_id) => request('/subscription/assign', {
+    method: 'POST',
+    body: JSON.stringify({ user_id, plan_id })
+  }),
+
+  // Data Sources (iCal, APIs, etc.)
+  getDataSources: () => request('/data-sources'),
+  getDataSourcePluginTypes: () => request('/data-sources/plugin-types'),
+  getDataSource: (id) => request(`/data-sources/${id}`),
+  testDataSource: (type, config, id) => request('/data-sources/test', {
+    method: 'POST',
+    body: JSON.stringify(id ? { type, config, id } : { type, config })
+  }),
+  createDataSource: (data) => request('/data-sources', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  }),
+  updateDataSource: (id, data) => request(`/data-sources/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  }),
+  refreshDataSource: (id) => request(`/data-sources/${id}/refresh`, {
+    method: 'POST'
+  }),
+  deleteDataSource: (id) => request(`/data-sources/${id}`, {
+    method: 'DELETE'
+  }),
+
+  // ── Head office (corporate) playlists — /api/corporate, JWT-only. docs/corporate-playlists.md
+  getCorporateSettings: () => request('/corporate/settings'),
+  updateCorporateSettings: (data) => request('/corporate/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  getStoreTriggerImpact: (policy, capSec) => request(`/corporate/settings/store-trigger-impact?policy=${encodeURIComponent(policy)}${capSec ? `&cap_sec=${capSec}` : ''}`),
+  getCorporateWorkspace: () => request('/corporate/workspace'),
+  getCorporateTargets: () => request('/corporate/targets'),
+  getCorporatePlaylists: () => request('/corporate/playlists'),
+  getCorporatePlaylist: (id) => request(`/corporate/playlists/${id}`),
+  createCorporatePlaylist: (name, description) => request('/corporate/playlists', { method: 'POST', body: JSON.stringify({ name, description }) }),
+  promoteCorporatePlaylist: (id) => request(`/corporate/playlists/${id}/promote`, { method: 'POST' }),
+  demoteCorporatePlaylist: (id) => request(`/corporate/playlists/${id}/demote`, { method: 'POST' }),
+  getMandates: () => request('/corporate/mandates'),
+  previewMandate: (params) => request(`/corporate/mandates/preview?${new URLSearchParams(params).toString()}`),
+  createMandate: (data) => request('/corporate/mandates', { method: 'POST', body: JSON.stringify(data) }),
+  updateMandate: (id, data) => request(`/corporate/mandates/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteMandate: (id) => request(`/corporate/mandates/${id}`, { method: 'DELETE' }),
+  previewCorporateScreen: (deviceId, draft) => request(`/corporate/preview?device_id=${encodeURIComponent(deviceId)}${draft ? '&draft=1' : ''}`),
+  createSlot: (playlistId, data) => request(`/corporate/playlists/${playlistId}/slots`, { method: 'POST', body: JSON.stringify(data) }),
+  getSlot: (id) => request(`/corporate/slots/${id}`),
+  updateSlot: (id, data) => request(`/corporate/slots/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteSlot: (id) => request(`/corporate/slots/${id}`, { method: 'DELETE' }),
+  getSlotImpact: (id, params) => request(`/corporate/slots/${id}/impact?${new URLSearchParams(params).toString()}`),
+  getSlotFills: (id) => request(`/corporate/slots/${id}/fills`),
+  createFill: (slotId, data) => request(`/corporate/slots/${slotId}/fills`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteFill: (id) => request(`/corporate/fills/${id}`, { method: 'DELETE' }),
+  previewFill: (id, deviceId) => request(`/corporate/fills/${id}/preview${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ''}`),
+  getCorporateStore: () => request('/corporate/store'),
+  getSlotReport: (problemsOnly) => request(`/corporate/reports/slots${problemsOnly ? '?problems=1' : ''}`),
+  getAirtimeReport: (from, to) => request(`/corporate/reports/plays?from=${from}&to=${to}`),
+  getEmergencyAlerts: () => request('/corporate/emergency'),
+  createEmergencyAlert: (data) => request('/corporate/emergency', { method: 'POST', body: JSON.stringify(data) }),
+  updateEmergencyAlert: (id, data) => request(`/corporate/emergency/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteEmergencyAlert: (id) => request(`/corporate/emergency/${id}`, { method: 'DELETE' }),
+  getEmergencyCoverage: (id) => request(`/corporate/emergency/${id}/coverage`),
+  getInstallerSheet: (id) => request(`/corporate/emergency/${id}/installer-sheet`),
+  rotateEmergencySecrets: (id) => request(`/corporate/emergency/${id}/rotate-secrets`, { method: 'POST' }),
+  activateEmergency: (id, durationSec, note) => request(`/corporate/emergency/${id}/activate`, { method: 'POST', body: JSON.stringify({ duration_sec: durationSec, note }) }),
+  clearEmergency: (id) => request(`/corporate/emergency/${id}/clear`, { method: 'POST' }),
+};
+
+/**
+ * The store-slots compliance report as a CSV download. A bearer header cannot ride on an <a href>,
+ * so it is fetched and handed to the browser as a blob.
+ */
+export async function downloadSlotReportCsv(problemsOnly) {
+  const r = await fetch(`${API_BASE}/corporate/reports/slots?format=csv${problemsOnly ? '&problems=1' : ''}`, { headers: getAuthHeaders() });
+  if (!r.ok) throw requestError(r.status, await r.json().catch(() => ({})));
+  return r.blob();
+}
+
+
+/** 3.0 energy: an authenticated download (CSV / appendix text) from /api/energy/<path>, as a blob. */
+export async function downloadEnergyFile(pathAndQuery) {
+  const r = await fetch(`${API_BASE}/energy/${pathAndQuery}`, { headers: getAuthHeaders() });
+  if (!r.ok) throw requestError(r.status, await r.json().catch(() => ({})));
+  return r.blob();
+}
+
+// Raw, authenticated fetches for history previews: a widget revision rendered as HTML (for an
+// srcdoc iframe) and a content revision's retained bytes (for an object URL). Both need the
+// bearer header, which an <img src> or <iframe src> cannot carry.
+export async function fetchRevisionRender(type, id, rev) {
+  const r = await fetch(`${API_BASE}/revisions/${type}/${id}/${rev}/render`, { headers: getAuthHeaders() });
+  if (!r.ok) throw new Error('Preview unavailable');
+  return r.text();
+}
+export async function fetchRevisionFileUrl(type, id, rev, thumb = false) {
+  const r = await fetch(`${API_BASE}/revisions/${type}/${id}/${rev}/file${thumb ? '?thumb=1' : ''}`, { headers: getAuthHeaders() });
+  if (!r.ok) throw new Error('The media for this revision is no longer retained');
+  return URL.createObjectURL(await r.blob());
+}
