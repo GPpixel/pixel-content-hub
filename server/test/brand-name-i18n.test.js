@@ -116,8 +116,8 @@ test('the interpolation resolves, and falls back to the product name', async () 
   const { t } = await import(`file://${mod}`);
 
   const unbranded = t('settings.setup_step_1');
-  assert.ok(unbranded.includes('ScreenTinker'),
-    `an un-branded install must read as before, got: ${unbranded}`);
+  assert.ok(unbranded.includes('Pixel Content Hub'),
+    `an un-branded install must read as the product, got: ${unbranded}`);
   assert.ok(!unbranded.includes('{brandName}'), 'the placeholder must not leak to the screen');
 
   globalThis.window.__ST_BRAND_NAME = 'BoldSignage';
@@ -127,7 +127,7 @@ test('the interpolation resolves, and falls back to the product name', async () 
 
   // Whitespace-only is not a brand.
   globalThis.window.__ST_BRAND_NAME = '   ';
-  assert.ok(t('settings.setup_step_1').includes('ScreenTinker'));
+  assert.ok(t('settings.setup_step_1').includes('Pixel Content Hub'));
   delete globalThis.window;
   delete globalThis.localStorage;
   if (!priorNavigator) delete globalThis.navigator;

@@ -61,8 +61,8 @@ router.post('/', requireWorkspaceAdmin, (req, res) => {
     const id = uuidv4();
     db.prepare(`INSERT INTO white_labels (id, user_id, workspace_id, brand_name, logo_url, favicon_url, primary_color, secondary_color, bg_color, custom_domain, custom_css, hide_branding)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, req.user.id, req.workspaceId, brand_name || 'ScreenTinker', logo_url || null, favicon_url || null,
-      primary_color || '#3B82F6', secondary_color || '#1E293B', bg_color || '#111827',
+      id, req.user.id, req.workspaceId, brand_name || 'Pixel Content Hub', logo_url || null, favicon_url || null,
+      primary_color || '#C0394B', secondary_color || '#2B2B2B', bg_color || '#232323',
       custom_domain || null, custom_css || null, hide_branding ? 1 : 0);
   }
 

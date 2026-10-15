@@ -48,7 +48,7 @@ function applyBrand(b) {
   } else if (b.name) {
     const s = document.createElement('span'); s.textContent = b.name; brandEl.appendChild(s);
   }
-  window.__ST_BRAND_NAME = b.name || 'ScreenTinker';
+  window.__ST_BRAND_NAME = b.name || 'Pixel Content Hub';
   if (!b.hide_branding) {
     const f = document.createElement('div');
     f.className = 'footer';

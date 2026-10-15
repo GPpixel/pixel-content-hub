@@ -406,13 +406,13 @@ function brandFor(workspaceId) {
     const logo = typeof b.logo_url === 'string' && /^(https:\/\/|\/(?!\/))[^\s"'<>]*$/.test(b.logo_url) ? b.logo_url : null;
     // custom_css is NOT carried: it is the dashboard's, and a public page is not the place to run it.
     return {
-      name: typeof b.brand_name === 'string' && b.brand_name.trim() ? b.brand_name.trim().slice(0, 80) : 'ScreenTinker',
+      name: typeof b.brand_name === 'string' && b.brand_name.trim() ? b.brand_name.trim().slice(0, 80) : 'Pixel Content Hub',
       logo_url: logo,
       primary_color: hexColor(b.primary_color, null),
       bg_color: hexColor(b.bg_color, null),
       hide_branding: !!b.hide_branding,
     };
-  } catch (_) { return { name: 'ScreenTinker', logo_url: null, primary_color: null, bg_color: null, hide_branding: false }; }
+  } catch (_) { return { name: 'Pixel Content Hub', logo_url: null, primary_color: null, bg_color: null, hide_branding: false }; }
 }
 
 function publicForm(form) {

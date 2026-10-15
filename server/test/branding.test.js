@@ -74,14 +74,14 @@ test('resolver order: workspace row > domain > platform default > hardcoded', ()
   assert.equal(resolveBranding(db, {}).brand_name, 'Global Default', 'no context -> platform default');
 
   db.prepare("DELETE FROM white_labels WHERE id='platform-default'").run();
-  assert.equal(resolveBranding(db, {}).brand_name, 'ScreenTinker', 'no platform default -> hardcoded (legacy null-ws row not used)');
+  assert.equal(resolveBranding(db, {}).brand_name, 'Pixel Content Hub', 'no platform default -> hardcoded (legacy null-ws row not used)');
 });
 
 test('GET /api/admin/branding returns hardcoded default when none set', async () => {
   db.prepare('DELETE FROM white_labels').run();
   const res = await fetch(base + '/api/admin/branding', { headers: { Authorization: `Bearer ${tokens.admin}` } });
   assert.equal(res.status, 200);
-  assert.equal((await res.json()).brand_name, 'ScreenTinker');
+  assert.equal((await res.json()).brand_name, 'Pixel Content Hub');
 });
 
 test('PUT /api/admin/branding creates then updates the single platform-default row', async () => {

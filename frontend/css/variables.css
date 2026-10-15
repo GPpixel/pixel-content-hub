@@ -1,39 +1,61 @@
+/* Dashboard tokens, set to the Pixel design language (design/tokens.css).
+   The names are the ones the dashboard's CSS and JS already use; the values come from Pixel.
+   Translucent Pixel tokens are flattened onto --bg-solid (#2b2b2b) so every surface that uses
+   these is solid; the glass surfaces are added on top in css/pixel-theme.css. The mapping is
+   listed under "Design language" in CLAUDE.md. */
 :root {
-  --bg-primary: #111827;
-  --bg-secondary: #1f2937;
-  --bg-card: #1e293b;
-  --bg-card-hover: #283548;
-  --bg-input: #0f172a;
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
-  --accent-dim: #1d4ed8;
-  /* The release palette (violet + green) that the gradients are built from. A white-label brand
-     colour overwrites all three accents (js/branding.js), so gradients fall back to that colour. */
-  --accent-2: #8b5cf6;
-  --accent-3: #22c55e;
-  --grad-accent: linear-gradient(135deg, var(--accent), var(--accent-2));
-  --grad-bar: linear-gradient(90deg, var(--accent-2), var(--accent-3));
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --success: #22c55e;
+  --bg-primary: #232323;      /* --bg */
+  --bg-secondary: #2b2b2b;    /* --bg-solid */
+  --bg-card: #2b2b2b;         /* --bg-solid: solid stand-in for --bg-panel */
+  --bg-card-hover: #454545;   /* --bg-hover, flattened */
+  --bg-input: #383838;        /* --bg-inner, flattened */
+  --accent: #c0394b;          /* --accent */
+  --accent-hover: #a8303f;    /* --accent-hover */
+  --accent-dim: #a8303f;      /* --accent-hover */
+  /* Secondary accents the gradients, focus rings and highlights are built from. A white-label
+     brand colour overwrites both (js/branding.js). */
+  --accent-2: #dd5a6e;        /* --accent-bright */
+  --accent-3: #ec8f9c;        /* --accent-link */
+  --grad-accent: linear-gradient(180deg, #cc4659, #b8364a);   /* --accent-gradient */
+  --grad-bar: linear-gradient(90deg, var(--accent), var(--accent-2));
+  --text-primary: #f2f2f2;    /* --text-primary */
+  --text-secondary: #bbbbbb;  /* --text-secondary, flattened */
+  --text-muted: #9a9a9a;      /* --text-muted, flattened */
+  --success: #22c55e;         /* --green */
   --success-dim: #15803d;
-  --danger: #ef4444;
+  --danger: #ef4444;          /* --red */
   --danger-dim: #991b1b;
-  --warning: #f59e0b;
+  --warning: #f5a623;         /* --amber */
   --warning-dim: #92400e;
-  --border: #334155;
-  --border-light: #475569;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --border: #494949;          /* --border, flattened */
+  --border-light: #5a5a5a;
+  --radius: 12px;             /* --radius-sm: inputs, menus, small boxes */
+  --radius-lg: 22px;          /* --radius: cards, panels, dialogs */
+  --shadow: 0 10px 36px rgba(0, 0, 0, 0.3);   /* --glass-shadow */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --sidebar-width: 220px;
   --transition: 0.2s ease;
-  /* Aliases for names some views use (drop indicators, the slide editor) that were never defined, so
-     their outlines and fields fell back to nothing. They follow the brand tokens above. */
+  /* Aliases for names some views use (drop indicators, the slide editor). They follow the
+     tokens above. */
   --primary: var(--accent);
   --surface: var(--bg-input);
   --text: var(--text-primary);
   --radius-md: var(--radius);
+
+  /* Pixel tokens used as-is by css/pixel-theme.css. */
+  --px-bg-panel: rgba(255,255,255,.07);
+  --px-bg-inner: rgba(255,255,255,.06);
+  --px-bg-hover: rgba(255,255,255,.12);
+  --px-border: rgba(255,255,255,.14);
+  --px-selected: rgba(255,255,255,.16);
+  --px-accent-soft: rgba(192,57,75,.22);
+  --px-on-green: #6ee7a0;
+  --px-on-amber: #f5c26b;
+  --px-on-red: #ff9c9c;
+  --px-radius-inner: 16px;
+  --px-radius-pill: 999px;
+  --px-glass-blur: blur(28px) saturate(170%);
+  --px-glass-highlight: inset 0 1px 0 rgba(255,255,255,.22);
+  --px-font: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --px-font-heading: "Cal Sans", "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
 }

@@ -143,7 +143,7 @@
   <!-- BrightSign native sync (SyncManager). Inert without the platform module, so the player
        falls back to its own clock-derived group sync. -->
   <script src="/player/st-sync.js"></script>
-  <title>ScreenTinker Player</title>
+  <title>Pixel Content Hub Player</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -172,27 +172,27 @@
 
     /* Setup Screen */
     #setupScreen {
-      position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #111827; display: flex; flex-direction: column;
+      position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #232323; display: flex; flex-direction: column;
       align-items: center; justify-content: center; z-index: 1000; color: #f1f5f9;
     }
-    #setupScreen h1 { font-size: 3.6rem; color: #3b82f6; margin-bottom: 0.8rem; }
-    #setupScreen .subtitle { color: #94a3b8; font-size: 1.6rem; margin-bottom: 4.8rem; }
+    #setupScreen h1 { font-size: 3.6rem; color: #c0394b; margin-bottom: 0.8rem; }
+    #setupScreen .subtitle { color: #bbbbbb; font-size: 1.6rem; margin-bottom: 4.8rem; }
     #setupScreen .form { width: 40rem; max-width: 90vw; }
-    #setupScreen label { display: block; font-size: 1.4rem; color: #94a3b8; margin-bottom: 0.8rem; }
-    #setupScreen input { width: 100%; padding: 1.2rem; background: #0f172a; border: 0.1rem solid #334155;
+    #setupScreen label { display: block; font-size: 1.4rem; color: #bbbbbb; margin-bottom: 0.8rem; }
+    #setupScreen input { width: 100%; padding: 1.2rem; background: #383838; border: 0.1rem solid #494949;
       border-radius: 0.8rem; color: #f1f5f9; font-size: 1.6rem; margin-bottom: 2.4rem; outline: none; }
-    #setupScreen input:focus { border-color: #3b82f6; }
-    #setupScreen button { width: 100%; padding: 1.2rem; background: #3b82f6; color: white;
+    #setupScreen input:focus { border-color: #c0394b; }
+    #setupScreen button { width: 100%; padding: 1.2rem; background: #c0394b; color: white;
       border: none; border-radius: 0.8rem; font-size: 1.6rem; font-weight: 600; cursor: pointer; }
     #setupScreen button:hover { background: #2563eb; }
     #setupScreen button:disabled { opacity: 0.5; cursor: not-allowed; }
     /* The number someone is squinting at from the far side of a shop. It gets the most room the
        screen can give it, which is why it is the largest multiple here. */
-    .pairing-code { font-size: 7.2rem; font-weight: 700; color: #3b82f6; font-family: monospace;
+    .pairing-code { font-size: 7.2rem; font-weight: 700; color: #c0394b; font-family: monospace;
       letter-spacing: 1.2rem; margin: 2.4rem 0; }
-    .pairing-hint { color: #64748b; font-size: 1.4rem; }
-    .status-msg { color: #94a3b8; font-size: 1.4rem; margin-top: 1.6rem; }
-    .spinner { width: 4rem; height: 4rem; border: 0.3rem solid #334155; border-top-color: #3b82f6;
+    .pairing-hint { color: #9a9a9a; font-size: 1.4rem; }
+    .status-msg { color: #bbbbbb; font-size: 1.4rem; margin-top: 1.6rem; }
+    .spinner { width: 4rem; height: 4rem; border: 0.3rem solid #494949; border-top-color: #c0394b;
       border-radius: 50%; animation: spin 1s linear infinite; margin: 2.4rem auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -247,9 +247,9 @@
     /* Status overlay */
     #statusOverlay {
       position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #000; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; color: #94a3b8; z-index: 500;
+      align-items: center; justify-content: center; color: #bbbbbb; z-index: 500;
     }
-    #statusOverlay h2 { color: #3b82f6; font-size: 2.8rem; margin-bottom: 0.8rem; }
+    #statusOverlay h2 { color: #c0394b; font-size: 2.8rem; margin-bottom: 0.8rem; }
     #statusOverlay p { font-size: 1.6rem; }
 
     /* Unpair PIN prompt. Above everything, including the setup screen, because Esc has to be
@@ -262,22 +262,22 @@
       color: #f1f5f9; z-index: 3000;
     }
     #pinOverlay h2 { font-size: 2.4rem; margin-bottom: 0.8rem; }
-    #pinOverlay .pin-hint { color: #94a3b8; font-size: 1.4rem; margin-bottom: 2.4rem; }
+    #pinOverlay .pin-hint { color: #bbbbbb; font-size: 1.4rem; margin-bottom: 2.4rem; }
     /* -webkit-text-security keeps the digits hidden from the room. A shop floor is not a desk. */
     #pinOverlay input {
       width: 24rem; max-width: 80vw; padding: 1.2rem; text-align: center; letter-spacing: 0.8rem;
-      background: #0f172a; border: 0.1rem solid #334155; border-radius: 0.8rem; color: #f1f5f9;
+      background: #383838; border: 0.1rem solid #494949; border-radius: 0.8rem; color: #f1f5f9;
       font-size: 2.4rem; font-family: monospace; outline: none; -webkit-text-security: disc;
     }
-    #pinOverlay input:focus { border-color: #3b82f6; }
+    #pinOverlay input:focus { border-color: #c0394b; }
     #pinOverlay .pin-error { color: #f87171; font-size: 1.4rem; margin-top: 1.6rem; min-height: 2rem; }
-    #pinOverlay .pin-keys { color: #64748b; font-size: 1.2rem; margin-top: 2.4rem; }
+    #pinOverlay .pin-keys { color: #9a9a9a; font-size: 1.2rem; margin-top: 2.4rem; }
   </style>
 </head>
 <body>
   <!-- Setup Screen -->
   <div id="setupScreen">
-    <h1>ScreenTinker</h1>
+    <h1>Pixel Content Hub</h1>
     <div class="subtitle">Web Player</div>
     <div class="form" id="urlForm">
       <label>Server URL</label>
@@ -312,7 +312,7 @@
   <!-- Status Overlay -->
   <div id="statusOverlay" style="display:none">
     <div class="spinner"></div>
-    <h2>ScreenTinker</h2>
+    <h2>Pixel Content Hub</h2>
     <p id="statusText" data-i18n="connecting">Connecting...</p>
   </div>
 
@@ -384,7 +384,7 @@ const PLAYER_I18N = {
     pairing_hint: "Enter this code in the dashboard to pair this display",
     connecting: "Connecting...",
     connecting_muted: "Connecting (audio muted)...",
-    info_title: "ScreenTinker Web Player",
+    info_title: "Pixel Content Hub Web Player",
     info_close_hint: "Press Back again or click to close",
     info_device_id: "Device ID",
     info_device_name: "Device Name",
@@ -787,7 +787,7 @@ function showMirrorHold(hold) {
     if (!el) {
       el = document.createElement("div");
       el.id = "st-mirror-hold";
-      el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483646;background:#111827;color:#e5e7eb;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vw;font-family:sans-serif";
+      el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483646;background:#232323;color:#e5e7eb;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vw;font-family:sans-serif";
       document.body.appendChild(el);
     }
     const removed = hold && hold.kind === "removed";
@@ -796,11 +796,11 @@ function showMirrorHold(hold) {
     h.style.cssText = "font-size:2.6rem;margin:0 0 1.2rem;color:#f9fafb";
     h.textContent = _t(removed ? "mirror_removed_title" : "mirror_refused_title");
     const p = document.createElement("p");
-    p.style.cssText = "font-size:1.4rem;max-width:46rem;line-height:1.5;color:#94a3b8;margin:0 0 2rem";
+    p.style.cssText = "font-size:1.4rem;max-width:46rem;line-height:1.5;color:#bbbbbb;margin:0 0 2rem";
     p.textContent = removed ? _t("mirror_removed_body") : String(hold && hold.error || "");
     const b = document.createElement("button");
     b.id = "st-mirror-again";
-    b.style.cssText = "font-size:1.2rem;padding:.8rem 1.6rem;border-radius:.5rem;border:0;background:#3b82f6;color:#fff;cursor:pointer";
+    b.style.cssText = "font-size:1.2rem;padding:.8rem 1.6rem;border-radius:.5rem;border:0;background:#c0394b;color:#fff;cursor:pointer";
     b.textContent = _t(removed ? "mirror_show_again" : "mirror_try_again");
     b.onclick = () => {
       try {
@@ -2420,8 +2420,8 @@ if (VIEWER_MODE) {
     }
     {
       const tapOverlay = document.createElement("div");
-      tapOverlay.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;background:#111827;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer";
-      tapOverlay.innerHTML = '\n          <h1 style="color:#3b82f6;font-size:3.6rem;font-family:sans-serif;margin-bottom:1.2rem">ScreenTinker</h1>\n          <p style="color:#94a3b8;font-size:1.8rem;font-family:sans-serif">Tap anywhere to start</p>\n          <p style="color:#64748b;font-size:1.3rem;font-family:sans-serif;margin-top:2.4rem">Audio requires user interaction</p>\n        ';
+      tapOverlay.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;background:#232323;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer";
+      tapOverlay.innerHTML = '\n          <h1 style="color:#c0394b;font-size:3.6rem;font-family:sans-serif;margin-bottom:1.2rem">Pixel Content Hub</h1>\n          <p style="color:#bbbbbb;font-size:1.8rem;font-family:sans-serif">Tap anywhere to start</p>\n          <p style="color:#9a9a9a;font-size:1.3rem;font-family:sans-serif;margin-top:2.4rem">Audio requires user interaction</p>\n        ';
       tapOverlay.onclick = () => {
         unlockAudio();
         tapOverlay.remove();
@@ -2639,7 +2639,7 @@ function viewerEnd(first) {
   }
   const div = document.createElement("div");
   div.id = "viewerEnded";
-  div.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;color:#e5e7eb;background:#111827;font:18px sans-serif;z-index:4000;text-align:center;padding:24px";
+  div.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;color:#e5e7eb;background:#232323;font:18px sans-serif;z-index:4000;text-align:center;padding:24px";
   div.textContent = first ? "This view is not available." : "This view is no longer available.";
   document.body.appendChild(div);
 }
@@ -2662,7 +2662,7 @@ function renderPreviewBanner() {
 function showPreviewError(status) {
   const msg = status === 401 || status === 403 ? "Not authorized to preview this playlist" : status ? "Preview failed (" + status + ")" : "Preview failed to load";
   const div = document.createElement("div");
-  div.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;color:#e5e7eb;background:#111827;font:18px sans-serif;z-index:3000;text-align:center;padding:24px";
+  div.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;color:#e5e7eb;background:#232323;font:18px sans-serif;z-index:3000;text-align:center;padding:24px";
   div.textContent = msg;
   document.body.appendChild(div);
 }
@@ -4889,7 +4889,7 @@ function handlePlaylistUpdate(data) {
     document.getElementById("playerContainer").style.display = "none";
     const overlay = document.getElementById("statusOverlay");
     overlay.style.display = "flex";
-    overlay.innerHTML = '\n          <div style="text-align:center;max-width:500px">\n            <div style="font-size:64px;margin-bottom:16px">&#9888;</div>\n            <h2 style="color:#f59e0b;margin-bottom:8px">'.concat(data.message || "Account Suspended", '</h2>\n            <p style="color:#94a3b8;font-size:16px;margin-bottom:24px">').concat(data.detail || "Please upgrade your plan.", '</p>\n            <p style="color:#64748b;font-size:13px">Visit your dashboard to manage your subscription</p>\n          </div>\n        ');
+    overlay.innerHTML = '\n          <div style="text-align:center;max-width:500px">\n            <div style="font-size:64px;margin-bottom:16px">&#9888;</div>\n            <h2 style="color:#f59e0b;margin-bottom:8px">'.concat(data.message || "Account Suspended", '</h2>\n            <p style="color:#bbbbbb;font-size:16px;margin-bottom:24px">').concat(data.detail || "Please upgrade your plan.", '</p>\n            <p style="color:#9a9a9a;font-size:13px">Visit your dashboard to manage your subscription</p>\n          </div>\n        ');
     return;
   }
   const newItems = data.assignments || [];
@@ -7733,13 +7733,13 @@ function renderCaptureCanvas() {
       }
     }
     if (!captured) {
-      ctx.fillStyle = "#111827";
+      ctx.fillStyle = "#232323";
       ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = "#3b82f6";
+      ctx.fillStyle = "#c0394b";
       ctx.font = "bold 28px sans-serif";
       ctx.textAlign = "center";
       ctx.fillText("ScreenTinker Web Player", W / 2, H / 2 - 40);
-      ctx.fillStyle = "#94a3b8";
+      ctx.fillStyle = "#bbbbbb";
       ctx.font = "16px sans-serif";
       const item = playlist[currentIndex];
       ctx.fillText(item ? "Playing: ".concat(item.filename) : "No content", W / 2, H / 2);
@@ -7843,7 +7843,7 @@ function showStatus(msg) {
     overlay.innerHTML = "";
     text = document.createElement("p");
     text.id = "statusText";
-    text.style.cssText = "color:#94a3b8;font-size:20px;font-family:sans-serif;text-align:center";
+    text.style.cssText = "color:#bbbbbb;font-size:20px;font-family:sans-serif;text-align:center";
     overlay.appendChild(text);
   }
   text.textContent = msg;
@@ -7976,7 +7976,7 @@ function toggleScreenOff() {
 const infoDiv = document.createElement("div");
 infoDiv.id = "infoOverlay";
 infoDiv.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,0.85);z-index:800;display:none;flex-direction:column;align-items:center;justify-content:center;color:#f1f5f9;font-family:-apple-system,sans-serif";
-infoDiv.innerHTML = '\n      <h2 style="color:#3b82f6;margin-bottom:16px">'.concat(_t("info_title"), '</h2>\n      <div style="font-size:14px;line-height:2;text-align:center;color:#94a3b8" id="infoContent"></div>\n      <p style="margin-top:24px;font-size:12px;color:#64748b">').concat(_t("info_close_hint"), "</p>\n    ");
+infoDiv.innerHTML = '\n      <h2 style="color:#c0394b;margin-bottom:16px">'.concat(_t("info_title"), '</h2>\n      <div style="font-size:14px;line-height:2;text-align:center;color:#bbbbbb" id="infoContent"></div>\n      <p style="margin-top:24px;font-size:12px;color:#9a9a9a">').concat(_t("info_close_hint"), "</p>\n    ");
 infoDiv.onclick = () => {
   infoDiv.style.display = "none";
 };
