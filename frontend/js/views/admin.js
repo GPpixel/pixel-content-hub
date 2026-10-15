@@ -192,9 +192,10 @@ ${section(t('admin.orgs.title'), t('admin.orgs.desc'), `
       <div id="diagBody"><p style="color:var(--text-muted)">${t('common.loading')}</p></div>
     </div>
       ${section(esc(t('platform.system.status_endpoint')), '', `<div id="statusDebugForm">${loading()}</div>`)}
+      <div id="sharePresentersSection">${section(esc(t('screen_share.admin.title')), esc(t('screen_share.admin.desc')), `<div id="sharePresentersForm">${loading()}</div>`)}</div>
       <div id="stockKeysSection">${section(esc(t('stock.admin.title')), esc(t('stock.admin.desc')), `<div id="stockKeysForm">${loading()}</div>`)}</div>
       ${section(esc(t('platform.system.player_debug')), esc(t('platform.system.player_debug_desc')), `<a class="btn btn-secondary" href="#/admin/player-debug">${esc(t('platform.system.player_debug_open'))} &rarr;</a>`)}`,
-    load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); loadStockKeys(); },
+    load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); loadSharePresenters(); loadStockKeys(); },
   },
   // 3.0 "Your data, provably" (components/trust-report.js, docs/trust.md): the instance's data
   // handling report, every external host contacted, and the optional public /trust page.
@@ -870,6 +871,33 @@ async function loadStatusDebug() {
     try { await api.adminSetStatusDebug(chk.checked); showToast('Status debug ' + (chk.checked ? 'enabled' : 'disabled'), 'success'); }
     catch (err) { showToast(err.message, 'error'); chk.checked = !chk.checked; }
     finally { chk.disabled = false; }
+  };
+}
+
+/*
+ * 3.0 screen share: how many people may present on one screen at once where a workspace admin has
+ * switched "several people at once" on (server/routes/admin.js /screen-share, 1-4). Platform admins
+ * only: for anyone else the section is removed rather than shown broken.
+ */
+async function loadSharePresenters() {
+  const el = document.getElementById('sharePresentersForm');
+  if (!el) return;
+  let cur;
+  try { cur = (await api.adminGetScreenShare()).max_presenters; }
+  catch (_) { document.getElementById('sharePresentersSection')?.remove(); return; }
+  el.innerHTML = `
+    <label style="display:flex;align-items:center;gap:10px;font-size:13px">
+      ${esc(t('screen_share.admin.label'))}
+      <select class="input" id="sharePresentersSel" style="width:auto">
+        ${[1, 2, 3, 4].map((n) => `<option value="${n}" ${n === cur ? 'selected' : ''}>${n}</option>`).join('')}
+      </select>
+    </label>`;
+  document.getElementById('sharePresentersSel').onchange = async (e) => {
+    const sel = e.target;
+    sel.disabled = true;
+    try { await api.adminSetScreenShare(Number(sel.value)); showToast(t('screen_share.admin.saved'), 'success'); }
+    catch (err) { showToast(err.message, 'error'); }
+    finally { sel.disabled = false; }
   };
 }
 

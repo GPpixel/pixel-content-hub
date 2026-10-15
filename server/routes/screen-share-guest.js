@@ -14,7 +14,8 @@
  *     by the first successful join (the screen shows a new one at once);
  *   - joins are rate-limited per address in server.js;
  *   - the screen must have the code switched on by a workspace admin (off by default), the workspace
- *     and the server must allow sharing, and only one share runs at a time;
+ *     and the server must allow sharing, and the screen must have a free slot (one, unless an admin
+ *     lets several people present at once — each join still spends the code);
  *   - an editor can stop a guest from the dashboard, and every join is in the activity log with the
  *     name the guest gave and their address.
  * A wrong, expired or spent code gets one generic answer, so the endpoint does not say which.
@@ -42,7 +43,12 @@ router.post('/join', express.json({ limit: '4kb' }), (req, res) => {
   // withMirrors — same workspace only, best-effort, never a reason to refuse).
   const plan = share.withMirrors(device, ws);
   const { out } = share.createDisplayShare(plan, {
-    sharedBy: share.cleanName(body.name, 'Guest'), userId: null, guest: true, ip: req.ip, audio: !!body.audio,
+    // Nameless guests in a room several people can share to are numbered ("Guest 2"), so the tiles
+    // and the owner's list tell them apart.
+    sharedBy: share.cleanName(body.name, '') || (share.slotsFor(device.id) > 1 ? share.guestName(device.id) : 'Guest'),
+    userId: null, guest: true, ip: req.ip, audio: !!body.audio,
+    // What they are showing (their screen, a phone camera, the Android app): for the activity log.
+    source: ['screen', 'camera', 'app'].includes(body.source) ? body.source : undefined,
   });
   if (out.error) return answer(409, { error: 'Someone is already sharing to this screen', reason: 'busy' });
   // A guest has no account in the workspace: the legs carry no device ids, and which mirrors were

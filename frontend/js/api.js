@@ -959,6 +959,10 @@ export const api = {
   startScreenShare: (deviceId, data) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'POST', body: JSON.stringify(data || {}) }),
   stopScreenShare: (deviceId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
   setScreenShareGuest: (deviceId, enabled) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/guest`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  // 3.0: several people presenting on one screen at once.
+  setScreenShareMulti: (deviceId, enabled) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/multi`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  spotlightScreenShare: (deviceId, shareId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/spotlight`, { method: 'PUT', body: JSON.stringify({ share_id: shareId || null }) }),
+  removeScreenSharePresenter: (deviceId, shareId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/presenters/${encodeURIComponent(shareId)}`, { method: 'DELETE' }),
   // 3.0 multi share: one share on several screens (device_ids and/or group_id); stop it everywhere.
   startScreenShareMulti: (data) => request('/screen-share/shares', { method: 'POST', body: JSON.stringify(data || {}) }),
   stopScreenShareAll: (shareId) => request(`/screen-share/shares/${encodeURIComponent(shareId)}`, { method: 'DELETE' }),
@@ -1032,6 +1036,8 @@ export const api = {
   // #146: toggle the /api/status debug block exposure (platform-admin only).
   adminGetStatusDebug: () => request('/admin/status-debug'),
   adminSetStatusDebug: (enabled) => request('/admin/status-debug', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  adminGetScreenShare: () => request('/admin/screen-share'),
+  adminSetScreenShare: (maxPresenters) => request('/admin/screen-share', { method: 'PUT', body: JSON.stringify({ max_presenters: maxPresenters }) }),
   // Opt-in install statistics. GET returns { state, payload, last_report } — payload is the exact
   // body that would be sent, so the UI can show it rather than describe it.
   adminGetTelemetry: () => request('/admin/telemetry'),

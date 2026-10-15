@@ -103,3 +103,28 @@ test('the receiver\'s own support probe requires addTransceiver, not just RTCPee
   OldPC.prototype.addTransceiver = function () {};
   assert.equal(sandbox.STScreenShare.isSupported(), true);
 });
+
+// ---------------------------------------------------------------- several presenters (tiles)
+function declareTiles(opts = {}) {
+  const sandbox = { console: { log() {}, warn() {} }, navigator: {}, document: { createElement: () => ({ getContext: () => null }) }, BS: null };
+  sandbox.window = sandbox;
+  sandbox.STScreenShare = { isSupported: () => opts.rtc !== false, tiles: opts.tiles !== false };
+  vm.createContext(sandbox);
+  vm.runInContext(`var ON_BRIGHTSIGN = ${!!opts.brightsign}; var HOST = null;\n${extract('declaredCapabilities')}\nvar __out = declaredCapabilities();`, sandbox);
+  return sandbox.__out;
+}
+
+test('a receiver that tiles declares remote.screen_share_tiles; an older one, or no WebRTC, does not', () => {
+  assert.ok(declareTiles().includes('remote.screen_share_tiles'));
+  assert.ok(!declareTiles({ tiles: false }).includes('remote.screen_share_tiles'));
+  assert.ok(!declareTiles({ rtc: false }).includes('remote.screen_share_tiles'));
+  assert.ok(!declareTiles({ brightsign: true }).includes('remote.screen_share_tiles'));
+  assert.match(RECEIVER, /tiles: true/);
+});
+
+test('the player follows the layout event, and gives the playlist back only when the LAST share is gone', () => {
+  assert.match(HTML, /socket\.on\('device:screenshare-layout'/);
+  assert.match(HTML, /\(st === 'stopped' \|\| st === 'unsupported'\) && !SS\.active\(\)/);
+  // The remote viewer draws every visible tile, not just one.
+  assert.match(extract('drawScreenShare'), /tilesOnScreen/);
+});

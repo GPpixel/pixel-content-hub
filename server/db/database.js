@@ -3372,6 +3372,13 @@ const migrations = [
      BEGIN DELETE FROM playlist_item_zone_sources WHERE zone_id = OLD.id; END`,
   'ALTER TABLE playlists ADD COLUMN published_campaign TEXT',
   'ALTER TABLE play_logs ADD COLUMN layout_id TEXT',
+  /*
+   * 3.0: several presenters at once on one screen (lib/screen-share.js, docs/screen-share.md).
+   * Per display, OFF by default (one share at a time, as before); a workspace admin turns it on next
+   * to the meeting-room code. How many at once is platform-wide (app_settings
+   * screen_share_max_presenters, 1-4).
+   */
+  'ALTER TABLE devices ADD COLUMN screen_share_multi INTEGER NOT NULL DEFAULT 0',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

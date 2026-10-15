@@ -13,6 +13,9 @@
  *   POST   /shares              multi share: one share on several screens / a group (editor+)
  *   DELETE /shares/:shareId     stop a multi share on every screen (editor+ on all of them)
  *   GET    /groups/:groupId     which of a group's screens can take a share, and why not
+ *   PUT    /devices/:id/multi   let several people present at once on this display (workspace admin)
+ *   PUT    /devices/:id/spotlight            {share_id|null}: one presenter fills the screen (editor+)
+ *   DELETE /devices/:id/presenters/:shareId  take one presenter off the display (editor+)
  *
  * The media never comes here: the browser and the screen connect peer to peer, and this server only
  * relays their signalling (lib/screen-share.js). Every route resolves the device's OWN workspace
@@ -45,6 +48,12 @@ function denyIfReadOnly(r, res) {
   return false;
 }
 
+// A mirror has no switches of its own: it reports its display's.
+function displayOf(device) {
+  if (!device.mirror_of) return device;
+  return db.prepare('SELECT * FROM devices WHERE id = ? AND workspace_id IS ?').get(device.mirror_of, device.workspace_id) || null;
+}
+
 function guestSwitch(device) {
   if (!device.mirror_of) return device.screen_share_guest;
   const src = db.prepare('SELECT screen_share_guest FROM devices WHERE id = ? AND workspace_id IS ?').get(device.mirror_of, device.workspace_id);
@@ -56,6 +65,9 @@ router.get('/devices/:id', (req, res) => {
   if (!r) return;
   const avail = share.availability(r.device, r.ws);
   const session = share.sessionForDevice(r.device.id);
+  const caps = require('../lib/player-capabilities');
+  const display = displayOf(r.device);
+  const roomKey = display ? display.id : r.device.id;
   res.json({
     feature: share.featureOn(),
     workspace_enabled: share.workspaceOn(r.ws),
@@ -77,6 +89,20 @@ router.get('/devices/:id', (req, res) => {
     // names it when it cannot show a share: "This screen can't show a screen share (Roku)").
     max_targets: share.maxTargets(),
     platform: require('../lib/player-capabilities').platformFamily(r.device),
+    /*
+     * Several presenters at once (the display's switch; a mirror reports its display's). `supported`:
+     * the display's player can tile; `slots`: how many may present right now (1 when off);
+     * `max_presenters`: the platform's limit. `presenters`: who is presenting on the display (and its
+     * mirrors), first-come first, with the spotlight — what the owner's controls act on.
+     */
+    multi: {
+      enabled: !!(display && display.screen_share_multi),
+      supported: !!(display && caps.supports(display, share.TILES_CAP)),
+      this_screen_tiles: caps.supports(r.device, share.TILES_CAP),
+      slots: share.slotsFor(roomKey),
+      max_presenters: share.maxPresenters(),
+    },
+    presenters: share.publicPresenters(roomKey),
   });
 });
 
@@ -108,11 +134,12 @@ function loadGroupMembers(req, res, groupId) {
   return { group, ws, readOnly: !ctx.actingAs && ctx.workspaceRole === 'workspace_viewer', ids: members.map((m) => m.id) };
 }
 
-// What a list of screens would do with a share: [{ id, name, ok, reason, platform }].
+// What a list of screens would do with a share: [{ id, name, ok, reason, platform }]. A mirror added
+// for a display (roomKey) is judged as a leg of that display's room.
 function describeTargets(list) {
   const caps = require('../lib/player-capabilities');
-  return list.map(({ device, ws }) => {
-    const a = share.availability(device, ws);
+  return list.map(({ device, ws, roomKey }) => {
+    const a = share.availability(device, ws, roomKey);
     return { id: device.id, name: device.name || '', ok: a.ok, reason: a.ok ? null : a.reason, platform: caps.platformFamily(device) };
   });
 }
@@ -156,11 +183,14 @@ router.post('/shares', (req, res) => {
       if (t.via) continue;   // an added mirror the caller cannot reach is simply not included
       return res.status(a.readOnly ? 403 : a.status).json({ error: a.readOnly ? 'Read-only access' : a.error });
     }
-    targets.push({ device: a.device, ws: a.ws });
+    targets.push({ device: a.device, ws: a.ws, roomKey: t.via ? t.of : t.id });
   }
   const described = describeTargets(targets);
   const skipped = described.filter((d) => !d.ok);
-  const ok = targets.filter((t, i) => described[i].ok);
+  // A mirror only rides along with its display: a display that cannot take the share (its room is
+  // full, say) must not be joined through the back door of one of its mirrors.
+  const okIds = new Set(targets.filter((t, i) => described[i].ok).map((t) => t.device.id));
+  const ok = targets.filter((t, i) => described[i].ok && (t.roomKey === t.device.id || okIds.has(t.roomKey)));
   if (!ok.length) {
     return res.status(409).json({ error: 'None of these screens can take a share right now', reason: skipped.length === 1 ? skipped[0].reason : 'none_available', skipped });
   }
@@ -172,7 +202,7 @@ router.post('/shares', (req, res) => {
   }
   const name = (req.user && (req.user.name || req.user.email)) || 'Someone';
   const out = share.createShare({
-    targets: ok.map((t) => ({ device: t.device, workspace: t.ws })),
+    targets: ok.map((t) => ({ device: t.device, workspace: t.ws, roomKey: t.roomKey })),
     sharedBy: name, userId: req.user.id, guest: false, ip: req.ip, audio: !!body.audio,
   });
   if (out.error) return res.status(409).json({ error: 'A screen became busy, please try again', reason: out.error === 'too_many_targets' ? 'too_many_targets' : 'busy' });
@@ -228,6 +258,51 @@ router.delete('/devices/:id', (req, res) => {
   // A display's mirrors showing the same share stop with it (lib/screen-share.js stopForDisplay).
   const stopped = share.stopForDisplay(r.device.id, 'stopped_by_owner', { userId: req.user.id, ip: req.ip });
   res.json({ stopped });
+});
+
+/*
+ * PUT /devices/:id/multi {enabled} — let several people present on this display at once (up to the
+ * platform's limit). Workspace admin, like the meeting-room code next to it. Turning it OFF mid-share
+ * keeps everyone presenting and lets nobody new in (the room is then "full" at one slot) until it
+ * empties; turning it ON shows a code again at once when a slot is free.
+ */
+router.put('/devices/:id/multi', (req, res) => {
+  const r = loadDevice(req, res);
+  if (!r) return;
+  if (denyIfReadOnly(r, res)) return;
+  if (!canAdminWorkspace(db, req.user, r.ws)) return res.status(403).json({ error: 'Only workspace admins can change screen sharing settings' });
+  if (r.device.mirror_of) return res.status(409).json({ error: 'This screen is a mirror: change the setting on the display it mirrors.', reason: 'mirror' });
+  const enabled = !!(req.body && req.body.enabled);
+  db.prepare('UPDATE devices SET screen_share_multi = ? WHERE id = ?').run(enabled ? 1 : 0, r.device.id);
+  audit('screen_share.multi_toggle', {
+    userId: req.user.id, workspaceId: r.ws.id, deviceId: r.device.id, ip: req.ip, details: { enabled },
+  });
+  share.pushCode(r.device.id);   // a free slot shows a code now; a full room hides it
+  res.json({ multi_enabled: enabled, slots: share.slotsFor(r.device.id) });
+});
+
+// The room an owner's control acts on: a mirror's is its display's.
+function roomKeyFor(r) { const d = displayOf(r.device); return d ? d.id : r.device.id; }
+
+// PUT /devices/:id/spotlight {share_id | null} — one presenter fills the screen; null = tiles again.
+router.put('/devices/:id/spotlight', (req, res) => {
+  const r = loadDevice(req, res);
+  if (!r) return;
+  if (denyIfReadOnly(r, res)) return;
+  const shareId = req.body && typeof req.body.share_id === 'string' ? req.body.share_id : null;
+  const ok = share.setSpotlight(roomKeyFor(r), shareId, { userId: req.user.id, ip: req.ip, name: req.user.name || req.user.email });
+  if (!ok) return res.status(404).json({ error: 'That presenter is not on this screen', reason: 'not_found' });
+  res.json({ spotlight: shareId });
+});
+
+// DELETE /devices/:id/presenters/:shareId — take one presenter off this display and its mirrors.
+router.delete('/devices/:id/presenters/:shareId', (req, res) => {
+  const r = loadDevice(req, res);
+  if (!r) return;
+  if (denyIfReadOnly(r, res)) return;
+  const n = share.removePresenter(roomKeyFor(r), String(req.params.shareId || ''), { userId: req.user.id, ip: req.ip, name: req.user.name || req.user.email });
+  if (!n) return res.status(404).json({ error: 'That presenter is not on this screen', reason: 'not_found' });
+  res.json({ removed: n });
 });
 
 router.put('/devices/:id/guest', (req, res) => {

@@ -3434,7 +3434,7 @@ function connect(serverUrl) {
         labels: shareLabels(),
         onState: (st, reason) => {
           console.log("[share]", st, reason || "");
-          if (st === "stopped" || st === "unsupported") {
+          if ((st === "stopped" || st === "unsupported") && !SS.active()) {
             try {
               setShareDucking(false);
             } catch (_) {
@@ -3458,6 +3458,12 @@ function connect(serverUrl) {
   socket.on("device:screenshare-code", (data) => {
     try {
       window.STScreenShare && window.STScreenShare.showCode(data, shareLabels());
+    } catch (_) {
+    }
+  });
+  socket.on("device:screenshare-layout", (data) => {
+    try {
+      window.STScreenShare && window.STScreenShare.layout && window.STScreenShare.layout(data);
     } catch (_) {
     }
   });
@@ -4225,6 +4231,7 @@ function declaredCapabilities() {
     const ios = typeof onIOS === "function" && onIOS();
     const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST && !ios;
     if (rtc && !shell) caps.push("remote.screen_share");
+    if (rtc && !shell && SS.tiles === true) caps.push("remote.screen_share_tiles");
     if (!shell) caps.push("layout.campaign");
   } catch (e) {
   }
@@ -7622,36 +7629,53 @@ function drawScreenShare(ctx, W, H) {
   if (!overlay || !overlay.isConnected || getComputedStyle(overlay).display === "none") return false;
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, W, H);
-  const video = document.getElementById("st-share-video");
-  let drew = false;
-  if (video && video.readyState >= 2 && video.videoWidth > 0) {
-    try {
-      drawMediaFit(ctx, video, video.videoWidth, video.videoHeight, 0, 0, W, H, "contain");
-      drew = true;
-    } catch (e) {
-      drew = false;
-    }
-  }
-  const label = (el) => el && getComputedStyle(el).display !== "none" ? (el.textContent || "").trim() : "";
-  ctx.textAlign = "left";
+  const SS = window.STScreenShare;
+  const tiles = SS && typeof SS.tilesOnScreen === "function" ? SS.tilesOnScreen() : null;
+  const parts = tiles && tiles.length ? tiles : [{
+    x: 0,
+    y: 0,
+    w: 1,
+    h: 1,
+    video: document.getElementById("st-share-video"),
+    label: (() => {
+      const el = document.getElementById("st-share-badge");
+      return el && getComputedStyle(el).display !== "none" ? (el.textContent || "").trim() : "";
+    })(),
+    waiting: (() => {
+      const el = document.getElementById("st-share-wait");
+      return el && getComputedStyle(el).display !== "none" ? (el.textContent || "").trim() : "";
+    })()
+  }];
   ctx.textBaseline = "alphabetic";
-  if (!drew) {
-    const waiting = label(document.getElementById("st-share-wait"));
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "500 22px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(waiting || "Screen share", W / 2, H / 2);
+  for (const p of parts) {
+    const tx = Math.round(p.x * W), ty = Math.round(p.y * H), tw = Math.round(p.w * W), th = Math.round(p.h * H);
+    const video = p.video;
+    let drew = false;
+    if (video && video.readyState >= 2 && video.videoWidth > 0) {
+      try {
+        drawMediaFit(ctx, video, video.videoWidth, video.videoHeight, tx, ty, tw, th, "contain");
+        drew = true;
+      } catch (e) {
+        drew = false;
+      }
+    }
+    if (!drew) {
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "500 22px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(p.waiting || "Screen share", tx + tw / 2, ty + th / 2, tw - 16);
+    }
     ctx.textAlign = "left";
-  }
-  const badge = label(document.getElementById("st-share-badge"));
-  if (badge) {
-    ctx.font = "500 14px sans-serif";
-    const pad = 8, x = 12, h = 26;
-    const w = Math.min(W * 0.6, ctx.measureText(badge).width + pad * 2);
-    ctx.fillStyle = "rgba(15,23,42,0.72)";
-    ctx.fillRect(x, H - 12 - h, w, h);
-    ctx.fillStyle = "#fff";
-    ctx.fillText(badge, x + pad, H - 12 - 8, w - pad * 2);
+    const badge = String(p.label || "").trim();
+    if (badge) {
+      ctx.font = "500 14px sans-serif";
+      const pad = 8, x = tx + 12, h = 26;
+      const w = Math.min(tw * 0.8, ctx.measureText(badge).width + pad * 2);
+      ctx.fillStyle = "rgba(15,23,42,0.72)";
+      ctx.fillRect(x, ty + th - 12 - h, w, h);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(badge, x + pad, ty + th - 12 - 8, w - pad * 2);
+    }
   }
   return true;
 }

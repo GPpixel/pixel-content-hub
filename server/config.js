@@ -625,4 +625,9 @@ module.exports = {
    * the sharer's uplink, not this server. Default 6.
    */
   screenShareMaxTargets: Math.min(50, Math.max(1, parseInt(process.env.SCREEN_SHARE_MAX_TARGETS) || 6)),
+  /*
+   * 3.0: how many people may present on one screen at once when its "several people" switch is on
+   * (1-4, default 4). The platform admin's setting (Admin -> System, app_settings) overrides this.
+   */
+  screenShareMaxPresenters: Math.min(4, Math.max(1, parseInt(process.env.SCREEN_SHARE_MAX_PRESENTERS) || 4)),
 };

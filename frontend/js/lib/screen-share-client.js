@@ -10,13 +10,74 @@
  * No i18n here: callers turn the state names and end reasons into words.
  */
 
-/** Why this browser cannot share, or null when it can. */
+/** Why this browser cannot share its SCREEN, or null when it can. */
 export function shareUnsupportedReason() {
   if (typeof window === 'undefined') return 'no_webrtc';
   if (!window.isSecureContext) return 'insecure';
   if (typeof RTCPeerConnection !== 'function') return 'no_webrtc';
   if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') return 'no_display_media';
   return null;
+}
+
+/**
+ * Why this browser cannot share its CAMERA, or null when it can. Phones (Android Chrome, iPhone
+ * Safari) have getUserMedia where they have no getDisplayMedia, so a phone in the meeting room can
+ * still show something: what its camera sees (a whiteboard, a page, a product).
+ */
+export function cameraUnsupportedReason() {
+  if (typeof window === 'undefined') return 'no_webrtc';
+  if (!window.isSecureContext) return 'insecure';
+  if (typeof RTCPeerConnection !== 'function') return 'no_webrtc';
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') return 'no_camera';
+  return null;
+}
+
+/** A phone or tablet (where screen capture from the browser is not on offer). */
+export function isMobileBrowser() {
+  try {
+    const ua = navigator.userAgent || '';
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+      || !!(navigator.userAgentData && navigator.userAgentData.mobile)
+      || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);   // iPadOS reports a Mac
+  } catch (_) { return false; }
+}
+
+/*
+ * The link that opens the ScreenTinker Manager app's guest share for THIS server and code (Android).
+ * An intent: URL, so Chrome opens the app when it is installed and the Play Store when it is not —
+ * a self-hosted server's domain can never be a verified App Link. The app shows the server's host and
+ * asks before anything is captured. Returns null for anything that is not a code.
+ */
+export const MANAGER_APP_ID = 'com.screentinker.manager';
+export function managerAppLink(origin, rawCode) {
+  const code = String(rawCode || '').replace(/[\s-]/g, '').toUpperCase();
+  if (!/^[0-9A-Z]{8}$/.test(code) || !/^https?:\/\/[^/?#]+$/i.test(String(origin || ''))) return null;
+  const store = `https://play.google.com/store/apps/details?id=${MANAGER_APP_ID}`;
+  return `intent://share?server=${encodeURIComponent(origin)}&code=${code}`
+    + `#Intent;scheme=screentinker;package=${MANAGER_APP_ID};S.browser_fallback_url=${encodeURIComponent(store)};end`;
+}
+
+export function isAndroid() {
+  try { return /Android/i.test(navigator.userAgent || ''); } catch (_) { return false; }
+}
+
+/**
+ * The phone's camera. facing: 'environment' (back, the default: point it at what you want to show)
+ * or 'user' (front). MUST be called from a click (iOS Safari asks for permission on a gesture).
+ * Resolves to a MediaStream, or rejects (NotAllowedError when they refuse).
+ */
+export async function pickCamera({ facing = 'environment', audio = false } = {}) {
+  const video = { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video, audio: !!audio }); }
+  catch (e) {
+    // A laptop with one camera and no "environment" one, or a constraint the device refuses: any
+    // camera will do rather than nothing.
+    if (e && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: !!audio });
+    else throw e;
+  }
+  try { const v = stream.getVideoTracks()[0]; if (v && 'contentHint' in v) v.contentHint = 'motion'; } catch (_) { /* optional */ }
+  return stream;
 }
 
 /**
@@ -92,7 +153,7 @@ export class ScreenShareSender {
     else if (m.type === 'screen_joined') this.onState('negotiating');
     else if (m.type === 'screen_playing') this.onState('live');
     else if (m.type === 'ended') { this.lastReason = m.reason || 'ended'; this.finish(this.lastReason); }
-    else if ((m.type === 'add_leg' || m.type === 'leg_skipped') && this.onControl) { try { this.onControl(m); } catch (_) { /* caller's problem */ } }
+    else if ((m.type === 'add_leg' || m.type === 'leg_skipped' || m.type === 'room' || m.type === 'room_refused') && this.onControl) { try { this.onControl(m, this); } catch (_) { /* caller's problem */ } }
     else if (m.type === 'webrtc/offer' && typeof m.value === 'string') await this.answer(m.value);
     else if (m.type === 'webrtc/candidate' && typeof m.value === 'string') {
       const c = { candidate: m.value };
@@ -138,6 +199,15 @@ export class ScreenShareSender {
     this.finish('connection_failed');
   }
 
+  // Swap what is being sent (the phone's other camera) without renegotiating.
+  async replaceVideo(track) {
+    if (!this.pc) return;
+    for (const tr of this.pc.getTransceivers()) {
+      const kind = tr.receiver && tr.receiver.track && tr.receiver.track.kind;
+      if (kind === 'video' && tr.sender) { try { await tr.sender.replaceTrack(track); } catch (_) { /* this leg keeps the old picture */ } }
+    }
+  }
+
   stop(reason = 'stopped_by_sharer') {
     if (this.ended) return;
     this.send({ type: 'stop' });
@@ -165,17 +235,25 @@ export class ScreenShareSender {
  *   onLegAdded({ deviceId, name })            a screen joined mid-share (a display's mirror that
  *                                             connected while it was being shared to)
  *   onLegSkipped({ name, reason })            one could not join (the share is full, say)
+ *   onRoom(room)                              several people present on one display: who is in the
+ *                                             room ({ room, screen_name, presenters, you, first,
+ *                                             can_control, slots }) — see roomAction()
  *   onEnded(reason)                           once, when the last screen ended or the person stopped
  */
 export class MultiShareSender {
-  constructor({ legs, wsPath, stream, onState, onLegEnded, onLegAdded, onLegSkipped, onEnded }) {
+  constructor({ legs, wsPath, stream, onState, onLegEnded, onLegAdded, onLegSkipped, onRoom, onRoomRefused, onEnded }) {
     this.stream = stream;
     this.wsPath = wsPath;
     this.onState = onState || (() => {});
     this.onLegEnded = onLegEnded || (() => {});
     this.onLegAdded = onLegAdded || (() => {});
     this.onLegSkipped = onLegSkipped || (() => {});
+    this.onRoom = onRoom || (() => {});
+    this.onRoomRefused = onRoomRefused || (() => {});
     this.onEnded = onEnded || (() => {});
+    // room id -> { state, sender }: the latest word on each display's room, and the leg it came on
+    // (controls go back over that same socket, so the server knows which room they are about).
+    this.rooms = new Map();
     this.ended = false;
     this.finished = false;
     this.started = false;
@@ -195,7 +273,7 @@ export class MultiShareSender {
       ticket: l.ticket, wsPath: this.wsPath, iceServers: l.ice_servers, stream: this.stream, ownsStream: false,
       onState: (st) => this.legState(leg, st),
       onEnded: (reason) => this.legEnded(leg, reason),
-      onControl: (m) => this.control(m),
+      onControl: (m, from) => this.control(m, from),
     });
     this.legs.push(leg);
     return leg;
@@ -203,8 +281,15 @@ export class MultiShareSender {
 
   // The server's word on the share as a whole, from any leg's socket. It only ever ADDS a leg it
   // minted itself (a ticket for a screen the server chose); nothing here can name a screen.
-  control(m) {
+  control(m, from) {
     if (this.ended || !m) return;
+    if (m.type === 'room') {
+      if (typeof m.room !== 'string' || !Array.isArray(m.presenters)) return;
+      this.rooms.set(m.room, { state: m, sender: from });
+      try { this.onRoom(m); } catch (_) { /* caller's problem */ }
+      return;
+    }
+    if (m.type === 'room_refused') { try { this.onRoomRefused(m); } catch (_) { /* caller's problem */ } return; }
     if (m.type === 'add_leg') {
       const l = m.leg || {};
       if (typeof l.ticket !== 'string' || typeof l.session_id !== 'string') return;
@@ -216,6 +301,31 @@ export class MultiShareSender {
     } else if (m.type === 'leg_skipped') {
       try { this.onLegSkipped({ name: String(m.screen_name || ''), reason: String(m.reason || '') }); } catch (_) { /* caller's problem */ }
     }
+  }
+
+  /*
+   * Spotlight (target = a presenter id, or null for tiles again) or remove someone, in a room this
+   * share is in. The server decides whether this presenter may (the first one, or a signed-in
+   * editor); otherwise it answers room_refused.
+   */
+  roomAction(roomId, action, target) {
+    const r = this.rooms.get(roomId);
+    if (!r || !r.sender || r.sender.ended) return false;
+    r.sender.send({ type: 'room', action, target: target == null ? null : String(target) });
+    return true;
+  }
+
+  // The phone's other camera: every screen gets the new picture, and a screen added later too.
+  async replaceVideo(stream) {
+    const track = stream && stream.getVideoTracks()[0];
+    if (!track || this.ended) return;
+    const old = this.stream;
+    this.stream = stream;
+    // Sound stays the one already shared (a camera flip should not drop or double it).
+    try { for (const a of old.getAudioTracks()) stream.addTrack(a); } catch (_) { /* video only */ }
+    for (const l of this.legs) { l.sender.stream = stream; if (!l.done) await l.sender.replaceVideo(track); }
+    try { for (const v of old.getVideoTracks()) v.stop(); } catch (_) { /* gone */ }
+    track.addEventListener('ended', () => this.stop('stopped_by_sharer'));
   }
 
   leg(deviceId) { return this.legs.find((l) => l.deviceId === deviceId && !l.done) || this.legs.find((l) => l.deviceId === deviceId); }
