@@ -4163,4 +4163,5 @@ export default {
   'screen_share.admin.desc': 'Quante persone possono condividere su uno stesso schermo contemporaneamente, sugli schermi in cui un amministratore dello spazio di lavoro ha attivato «Consenti a più persone di condividere insieme». Ognuna è un flusso video separato verso quello schermo.',
   'screen_share.admin.label': 'Persone contemporaneamente',
   'screen_share.admin.saved': 'Salvato. Vale per la prossima persona che si collega.',
+  'screen_share.simple.app_lead': 'L’app chiede al telefono il permesso di condividere lo schermo, poi lo mostra lì. Interrompi dalla notifica.',
 };

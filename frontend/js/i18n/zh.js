@@ -3832,4 +3832,5 @@ export default {
   'screen_share.admin.desc': '在工作区管理员已开启"允许多人同时共享"的屏幕上，同一屏幕最多可同时共享的人数。每人都是一条通往该屏幕的独立视频流。',
   'screen_share.admin.label': '同时共享人数',
   'screen_share.admin.saved': '已保存。将对下一位加入的人生效。',
+  'screen_share.simple.app_lead': '应用会请求手机允许共享屏幕，然后在那块屏幕上显示。可在通知中停止。',
 };

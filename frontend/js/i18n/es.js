@@ -4239,4 +4239,5 @@ export default {
   'screen_share.admin.desc': 'Cuántas personas pueden compartir a una misma pantalla al mismo tiempo, en las pantallas donde un administrador del espacio de trabajo activó «Permitir que varias personas compartan a la vez». Cada una es una transmisión de vídeo distinta hacia esa pantalla.',
   'screen_share.admin.label': 'Personas a la vez',
   'screen_share.admin.saved': 'Guardado. Se aplica a la próxima persona que se una.',
+  'screen_share.simple.app_lead': 'La app pide permiso al teléfono para compartir su pantalla y luego la muestra allí. Detenlo desde la notificación.',
 };

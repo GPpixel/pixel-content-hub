@@ -4921,4 +4921,5 @@ export default {
   'screen_share.admin.desc': 'Combien de personnes peuvent partager sur un même écran en même temps, sur les écrans où un administrateur d’espace de travail a activé « Permettre à plusieurs personnes de partager en même temps ». Chacune est un flux vidéo distinct vers cet écran.',
   'screen_share.admin.label': 'Personnes en même temps',
   'screen_share.admin.saved': 'Enregistré. Cela s’applique à la prochaine personne qui rejoint.',
+  'screen_share.simple.app_lead': 'L’application demande à votre téléphone l’autorisation de partager son écran, puis l’affiche là-bas. Arrêtez depuis la notification.',
 };

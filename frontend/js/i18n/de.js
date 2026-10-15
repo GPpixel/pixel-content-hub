@@ -4288,4 +4288,5 @@ export default {
   'screen_share.admin.desc': 'Wie viele Personen gleichzeitig auf einen Bildschirm teilen dürfen – auf Bildschirmen, auf denen ein Workspace-Admin „Mehrere Personen gleichzeitig teilen lassen“ eingeschaltet hat. Jede ist ein eigener Videostream zu diesem Bildschirm.',
   'screen_share.admin.label': 'Personen gleichzeitig',
   'screen_share.admin.saved': 'Gespeichert. Es gilt für die nächste Person, die beitritt.',
+  'screen_share.simple.app_lead': 'Die App fragt Ihr Telefon um Erlaubnis, den Bildschirm zu teilen, und zeigt ihn dann dort. Beenden Sie es über die Benachrichtigung.',
 };

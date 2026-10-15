@@ -4921,4 +4921,5 @@ export default {
   'screen_share.admin.desc': 'ワークスペース管理者が「複数人の同時共有を許可」をオンにした画面で、1 つの画面に同時に共有できる人数です。1 人ごとに、その画面への映像ストリームが 1 本増えます。',
   'screen_share.admin.label': '同時に共有できる人数',
   'screen_share.admin.saved': '保存しました。次に参加する人から適用されます。',
+  'screen_share.simple.app_lead': 'アプリがスマートフォンに画面共有の許可を求め、許可されるとその画面に表示します。停止は通知から行えます。',
 };

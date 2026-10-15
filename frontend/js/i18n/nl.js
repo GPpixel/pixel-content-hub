@@ -5886,4 +5886,5 @@ export default {
   'screen_share.admin.desc': 'Hoeveel mensen tegelijk naar één scherm mogen delen, op schermen waar een werkruimtebeheerder "Meerdere mensen tegelijk laten delen" heeft aangezet. Elk is een eigen videostream naar dat scherm.',
   'screen_share.admin.label': 'Mensen tegelijk',
   'screen_share.admin.saved': 'Opgeslagen. Het geldt voor de volgende die meedoet.',
+  'screen_share.simple.app_lead': 'De app vraagt je telefoon om toestemming om het scherm te delen en toont het daarna daar. Stop via de melding.',
 };

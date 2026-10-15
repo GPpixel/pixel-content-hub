@@ -4205,4 +4205,5 @@ export default {
   'screen_share.admin.desc': 'Quantas pessoas podem compartilhar numa mesma tela ao mesmo tempo, nas telas em que um administrador do espaço de trabalho ativou "Permitir que várias pessoas compartilhem ao mesmo tempo". Cada uma é um fluxo de vídeo separado para essa tela.',
   'screen_share.admin.label': 'Pessoas ao mesmo tempo',
   'screen_share.admin.saved': 'Salvo. Vale para a próxima pessoa que entrar.',
+  'screen_share.simple.app_lead': 'O app pede permissão ao celular para compartilhar a tela e depois a mostra lá. Pare pela notificação.',
 };

@@ -59,6 +59,11 @@ class ServerActivity : ComponentActivity() {
             status.text = ""
         }
 
+        // Present on a meeting-room screen: no account, no saved server needed.
+        findViewById<Button>(R.id.shareScreen).setOnClickListener {
+            startActivity(Intent(this, com.screentinker.manager.share.GuestShareActivity::class.java))
+        }
+
         connect.setOnClickListener {
             val origin = if (choice.checkedRadioButtonId == R.id.choiceOwn) ServerStore.normalize(url.text.toString()) else ServerStore.HOSTED
             if (origin == null) { status.text = getString(R.string.server_bad_url); return@setOnClickListener }

@@ -8167,4 +8167,5 @@ export default {
   'screen_share.admin.desc': 'How many people may share to one screen at the same time, on screens where a workspace admin has turned on "Let several people share at once". Each one is a separate video stream into that screen.',
   'screen_share.admin.label': 'People at once',
   'screen_share.admin.saved': 'Saved. It applies to the next person who joins.',
+  'screen_share.simple.app_lead': 'The app asks your phone for permission to share its screen, then shows it there. Stop it from the notification.',
 };

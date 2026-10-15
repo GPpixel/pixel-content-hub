@@ -69,6 +69,8 @@ function paintWays() {
   // A camera share is offered wherever the browser has a camera API; on a computer it is a second
   // choice under "Share my screen", on a phone it is the main one.
   $('shareCameraBox').hidden = !!cameraWhy;
+  // Sound only means something when this browser can send something.
+  $('shareAudio').closest('label').hidden = !!(screenWhy && cameraWhy);
   const note = $('shareScreenNote');
   if (screenWhy) {
     // Why there is no "Share my screen": a phone browser cannot, an http address cannot, …
@@ -79,7 +81,8 @@ function paintWays() {
     note.hidden = false;
   } else note.hidden = true;
   // Android: the phone's own screen goes through the ScreenTinker app (MediaProjection).
-  $('shareApp').hidden = !(isAndroid() && screenWhy === 'no_display_media');
+  // (also over plain http on a LAN, where the browser can capture nothing but the app can).
+  $('shareApp').hidden = !(isAndroid() && screenWhy);
   if (screenWhy && cameraWhy && !isAndroid()) say(t(`screen_share.unsupported.${screenWhy}`), true);
 }
 paintWays();

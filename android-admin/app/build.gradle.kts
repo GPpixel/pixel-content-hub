@@ -52,10 +52,28 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.browser:browser:1.8.0")
+    /*
+     * 3.0 "Share my screen" (share/): the phone's screen to a ScreenTinker screen over WebRTC, the same
+     * peer-to-peer signalling a browser's /share page uses. A WebView cannot capture the screen
+     * (no getDisplayMedia on Android), so it is native: MediaProjection -> share/ProjectionCapturer
+     * -> libwebrtc. The SAME libwebrtc build the player app ships (android/), and OkHttp for
+     * the signalling WebSocket, as there.
+     */
+    implementation("io.getstream:stream-webrtc-android:1.3.10")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // "Scan the code on the screen": Google's code scanner UI from Play services — no camera
+    // permission for this app, nothing to bundle. Without Play services the person types the code.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    // Play services brings an old androidx.fragment; registerForActivityResult needs 1.3+ (lint).
+    implementation("androidx.fragment:fragment:1.8.6")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
 }

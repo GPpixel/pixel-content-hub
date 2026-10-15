@@ -47,6 +47,43 @@ class ManagerBridge(private val activity: Activity, private val origin: String) 
     @JavascriptInterface
     fun version(): String = BuildConfig.VERSION_NAME
 
+    /*
+     * 3.0 "Share my screen" from the Simple view (a WebView cannot capture the screen: no
+     * getDisplayMedia on Android). The page passes the screens the person picked and its own session
+     * token; the app shows "Share your screen to <this server>?", asks Android for the capture, and
+     * starts the share itself (POST /api/screen-share/shares, the same request the browser makes).
+     * The token goes only to THIS server (the bridge's origin), never to an address the page names.
+     */
+    @JavascriptInterface
+    fun shareScreenTo(deviceIdsJson: String, label: String, token: String) {
+        if (token.isBlank() || token.length > 4096 || deviceIdsJson.length > 8192) return
+        val ids = try {
+            val arr = org.json.JSONArray(deviceIdsJson)
+            ArrayList((0 until arr.length()).map { arr.optString(it) }.filter { Regex("^[A-Za-z0-9_-]{1,128}$").matches(it) }.take(50))
+        } catch (e: Exception) { return }
+        if (ids.isEmpty()) return
+        activity.runOnUiThread {
+            activity.startActivity(Intent(activity, com.screentinker.manager.share.GuestShareActivity::class.java)
+                .putExtra(com.screentinker.manager.share.GuestShareActivity.EXTRA_ORIGIN, origin)
+                .putExtra(com.screentinker.manager.share.GuestShareActivity.EXTRA_TOKEN, token)
+                .putExtra(com.screentinker.manager.share.GuestShareActivity.EXTRA_LABEL, label.take(200))
+                .putStringArrayListExtra(com.screentinker.manager.share.GuestShareActivity.EXTRA_DEVICES, ids))
+        }
+    }
+
+    /** The no-account share (a meeting-room code), with this server's address filled in. */
+    @JavascriptInterface
+    fun shareWithCode() {
+        activity.runOnUiThread {
+            activity.startActivity(Intent(activity, com.screentinker.manager.share.GuestShareActivity::class.java)
+                .putExtra(com.screentinker.manager.share.GuestShareActivity.EXTRA_ORIGIN, origin))
+        }
+    }
+
+    /** What this app can do with a screen share, so the page offers only that ("screen"). */
+    @JavascriptInterface
+    fun shareCapabilities(): String = "screen"
+
     companion object {
         fun openInCustomTab(activity: Activity, uri: Uri) {
             try {
