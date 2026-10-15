@@ -7734,7 +7734,7 @@ function captureAndSend() {
     sendBlankFrame();
     return;
   }
-  if (BS && typeof BS.captureScreen === "function") {
+  if (BS && typeof BS.captureScreen === "function" && typeof BS.isBrightSign === "function" && BS.isBrightSign()) {
     BS.captureScreen({ width: 960, height: 540 }).then((dataUrl) => {
       const base64 = String(dataUrl).split(",")[1];
       if (base64 && base64.length > 100) {
