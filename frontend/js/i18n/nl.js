@@ -5920,4 +5920,5 @@ export default {
   'screen_share.admin.label': 'Mensen tegelijk',
   'screen_share.admin.saved': 'Opgeslagen. Het geldt voor de volgende die meedoet.',
   'screen_share.simple.app_lead': 'De app vraagt je telefoon om toestemming om het scherm te delen en toont het daarna daar. Stop via de melding.',
+  'screen_share.no_sound': 'Er wordt geen geluid gedeeld. Chrome en Edge delen geluid van een browsertabblad (kies een tabblad en laat ‘Ook tabbladaudio delen’ aangevinkt) of van het hele scherm op Windows. Firefox en Safari kunnen geen geluid delen.',
 };

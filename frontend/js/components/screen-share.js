@@ -14,7 +14,7 @@ import { api } from '../api.js';
 import { t } from '../i18n.js';
 import { esc } from '../utils.js';
 import { showToast } from './toast.js';
-import { ScreenShareSender, MultiShareSender, pickScreen, shareUnsupportedReason, stopStream } from '../lib/screen-share-client.js';
+import { ScreenShareSender, MultiShareSender, pickScreen, shareUnsupportedReason, stopStream, soundMissing } from '../lib/screen-share-client.js';
 
 // { deviceIds, deviceName, state, sender, shareId, live, screens } — screens > 1 for a multi share.
 let active = null;
@@ -88,6 +88,7 @@ export async function startScreenShare(device, { audio = false, also = [] } = {}
     if (!(e && e.name === 'NotAllowedError')) showToast(t('screen_share.pick_failed'), 'error');
     return false;   // cancelling the picker is not an error
   }
+  if (soundMissing(stream, audio)) showToast(t('screen_share.no_sound'), 'info', 9000);
   let start;
   try {
     start = await api.startScreenShare(device.id, { audio: !!audio && stream.getAudioTracks().length > 0 });
@@ -138,6 +139,7 @@ export async function startScreenShareTo({ deviceIds = [], groupId = null, label
     if (!(e && e.name === 'NotAllowedError')) showToast(t('screen_share.pick_failed'), 'error');
     return false;
   }
+  if (soundMissing(stream, audio)) showToast(t('screen_share.no_sound'), 'info', 9000);
   let start;
   try {
     start = await api.startScreenShareMulti({

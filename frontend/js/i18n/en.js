@@ -8201,4 +8201,5 @@ export default {
   'screen_share.admin.label': 'People at once',
   'screen_share.admin.saved': 'Saved. It applies to the next person who joins.',
   'screen_share.simple.app_lead': 'The app asks your phone for permission to share its screen, then shows it there. Stop it from the notification.',
+  'screen_share.no_sound': 'No sound is being shared. Chrome and Edge share sound from a browser tab (pick a tab and keep “Also share tab audio” ticked), or from the entire screen on Windows. Firefox and Safari can\'t share sound.',
 };

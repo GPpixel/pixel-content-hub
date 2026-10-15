@@ -88,10 +88,22 @@ export async function pickScreen({ audio = false } = {}) {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: { frameRate: { ideal: 30, max: 30 } },
     audio: !!audio,
+    // Chrome: offer the whole system's sound where it can (Windows, ChromeOS) and keep the sound
+    // playing on the sharer's own computer too. Other browsers ignore these.
+    ...(audio ? { systemAudio: 'include', suppressLocalAudioPlayback: false } : {}),
   });
   // Slides and documents are text: keep them sharp rather than smooth.
   try { const v = stream.getVideoTracks()[0]; if (v && 'contentHint' in v) v.contentHint = 'detail'; } catch (_) { /* optional */ }
   return stream;
+}
+
+/*
+ * Sound was asked for but the browser captured none: Chrome shares sound only from a tab (or the whole
+ * screen on Windows / ChromeOS), Firefox and Safari never do. The share goes on without it; callers
+ * say so, so "Include sound" never fails silently.
+ */
+export function soundMissing(stream, wanted) {
+  try { return !!wanted && !!stream && stream.getAudioTracks().length === 0; } catch (_) { return false; }
 }
 
 export function stopStream(stream) {

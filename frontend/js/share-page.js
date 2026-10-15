@@ -20,7 +20,7 @@
 import { t } from './i18n.js';
 import {
   ScreenShareSender, MultiShareSender, pickScreen, pickCamera, shareUnsupportedReason, cameraUnsupportedReason,
-  isMobileBrowser, isAndroid, stopStream, managerAppLink,
+  isMobileBrowser, isAndroid, stopStream, managerAppLink, soundMissing,
 } from './lib/screen-share-client.js';
 
 const $ = (id) => document.getElementById(id);
@@ -189,6 +189,7 @@ async function join(kind) {
     else if (!(err && err.name === 'NotAllowedError')) say(t(kind === 'camera' ? 'screen_share.guest_page.camera_failed' : 'screen_share.pick_failed'), true);
     return;
   }
+  const noSound = kind !== 'camera' && soundMissing(stream, audio);
   let body;
   try {
     const res = await fetch('/api/share/join', {
@@ -243,6 +244,7 @@ async function join(kind) {
     });
   }
   sender.start();
+  if (noSound) say(t('screen_share.no_sound'));
 }
 
 $('shareJoin').addEventListener('submit', (e) => { e.preventDefault(); if (!screenWhy) join('screen'); });

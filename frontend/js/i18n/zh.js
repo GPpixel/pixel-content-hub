@@ -3866,4 +3866,5 @@ export default {
   'screen_share.admin.label': '同时共享人数',
   'screen_share.admin.saved': '已保存。将对下一位加入的人生效。',
   'screen_share.simple.app_lead': '应用会请求手机允许共享屏幕，然后在那块屏幕上显示。可在通知中停止。',
+  'screen_share.no_sound': '没有共享声音。Chrome 和 Edge 可以共享浏览器标签页的声音（选择一个标签页并保持勾选“同时分享标签页音频”），在 Windows 上也可以共享整个屏幕的声音。Firefox 和 Safari 无法共享声音。',
 };

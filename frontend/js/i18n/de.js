@@ -4322,4 +4322,5 @@ export default {
   'screen_share.admin.label': 'Personen gleichzeitig',
   'screen_share.admin.saved': 'Gespeichert. Es gilt für die nächste Person, die beitritt.',
   'screen_share.simple.app_lead': 'Die App fragt Ihr Telefon um Erlaubnis, den Bildschirm zu teilen, und zeigt ihn dann dort. Beenden Sie es über die Benachrichtigung.',
+  'screen_share.no_sound': 'Es wird kein Ton geteilt. Chrome und Edge teilen Ton aus einem Browser-Tab (wählen Sie einen Tab und lassen Sie „Audio des Tabs ebenfalls teilen“ aktiviert) oder unter Windows vom gesamten Bildschirm. Firefox und Safari können keinen Ton teilen.',
 };

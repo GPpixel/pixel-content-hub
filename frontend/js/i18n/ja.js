@@ -4955,4 +4955,5 @@ export default {
   'screen_share.admin.label': '同時に共有できる人数',
   'screen_share.admin.saved': '保存しました。次に参加する人から適用されます。',
   'screen_share.simple.app_lead': 'アプリがスマートフォンに画面共有の許可を求め、許可されるとその画面に表示します。停止は通知から行えます。',
+  'screen_share.no_sound': '音声は共有されていません。Chrome と Edge では、ブラウザのタブ（タブを選び「タブの音声も共有する」をオンのまま）または Windows の画面全体から音声を共有できます。Firefox と Safari は音声を共有できません。',
 };

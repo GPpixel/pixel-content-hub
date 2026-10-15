@@ -4239,4 +4239,5 @@ export default {
   'screen_share.admin.label': 'Pessoas ao mesmo tempo',
   'screen_share.admin.saved': 'Salvo. Vale para a próxima pessoa que entrar.',
   'screen_share.simple.app_lead': 'O app pede permissão ao celular para compartilhar a tela e depois a mostra lá. Pare pela notificação.',
+  'screen_share.no_sound': 'Nenhum som está sendo compartilhado. O Chrome e o Edge compartilham o som de uma guia do navegador (escolha uma guia e mantenha “Compartilhar também o áudio da guia” marcado) ou da tela inteira no Windows. O Firefox e o Safari não compartilham som.',
 };

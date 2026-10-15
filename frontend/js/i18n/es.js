@@ -4273,4 +4273,5 @@ export default {
   'screen_share.admin.label': 'Personas a la vez',
   'screen_share.admin.saved': 'Guardado. Se aplica a la próxima persona que se una.',
   'screen_share.simple.app_lead': 'La app pide permiso al teléfono para compartir su pantalla y luego la muestra allí. Detenlo desde la notificación.',
+  'screen_share.no_sound': 'No se está compartiendo sonido. Chrome y Edge comparten el sonido de una pestaña del navegador (elige una pestaña y deja marcado «Compartir también el audio de la pestaña») o de toda la pantalla en Windows. Firefox y Safari no pueden compartir sonido.',
 };
