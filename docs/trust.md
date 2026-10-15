@@ -108,9 +108,13 @@ Some outbound traffic does not go through Node's HTTP stack, so the ledger does 
 
 Some network calls are made by players and browsers, not by the server:
 
-- the weather and RSS widgets (`wttr.in`, `api.rss2json.com`);
+- the weather widget (`wttr.in`);
 - room panel and live-publish code;
 - the STUN server handed to WebRTC.
+
+News widgets are not on this list. Since 3.0 the server reads every news feed itself (feature
+`news_feeds`, `lib/news-feed/`), and a screen reads the headlines and pictures from the server. See
+[news-feeds.md](news-feeds.md).
 
 Several direct callers do not go through the SSRF guard. Their destinations are fixed hosts or URLs
 set by the operator:

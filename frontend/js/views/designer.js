@@ -408,7 +408,7 @@ function reconstructDesign(html) {
       else if (/^d\d+$/.test(id)) { out.elements.push({ ...base, type: 'date' }); }
       else if (/^w\d+$/.test(id)) { const sc = scriptFor(id); const loc = (sc.match(/wttr\.in\/([^?]+)\?/) || [])[1]; out.elements.push({ ...base, type: 'weather', location: loc ? decodeURIComponent(loc) : '', units: /temp_C/.test(sc) ? 'metric' : 'imperial' }); }
       else if (cd) { const sc = scriptFor(cd.id); const lbl = node.querySelector('div'); out.elements.push({ ...base, type: 'countdown', label: lbl ? lbl.textContent : '', targetDate: (sc.match(/new Date\('([^']+)'\)/) || [])[1] || '' }); }
-      else if (tk && (st.overflow === 'hidden' || st.display === 'flex')) { const sc = scriptFor(tk.id); const feed = (sc.match(/rss_url=([^']+)'/) || [])[1]; out.elements.push({ type: 'ticker', x, y, width: pct(st.width), height: pct(st.height), bgColor: rgbToHex(st.background || st.backgroundColor), color: rgbToHex(tk.style.color), feedUrl: feed ? decodeURIComponent(feed) : '', speed: parseFloat((tk.style.animation || '').match(/([\d.]+)s/)?.[1]) || 30, fontSize: fontVw(tk) }); }
+      else if (tk && (st.overflow === 'hidden' || st.display === 'flex')) { const sc = scriptFor(tk.id); const feed = (sc.match(/(?:rss_url|[?&]u)=([^'&]+)/) || [])[1]; out.elements.push({ type: 'ticker', x, y, width: pct(st.width), height: pct(st.height), bgColor: rgbToHex(st.background || st.backgroundColor), color: rgbToHex(tk.style.color), feedUrl: feed ? decodeURIComponent(feed) : '', speed: parseFloat((tk.style.animation || '').match(/([\d.]+)s/)?.[1]) || 30, fontSize: fontVw(tk) }); }
       else if ((st.background || st.backgroundColor) && st.width && st.height && !node.textContent.trim()) { const circle = st.borderRadius === '50%'; out.elements.push({ type: 'shape', x, y, width: pct(st.width), height: pct(st.height), color: rgbToHex(st.background || st.backgroundColor), opacity: parseFloat(st.opacity) || 1, shape: circle ? 'circle' : 'rect', radius: circle ? 0 : (parseInt(st.borderRadius) || 0) }); }
       else { out.elements.push({ ...base, type: 'text', text: node.textContent, bold: st.fontWeight === 'bold' || st.fontWeight === '700', shadow: !!st.textShadow }); }
     }
@@ -565,7 +565,8 @@ function updateDynamic() {
     if (el.type === 'ticker') {
       const tEl = document.getElementById(`ticker_${i}`);
       if (tEl && el.feedUrl) {
-        fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(el.feedUrl)}`).then(r => r.json()).then(d => {
+        // 3.0: read by this server (routes/news-feeds.js), never by a third-party converter.
+        api.newsPreview(el.feedUrl, 'feed').then(d => {
           tEl.textContent = (d.items || []).map(item => item.title).join('  •  ') || t('designer.no_items');
         }).catch(() => { tEl.textContent = t('designer.feed_unavailable'); });
       }
@@ -718,7 +719,7 @@ function generateInnerHTML() {
         html += `<div style="position:absolute;left:${el.x}%;top:${el.y}%;width:${el.width}%;height:${el.height}%;background:${el.bgColor};overflow:hidden;display:flex;align-items:center">
           <div style="white-space:nowrap;animation:t ${el.speed}s linear infinite;font-size:${fs}vw;color:${el.color}" id="t${i}">Loading...</div></div>
           <style>@keyframes t{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}</style>
-          <script>fetch('https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(el.feedUrl)}').then(r=>r.json()).then(d=>{document.getElementById('t${i}').textContent=d.items.map(i=>i.title).join('  •  ')}).catch(()=>{})</script>`;
+          <script>fetch('/api/news-feeds/items?m=feed&u=${encodeURIComponent(el.feedUrl)}').then(r=>r.json()).then(d=>{if(d.items&&d.items.length)document.getElementById('t${i}').textContent=d.items.map(i=>i.title).join('  •  ')}).catch(()=>{})</script>`;
         break;
       case 'countdown':
         html += `<div style="position:absolute;left:${el.x}%;top:${el.y}%;text-align:center;color:${el.color}">

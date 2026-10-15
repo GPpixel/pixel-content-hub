@@ -184,6 +184,12 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/social', mod: './routes/social', tenancy: true },
   /*
+   * 3.0 news feeds (lib/news-feed): "Find feeds" on a pasted site and item previews for the widget
+   * editor and the designer. JWT only — each call makes this server read a third-party site. The
+   * screen-facing reads (/api/news-feeds/items and /image) are mounted in server.js, signed.
+   */
+  { path: '/api/news-feeds', mod: './routes/news-feeds', tenancy: true },
+  /*
    * Meeting-room displays (lib/rooms). JWT only: a connection holds an organization's Microsoft 365
    * client secret or Google service-account key, and a room may hold a private calendar address.
    * The page-facing reads and actions are /api/room-panel, mounted separately in server.js.
