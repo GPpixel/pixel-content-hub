@@ -67,6 +67,10 @@ router.get('/devices/:id', (req, res) => {
     // A mirror shows its display's meeting-room code, so it reports the display's switch.
     guest_enabled: !!guestSwitch(r.device),
     mirror_of: r.device.mirror_of || null,
+    // A display's mirrors always get its shares (no choosing): the card names them.
+    mirrors: r.device.mirror_of ? [] : require('../lib/mirrors').mirrorsOf(r.device.id)
+      .filter((m) => { const row = db.prepare('SELECT workspace_id FROM devices WHERE id = ?').get(m.id); return row && row.workspace_id === r.device.workspace_id; })
+      .map((m) => ({ id: m.id, name: m.name || '', online: share.isOnline(m.id) })),
     max_seconds: share.maxSeconds(),
     session: share.publicSession(session),
     // Multi share: how many screens one share may reach, and what kind of player this is (the card

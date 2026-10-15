@@ -96,9 +96,11 @@ export async function startScreenShare(device, { audio = false, also = [] } = {}
     return false;
   }
   // The display's mirrors (its link open somewhere else) come back as extra legs: the same one
-  // capture goes to each, exactly like a multi share. Mirrors left out (offline, say) are not
-  // worth a warning here: the person asked for this display, and it is getting the share.
-  if (Array.isArray(start.legs) && start.legs.length > 1) {
+  // capture goes to each, exactly like a multi share, and a mirror that connects DURING the share
+  // is added by the server (add_leg), so this always runs as a multi share when the server says
+  // which legs it made. Mirrors left out (offline, say) are not worth a warning here: the person
+  // asked for this display, and it is getting the share. (No `legs`: an older server, one leg.)
+  if (Array.isArray(start.legs) && start.legs.length) {
     runMulti(start, stream, device.name || start.screen_name || '');
     return true;
   }
@@ -176,6 +178,18 @@ function runMulti(start, stream, name) {
       if (active !== me) return;
       me.deviceIds = me.deviceIds.filter((id) => id !== leg.deviceId);
       showToast(t('screen_share.multi.dropped', { name: leg.name || '' }) + ' ' + screenShareReasonText(reason), 'warning', 7000);
+    },
+    // A display's mirror that connected mid-share was added by the server.
+    onLegAdded: (leg) => {
+      if (active !== me) return;
+      if (!me.deviceIds.includes(leg.deviceId)) me.deviceIds.push(leg.deviceId);
+      showToast(t('screen_share.multi.joined', { name: leg.name || '' }), 'info', 5000);
+    },
+    onLegSkipped: (leg) => {
+      if (active !== me) return;
+      showToast(leg.reason === 'too_many_targets'
+        ? t('screen_share.multi.full', { name: leg.name || '' })
+        : t('screen_share.multi.skipped', { names: leg.name || '' }), 'warning', 9000);
     },
     onEnded: (reason) => {
       if (active === me) { active = null; removeBar(); notify(); }
@@ -277,7 +291,9 @@ export function renderScreenShareCard(host, device, opts = {}) {
     if (others) return;
     try {
       const all = await api.getDevices();
-      others = (Array.isArray(all) ? all : []).filter((d) => d.id !== device.id
+      // Displays only: a display's mirrors always come with it (the server adds them), so neither
+      // this display's mirrors nor anyone else's are offered as choices of their own.
+      others = (Array.isArray(all) ? all : []).filter((d) => d.id !== device.id && !d.mirror_of
         && Array.isArray(d.capabilities) && d.capabilities.includes('remote.screen_share'))
         .map((d) => ({ id: d.id, name: d.name || '', online: d.status === 'online' }));
     } catch (_) { others = []; }
@@ -338,6 +354,8 @@ export function renderScreenShareCard(host, device, opts = {}) {
             <summary style="cursor:pointer;font-size:13px">${esc(t('screen_share.card.also'))}${also.size ? ` (${also.size})` : ''}</summary>
             ${alsoOpen ? alsoHtml() : ''}
           </details>` : ''}` : ''}
+        ${canStart && Array.isArray(status.mirrors) && status.mirrors.length ? `
+          <p data-share-mirrors style="font-size:12px;margin:8px 0 0;color:var(--text-muted)">${esc(t('screen_share.card.mirrors_line', { count: status.mirrors.length, names: status.mirrors.map((m) => m.name).join(', ') }))}</p>` : ''}
         ${note ? `<p style="font-size:13px;margin:10px 0 0;color:var(--text-muted)">${esc(note)}</p>` : ''}
         ${/* A mirror shows its display's code: the switch is on the display (the mirror banner links it). */
           status.can_admin && status.supported && !status.mirror_of ? `

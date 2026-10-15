@@ -8068,4 +8068,7 @@ export default {
   'device.mirror.now_playing': 'Mirroring {source}: playing {playlist}',
   'device.mirror.now_playing_item': 'Mirroring {source}: playing {playlist} (now: {item})',
   'device.mirror.now_nothing': 'Mirroring {source}: nothing is assigned to it yet',
+  'screen_share.card.mirrors_line': 'Also shows on its mirrors ({count}): {names}',
+  'screen_share.multi.joined': '{name} joined the share.',
+  'screen_share.multi.full': '{name} connected but is not showing the share: it is already on as many screens as one share can reach.',
 };

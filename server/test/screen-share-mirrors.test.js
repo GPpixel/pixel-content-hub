@@ -283,10 +283,16 @@ test('the meeting-room code shows on the mirrors too; a guest with it reaches th
   const others = jb.legs.filter((l) => l !== mLeg);
   assert.ok(others.every((l) => !has(l._sharer, 'ended')), 'the display and the other mirror go on');
 
-  // A mirror that connects mid-share shows no code.
+  // A mirror that connects mid-share shows no code (and joins the share: the guest's page is
+  // handed its leg over a socket it already has open).
   const MID = mkDevice('Boardroom (mirror 3)', 'owner', { mirror_of: D.id });
   await connectDevice(MID);
   await waitFor(() => lastCode(MID) === null, 4000, 'the mid-share mirror told: no code');
+  const addMid = await waitFor(() => others.map((l) => has(l._sharer, 'add_leg')).find(Boolean), 4000, 'the guest handed the new mirror\'s leg');
+  const midLeg = { _sharer: await ws('/api/screen-share/ws') };
+  midLeg._sharer.send(JSON.stringify({ type: 'auth', ticket: addMid.leg.ticket }));
+  await waitFor(() => has(midLeg._sharer, 'ready'), 4000, 'mid leg ready');
+  others.push(midLeg);
 
   // The guest stops: everything ends, and ONE fresh code comes back on the display and its mirrors.
   for (const l of others) l._sharer.send(JSON.stringify({ type: 'stop' }));
@@ -342,4 +348,102 @@ test('removing a mirror mid-share ends its leg; the display goes on', async () =
   assert.equal(st.mirrors, 0);
   await call('owner', 'DELETE', `/api/screen-share/devices/${D.id}`);
   D.sock.close();
+});
+
+/*
+ * A mirror that connects WHILE its display is being shared to joins the share: the server mints a
+ * leg and hands it to the sharer over the sharer's open socket ({type:'add_leg'}). Only a mirror of
+ * a display the share was started for, in its workspace, within the target limit, and nothing the
+ * sharer sends can add a screen.
+ */
+test('a mirror that connects mid-share joins it; nothing else can be added; the limit holds', async () => {
+  const D = mkDevice('Atrium', 'owner');
+  const X = mkDevice('Café', 'owner');
+  const MX = mkDevice('Café (mirror 1)', 'owner', { mirror_of: X.id });
+  const M = mkDevice('Atrium (mirror 1)', 'owner', { mirror_of: D.id });
+  const M2 = mkDevice('Atrium (mirror 2)', 'owner', { mirror_of: D.id });
+  const M3 = mkDevice('Atrium (mirror 3)', 'owner', { mirror_of: D.id });
+  const STRAY = mkDevice('stray', 'outsider', { mirror_of: D.id });
+  await connectDevice(D);
+  await connectDevice(X);
+  const r = await call('owner', 'POST', `/api/screen-share/devices/${D.id}`, {});
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.legs.map((l) => l.device_id), [D.id], 'no mirror open yet');
+  const legD = await connectLeg(r.body.legs[0], D);
+  const adds = () => legD.sharer.msgs.filter((m) => m.type === 'add_leg');
+
+  // The mirror connects: the sharer is handed a leg for it, and that leg works like any other.
+  await connectDevice(M);
+  const add = await waitFor(() => adds()[0], 4000, 'add_leg for the mirror');
+  assert.equal(add.share_id, r.body.share_id);
+  assert.equal(add.leg.device_id, M.id);
+  assert.equal(add.leg.screen_name, 'Atrium (mirror 1)');
+  const legM = await connectLeg(add.leg, M);
+  const start = await waitFor(() => M.sock.got.find((g) => g.ev === 'device:screenshare-start' && g.data.session_id === add.leg.session_id), 4000, 'the mirror told to show it');
+  assert.equal(start.data.shared_by, 'owner');
+  assert.equal((await sessionOf(D)).mirrors, 1);
+
+  // Not a mirror of a display in this share, or not in this workspace: not added.
+  await connectDevice(MX);
+  await connectDevice(STRAY);
+  // The sharer cannot name a screen: whatever it sends, nothing is added.
+  legD.sharer.send(JSON.stringify({ type: 'add_leg', device_id: X.id, leg: { device_id: X.id } }));
+  legD.sharer.send(JSON.stringify({ type: 'add', device_id: MX.id }));
+  await sleep(500);
+  assert.equal(adds().length, 1, 'only the real mirror was ever added');
+  for (const d of [X, MX]) assert.equal(await sessionOf(d), null, d.name + ' untouched');
+  assert.equal((await call('outsider', 'GET', `/api/screen-share/devices/${STRAY.id}`)).body.session, null, 'stray untouched');
+  // A periodic re-register of a screen already in the share adds nothing.
+  M.sock.emit('device:register', { device_id: M.id, device_token: M.token, capabilities: CAPS, device_info: { app_version: 'test' } });
+  await sleep(400);
+  assert.equal(adds().length, 1);
+
+  // The mirror drops and comes back: it rejoins with a new leg.
+  M.sock.close();
+  await waitFor(() => has(legM.sharer, 'ended'), 4000, 'the mirror\'s leg ended');
+  await connectDevice(M);
+  const again = await waitFor(() => adds()[1], 4000, 'add_leg again on reconnect');
+  assert.equal(again.leg.device_id, M.id);
+  assert.notEqual(again.leg.session_id, add.leg.session_id);
+  await connectLeg(again.leg, M);
+
+  // The limit (3): one more mirror fits, the next is skipped and the sharer is told.
+  await connectDevice(M2);
+  await waitFor(() => adds()[2], 4000, 'the second mirror joins');
+  await connectDevice(M3);
+  const skipped = await waitFor(() => legD.sharer.msgs.find((m) => m.type === 'leg_skipped'), 4000, 'leg_skipped');
+  assert.equal(skipped.screen_name, 'Atrium (mirror 3)');
+  assert.equal(skipped.reason, 'too_many_targets');
+  assert.equal(adds().length, 3);
+  assert.equal(await sessionOf(M3), null);
+
+  await call('owner', 'DELETE', `/api/screen-share/devices/${D.id}`);
+  for (const d of [D, X, MX, M, M2, M3, STRAY]) d.sock.close();
+});
+
+test('a guest share takes in a mirror that connects mid-share, without device ids', async () => {
+  const D = mkDevice('Studio', 'owner', { guest: true });
+  const M = mkDevice('Studio (mirror 1)', 'owner', { mirror_of: D.id });
+  await connectDevice(D);
+  const code = await waitFor(() => lastCode(D), 4000, 'a code');
+  const j = await fetch(BASE + '/api/share/join', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Gus' }) });
+  const jb = await j.json();
+  assert.equal(j.status, 201);
+  assert.equal(jb.legs.length, 1);
+  const sharer = await ws('/api/screen-share/ws');
+  sharer.send(JSON.stringify({ type: 'auth', ticket: jb.ticket }));
+  await waitFor(() => has(sharer, 'ready'));
+  await connectDevice(M);
+  const add = await waitFor(() => has(sharer, 'add_leg'), 4000, 'add_leg to the guest');
+  assert.ok(!('device_id' in add.leg), 'no device id for a guest');
+  await waitFor(() => lastCode(M) === null, 4000, 'no code on the mirror while it is in the share');
+  const s2 = await ws('/api/screen-share/ws');
+  s2.send(JSON.stringify({ type: 'auth', ticket: add.leg.ticket }));
+  const st = await waitFor(() => M.sock.got.find((g) => g.ev === 'device:screenshare-start'), 4000, 'the mirror shows the guest share');
+  assert.equal(st.data.guest, true);
+  assert.equal(st.data.shared_by, 'Gus');
+  sharer.send(JSON.stringify({ type: 'stop' }));
+  s2.send(JSON.stringify({ type: 'stop' }));
+  await waitFor(() => lastCode(D) && lastCode(D) !== code && lastCode(M) === lastCode(D), 4000, 'one new code for both');
+  D.sock.close(); M.sock.close();
 });

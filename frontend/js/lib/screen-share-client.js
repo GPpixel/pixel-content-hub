@@ -48,13 +48,16 @@ function wsUrl(path) {
  */
 export class ScreenShareSender {
   // ownsStream=false: a MultiShareSender owns the capture (one stream, many legs) and stops it itself.
-  constructor({ ticket, wsPath, iceServers, stream, onState, onEnded, ownsStream = true }) {
+  // onControl(m): the server's share-level messages on this leg's socket (add_leg / leg_skipped), for
+  // a MultiShareSender to act on.
+  constructor({ ticket, wsPath, iceServers, stream, onState, onEnded, onControl, ownsStream = true }) {
     this.ticket = ticket;
     this.wsPath = wsPath;
     this.iceServers = Array.isArray(iceServers) ? iceServers : [];
     this.stream = stream;
     this.onState = onState || (() => {});
     this.onEnded = onEnded || (() => {});
+    this.onControl = onControl || null;
     this.ownsStream = ownsStream !== false;
     this.ws = null;
     this.pc = null;
@@ -89,6 +92,7 @@ export class ScreenShareSender {
     else if (m.type === 'screen_joined') this.onState('negotiating');
     else if (m.type === 'screen_playing') this.onState('live');
     else if (m.type === 'ended') { this.lastReason = m.reason || 'ended'; this.finish(this.lastReason); }
+    else if ((m.type === 'add_leg' || m.type === 'leg_skipped') && this.onControl) { try { this.onControl(m); } catch (_) { /* caller's problem */ } }
     else if (m.type === 'webrtc/offer' && typeof m.value === 'string') await this.answer(m.value);
     else if (m.type === 'webrtc/candidate' && typeof m.value === 'string') {
       const c = { candidate: m.value };
@@ -158,31 +162,63 @@ export class ScreenShareSender {
  *         one-display start / guest join when the display has mirrors)
  *   onState({ state, live, active, total })   aggregate: 'live' once any screen plays
  *   onLegEnded({ deviceId, name }, reason)    one screen dropped out; the others carry on
+ *   onLegAdded({ deviceId, name })            a screen joined mid-share (a display's mirror that
+ *                                             connected while it was being shared to)
+ *   onLegSkipped({ name, reason })            one could not join (the share is full, say)
  *   onEnded(reason)                           once, when the last screen ended or the person stopped
  */
 export class MultiShareSender {
-  constructor({ legs, wsPath, stream, onState, onLegEnded, onEnded }) {
+  constructor({ legs, wsPath, stream, onState, onLegEnded, onLegAdded, onLegSkipped, onEnded }) {
     this.stream = stream;
+    this.wsPath = wsPath;
     this.onState = onState || (() => {});
     this.onLegEnded = onLegEnded || (() => {});
+    this.onLegAdded = onLegAdded || (() => {});
+    this.onLegSkipped = onLegSkipped || (() => {});
     this.onEnded = onEnded || (() => {});
     this.ended = false;
     this.finished = false;
-    // A guest's legs (POST /api/share/join) carry no device ids: they are told apart by session id.
-    this.legs = (legs || []).map((l) => {
-      const key = l.device_id || l.session_id;
-      return {
-        deviceId: key, name: l.screen_name || '', state: 'connecting', done: false, reason: null,
-        sender: new ScreenShareSender({
-          ticket: l.ticket, wsPath, iceServers: l.ice_servers, stream, ownsStream: false,
-          onState: (st) => this.legState(key, st),
-          onEnded: (reason) => this.legEnded(key, reason),
-        }),
-      };
-    });
+    this.started = false;
+    this.legs = [];
+    for (const l of legs || []) this.makeLeg(l);
   }
 
-  leg(deviceId) { return this.legs.find((l) => l.deviceId === deviceId); }
+  // A guest's legs (POST /api/share/join) carry no device ids: they are told apart by session id.
+  // A screen that comes back after a drop is a NEW leg (new session) under the same key.
+  makeLeg(l) {
+    const key = l.device_id || l.session_id;
+    const leg = {
+      deviceId: key, sessionId: l.session_id, name: l.screen_name || '', state: 'connecting', done: false, reason: null,
+      sender: null,
+    };
+    leg.sender = new ScreenShareSender({
+      ticket: l.ticket, wsPath: this.wsPath, iceServers: l.ice_servers, stream: this.stream, ownsStream: false,
+      onState: (st) => this.legState(leg, st),
+      onEnded: (reason) => this.legEnded(leg, reason),
+      onControl: (m) => this.control(m),
+    });
+    this.legs.push(leg);
+    return leg;
+  }
+
+  // The server's word on the share as a whole, from any leg's socket. It only ever ADDS a leg it
+  // minted itself (a ticket for a screen the server chose); nothing here can name a screen.
+  control(m) {
+    if (this.ended || !m) return;
+    if (m.type === 'add_leg') {
+      const l = m.leg || {};
+      if (typeof l.ticket !== 'string' || typeof l.session_id !== 'string') return;
+      if (this.legs.some((x) => x.sessionId === l.session_id)) return;
+      const leg = this.makeLeg(l);
+      if (this.started) leg.sender.start();
+      try { this.onLegAdded({ deviceId: leg.deviceId, name: leg.name }); } catch (_) { /* caller's problem */ }
+      this.onState(this.summary());
+    } else if (m.type === 'leg_skipped') {
+      try { this.onLegSkipped({ name: String(m.screen_name || ''), reason: String(m.reason || '') }); } catch (_) { /* caller's problem */ }
+    }
+  }
+
+  leg(deviceId) { return this.legs.find((l) => l.deviceId === deviceId && !l.done) || this.legs.find((l) => l.deviceId === deviceId); }
 
   summary() {
     const active = this.legs.filter((l) => !l.done);
@@ -195,19 +231,18 @@ export class MultiShareSender {
     // The browser's own "Stop sharing" bar ends the capture: that stops every screen.
     const v = this.stream.getVideoTracks()[0];
     if (v) v.addEventListener('ended', () => this.stop('stopped_by_sharer'));
+    this.started = true;
     for (const l of this.legs) l.sender.start();
     this.onState(this.summary());
   }
 
-  legState(deviceId, st) {
-    const l = this.leg(deviceId);
+  legState(l, st) {
     if (!l || l.done || this.ended) return;
     l.state = st;
     this.onState(this.summary());
   }
 
-  legEnded(deviceId, reason) {
-    const l = this.leg(deviceId);
+  legEnded(l, reason) {
     if (!l || l.done) return;
     l.done = true; l.reason = reason;
     if (this.ended) return;

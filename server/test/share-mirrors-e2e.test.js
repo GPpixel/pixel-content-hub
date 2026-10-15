@@ -196,6 +196,9 @@ describe('display-link mirrors: everything the display shows', { skip: SKIP }, (
       // ---- c. the dashboard's "Share my screen" on the ORIGINAL plays on both; Stop ends both.
       await dashPage.goto(`${srv.base}/app#/device/${d.id}`, { waitUntil: 'domcontentloaded' });
       await dashPage.waitForSelector('[data-share-start]:not([disabled])', { timeout: 30000 });
+      // The mirror is not a box to tick: the card says the share includes it.
+      const mirrorsLine = await dashPage.$eval('[data-share-mirrors]', (el) => el.textContent.trim());
+      assert.equal(mirrorsLine, 'Also shows on its mirrors (1): Display 2 (mirror 1)');
       await dashPage.click('[data-share-start]');
       await assertPlaying(pA, 'dashboard share on the original');
       await assertPlaying(pB, 'dashboard share on the mirror');
@@ -234,6 +237,68 @@ describe('display-link mirrors: everything the display shows', { skip: SKIP }, (
       for (const p of [pA, pB]) assert.deepEqual(p.errors, [], 'no page errors');
     } finally {
       for (const c of [ctxA, ctxB, ctxD, ctxG]) { try { await c.close(); } catch { /* */ } }
+    }
+  });
+
+  /*
+   * Mirrors are automatic, including ones that appear DURING a share: the server hands the sharer's
+   * page a leg for the new screen over its open signalling socket, and the page sends the same
+   * capture to it. Also a mirror that drops and comes back mid-share.
+   */
+  test('a mirror opened (or reopened) during a share joins it on its own', { timeout: 300000 }, async () => {
+    const d = await srv.webPlayerDisplay('Display 3');
+    await playOn(d.id, red, 'Atrium loop');
+    const link = `${srv.base}/player?k=${encodeURIComponent(d.key)}`;
+    const ctxA = await browser.createBrowserContext();
+    const ctxB = await browser.createBrowserContext();
+    const ctxD = await browser.createBrowserContext();
+    try {
+      const pA = await pageIn(ctxA);
+      await pA.goto(link, { waitUntil: 'domcontentloaded' });
+      assert.ok(await waitFor(() => connectedAs(pA, d.id), 40000), 'the display is up');
+      assert.ok(await waitFor(async () => {
+        const st = await srv.api('GET', `/screen-share/devices/${d.id}`).catch(() => null);
+        return st && st.available;
+      }, 30000), 'the display can take a share');
+
+      // Share from the dashboard with NO mirror open.
+      const dashPage = await pageIn(ctxD);
+      await dashPage.setViewport({ width: 1400, height: 1000 });
+      await dashPage.goto(`${srv.base}/app#/login`, { waitUntil: 'domcontentloaded' });
+      await dashPage.evaluate((tok) => { localStorage.setItem('token', tok); localStorage.setItem('rd_onboarded', '1'); }, srv.token);
+      await dashPage.goto(`${srv.base}/app#/device/${d.id}`, { waitUntil: 'domcontentloaded' });
+      await dashPage.waitForSelector('[data-share-start]:not([disabled])', { timeout: 30000 });
+      await dashPage.click('[data-share-start]');
+      await assertPlaying(pA, 'the share on the display');
+
+      // Now the link opens somewhere else: a mirror, which joins the running share.
+      let pB = await pageIn(ctxB);
+      await pB.goto(link, { waitUntil: 'domcontentloaded' });
+      const mirror = await waitFor(async () => {
+        const row = await srv.api('GET', `/devices/${d.id}`).catch(() => null);
+        return row && row.mirrors && row.mirrors.length === 1 ? row.mirrors[0] : null;
+      }, 40000);
+      assert.ok(mirror, 'the second opening is a mirror');
+      const sb = await assertPlaying(pB, 'the mirror that appeared mid-share');
+      assert.match(sb.badge, /Shared by/i);
+      const barText = () => dashPage.$eval('#screenShareBar', (el) => el.textContent).catch(() => '');
+      assert.ok(await waitFor(async () => /2 of 2/.test(await barText()), 15000), 'the bar counts both screens: ' + await barText());
+      await assertPlaying(pA, 'the display still');
+
+      // The mirror drops and comes back mid-share: it rejoins.
+      await pB.close();
+      assert.ok(await waitFor(async () => /1 of 1|Sharing to Display 3/.test(await barText()), 20000), 'the bar drops it: ' + await barText());
+      pB = await pageIn(ctxB);
+      await pB.goto(link, { waitUntil: 'domcontentloaded' });
+      assert.ok(await waitFor(() => connectedAs(pB, mirror.id), 40000), 'the same mirror again');
+      await assertPlaying(pB, 'the mirror after reconnecting');
+      assert.ok(await waitFor(async () => /2 of 2/.test(await barText()), 15000), 'the bar counts it again: ' + await barText());
+
+      // Stop on the dashboard ends both.
+      await dashPage.click('#screenShareBar [data-share-stop]');
+      assert.ok(await waitFor(async () => (await videoState(pA)) === null && (await videoState(pB)) === null, 15000), 'Stop took the share off both');
+    } finally {
+      for (const c of [ctxA, ctxB, ctxD]) { try { await c.close(); } catch { /* */ } }
     }
   });
 });

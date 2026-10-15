@@ -108,9 +108,10 @@ $('shareJoin').addEventListener('submit', async (e) => {
       !['stopped_by_sharer', 'stopped_by_owner', 'max_duration'].includes(reason));
   };
   // The code is the display's and shows on its mirrors too (its link open somewhere else): the
-  // join hands back one leg per place, and the one capture goes to all of them. To the guest it is
-  // still one screen, named after the display.
-  if (Array.isArray(join.legs) && join.legs.length > 1) {
+  // join hands back one leg per place, the one capture goes to all of them, and a mirror that
+  // connects during the share is added by the server over these same sockets. To the guest it is
+  // still one screen, named after the display. (No `legs`: an older server, one leg.)
+  if (Array.isArray(join.legs) && join.legs.length) {
     sender = new MultiShareSender({
       legs: join.legs, wsPath: join.ws_path, stream,
       onState: (sum) => showLive(screenName, sum.state),
