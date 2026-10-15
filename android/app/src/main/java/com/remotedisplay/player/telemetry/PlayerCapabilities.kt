@@ -110,6 +110,10 @@ object PlayerCapabilities {
                 // remote.talk = can play the operator's audio/webcam (one-way / PA); remote.mic =
                 // also has a microphone to send back (unlocks 2-way). Android has both.
                 "remote.talk", "remote.mic",
+                // 3.0 screen share: receive a person's screen peer to peer and show it fullscreen
+                // (remote/ScreenShareReceiver + ScreenShareOverlay). The same bundled libwebrtc as
+                // Talk, receive-only (no permission at all), so it holds on every panel this APK runs on.
+                "remote.screen_share",
                 // #312 follow-up: accept a server-URL rewrite from the dashboard, VERIFYING the new
                 // address is reachable before committing and rolling back if not (see
                 // WebSocketService's set_server_url handler). Declared because we do that

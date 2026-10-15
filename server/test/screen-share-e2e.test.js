@@ -48,6 +48,7 @@ const SKIP = !CHROME || !puppeteer ? (!puppeteer ? 'puppeteer-core not installed
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let proc, BASE, DATA_DIR, LOG, browser;
 let owner;
+const extraBrowsers = [];
 const DEV = crypto.randomUUID();
 const TOK = 'devtok_' + crypto.randomBytes(16).toString('hex');
 
@@ -106,6 +107,7 @@ before(async () => {
 
 after(async () => {
   try { if (browser) await browser.close(); } catch { /* */ }
+  for (const b of extraBrowsers) { try { await b.close(); } catch { /* already closed */ } }
   if (proc) await new Promise((r) => { proc.once('exit', r); proc.kill('SIGKILL'); });
   if (DATA_DIR) fs.rmSync(DATA_DIR, { recursive: true, force: true });
 });
@@ -287,4 +289,169 @@ test('the remote viewer shows the share, on a screen opened through its web play
   await fetch(`${BASE}/api/screen-share/devices/${devId}`, { method: 'DELETE', headers: H });
   await sharer.close();
   await ctx.close();
+});
+
+/*
+ * 3.0 multi share: ONE sharer, TWO web-player screens, both playing the same capture. Each screen is
+ * its own browser context (its own storage, like two TVs). Stopping one screen leaves the other
+ * playing; the sharer's Stop ends the rest and the capture.
+ */
+test('multi share: one sharer, two screens, both play; stop one, then stop all', { skip: SKIP, timeout: 150000 }, async () => {
+  const H = { Authorization: `Bearer ${owner.token}`, 'X-Workspace-Id': owner.ws, 'Content-Type': 'application/json' };
+  const DEV2 = crypto.randomUUID();
+  const TOK2 = 'devtok_' + crypto.randomBytes(16).toString('hex');
+  run("INSERT INTO devices (id, user_id, workspace_id, name, pairing_code, status, device_token) VALUES (?, ?, ?, 'Lobby TV', ?, 'offline', ?)",
+    DEV2, owner.id, owner.ws, crypto.randomUUID().slice(0, 6), TOK2);
+  const ctx1 = await browser.createBrowserContext();
+  const ctx2 = await browser.createBrowserContext();
+  const open = async (ctx, id, tok) => {
+    const p = await ctx.newPage();
+    await p.setViewport({ width: 1280, height: 720 });
+    await p.evaluateOnNewDocument((cfg) => { try { localStorage.setItem('rd_web_player', JSON.stringify(cfg)); } catch (_) { /* */ } },
+      { serverUrl: BASE, deviceId: id, deviceToken: tok, paired: true });
+    await p.goto(BASE + '/player', { waitUntil: 'domcontentloaded' });
+    return p;
+  };
+  const p1 = await open(ctx1, DEV, TOK);
+  const p2 = await open(ctx2, DEV2, TOK2);
+  for (const id of [DEV, DEV2]) {
+    await waitFor(async () => {
+      const r = await (await fetch(`${BASE}/api/devices/${id}`, { headers: H })).json();
+      return r && r.status === 'online' && Array.isArray(r.capabilities) && r.capabilities.includes('remote.screen_share');
+    }, 40000, 'both screens online and offering screen share');
+  }
+  const start = await fetch(`${BASE}/api/screen-share/shares`, { method: 'POST', headers: H, body: JSON.stringify({ device_ids: [DEV, DEV2] }) });
+  const body = await start.json();
+  assert.equal(start.status, 201, JSON.stringify(body));
+  assert.equal(body.legs.length, 2);
+
+  const sharer = await browser.newPage();
+  await sharer.goto(BASE + '/share', { waitUntil: 'domcontentloaded' });
+  await sharer.evaluate(async (b) => {
+    const m = await import('/js/lib/screen-share-client.js');
+    const stream = await m.pickScreen({ audio: false });
+    window.__sum = null; window.__legEnded = []; window.__ended = null;
+    window.__multi = new m.MultiShareSender({
+      legs: b.legs, wsPath: b.ws_path, stream,
+      onState: (s) => { window.__sum = s; },
+      onLegEnded: (leg, reason) => window.__legEnded.push([leg.deviceId, reason]),
+      onEnded: (r) => { window.__ended = r; },
+    });
+    window.__multi.start();
+  }, body);
+
+  await assertPlaying(p1, 'multi share, screen 1');
+  await assertPlaying(p2, 'multi share, screen 2');
+  await waitFor(() => sharer.evaluate(() => window.__sum && window.__sum.live === 2), 15000, 'both legs live');
+  // One capture for both: the sharer's page captured once.
+  assert.equal(await sharer.evaluate(() => window.__multi.legs.every((l) => l.sender.stream === window.__multi.stream)), true);
+
+  // The owner stops screen 2 only: it goes back to its content, screen 1 keeps playing.
+  await fetch(`${BASE}/api/screen-share/devices/${DEV2}`, { method: 'DELETE', headers: H });
+  await waitFor(async () => (await videoState(p2)) === null, 10000, 'screen 2 back to its content');
+  await assertPlaying(p1, 'screen 1 after screen 2 stopped');
+  await waitFor(() => sharer.evaluate(() => window.__legEnded.length === 1), 5000, 'the sharer told one screen left');
+  assert.deepEqual(await sharer.evaluate(() => window.__legEnded[0]), [DEV2, 'stopped_by_owner']);
+  assert.equal(await sharer.evaluate(() => window.__ended), null, 'the share goes on');
+
+  // Stop: everywhere, and the capture ends.
+  await sharer.evaluate(() => window.__multi.stop());
+  await waitFor(async () => (await videoState(p1)) === null, 10000, 'screen 1 back to its content');
+  assert.equal(await sharer.evaluate(() => window.__ended), 'stopped_by_sharer');
+  assert.equal(await sharer.evaluate(() => window.__multi.stream.getTracks().some((t) => t.readyState === 'live')), false);
+  await sharer.close();
+  await ctx1.close();
+  await ctx2.close();
+});
+
+/*
+ * The native Pi / Windows / macOS player receives a share in its QtWebEngine RTC page
+ * (native/screentinker_native/ui/rtc_page.py). QtWebEngine IS Chromium, so this runs that EXACT
+ * page — generated by the native code — in Chromium, with the server as its base URL as TalkVideo.qml
+ * loads it, and drives it the way app.py does: a Socket.IO device that turns device:screenshare-start
+ * into ST.shareStart(...) and device:screenshare-stop into ST.shareStop(...).
+ */
+const { spawnSync } = require('node:child_process');
+function nativeRtcPage() {
+  const nativeDir = path.join(__dirname, '..', '..', 'native');
+  const r = spawnSync('python3', ['-I', '-c',
+    'import sys; sys.path.insert(0, sys.argv[1]); from screentinker_native.ui.rtc_page import rtc_page; sys.stdout.write(rtc_page("ws://127.0.0.1:9/frames?k=x"))',
+    nativeDir], { encoding: 'utf8' });
+  return r.status === 0 && r.stdout.includes('ST = {') ? r.stdout : null;
+}
+const NATIVE_HTML = SKIP ? null : nativeRtcPage();
+
+test('the native player\'s RTC page receives a share: plays fullscreen with the badge, reports per session, stops clean', { skip: SKIP || (!NATIVE_HTML && 'python3 not available to build the native page'), timeout: 120000 }, async () => {
+  const H = { Authorization: `Bearer ${owner.token}`, 'X-Workspace-Id': owner.ws, 'Content-Type': 'application/json' };
+  const NAT = crypto.randomUUID();
+  const NTOK = 'devtok_' + crypto.randomBytes(16).toString('hex');
+  run("INSERT INTO devices (id, user_id, workspace_id, name, pairing_code, status, device_token) VALUES (?, ?, ?, 'Pi in reception', ?, 'offline', ?)",
+    NAT, owner.id, owner.ws, crypto.randomUUID().slice(0, 6), NTOK);
+
+  // Its own browser: the page is served through request interception (as QtWebEngine's loadHtml
+  // gives it the server as base URL), and Chrome's Local Network Access checks treat an intercepted
+  // response as a public page that may not open a WebSocket to 127.0.0.1. QtWebEngine applies no
+  // such check to loadHtml content, so turning it off is the faithful setting, not a loophole.
+  const nb = await puppeteer.launch({
+    executablePath: CHROME, headless: 'new',
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
+      '--auto-select-desktop-capture-source=Entire screen', '--autoplay-policy=no-user-gesture-required',
+      '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+      '--disable-features=LocalNetworkAccessChecks'],
+  });
+  extraBrowsers.push(nb);
+  const page = await nb.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
+  const logs = [];
+  page.on('console', (m) => { const t = m.text(); if (t.startsWith('[rtc]')) logs.push(t); });
+  await page.setRequestInterception(true);
+  page.on('request', (req) => {
+    if (req.url() === BASE + '/__native_rtc') req.respond({ status: 200, contentType: 'text/html', body: NATIVE_HTML });
+    else req.continue();
+  });
+  await page.goto(BASE + '/__native_rtc', { waitUntil: 'load' });
+  await waitFor(() => page.evaluate(() => !!(window.ST && window.STScreenShare)), 10000, 'the native page loaded the server\'s receiver');
+
+  // The native app's link: app.py's _share_start / _share_stop, in a few lines.
+  const { io } = require('socket.io-client');
+  const link = io(`${BASE}/device`, { transports: ['websocket'], reconnection: false, forceNew: true });
+  link.on('connect', () => link.emit('device:register', {
+    device_id: NAT, device_token: NTOK, capabilities: ['playback.video', 'remote.screen_share'],
+    device_info: { app_version: 'native-e2e' },
+  }));
+  let current = null;
+  link.on('device:screenshare-start', (d) => {
+    current = d.session_id;
+    const opts = { deviceId: NAT, deviceToken: NTOK, serverUrl: BASE, sessionId: d.session_id, sharedBy: d.shared_by, guest: !!d.guest, maxSeconds: d.max_seconds, iceServers: d.ice_servers || [] };
+    page.evaluate((o) => window.ST.shareStart(o), opts).catch(() => {});
+  });
+  link.on('device:screenshare-stop', (d) => {
+    page.evaluate((a) => window.ST.shareStop(a[0], a[1]), [d.session_id, d.reason]).catch(() => {});
+  });
+  await new Promise((res, rej) => { link.once('device:registered', res); link.once('device:auth-error', rej); });
+
+  const start = await fetch(`${BASE}/api/screen-share/devices/${NAT}`, { method: 'POST', headers: H, body: '{}' });
+  const body = await start.json();
+  assert.equal(start.status, 201, JSON.stringify(body));
+  const sharer = await nb.newPage();
+  await sharer.goto(BASE + '/share', { waitUntil: 'domcontentloaded' });
+  await sharer.evaluate(async (b) => {
+    const m = await import('/js/lib/screen-share-client.js');
+    const stream = await m.pickScreen({ audio: false });
+    window.__sender = new m.ScreenShareSender({ ticket: b.ticket, wsPath: b.ws_path, iceServers: b.ice_servers, stream, onState: () => {}, onEnded: () => {} });
+    window.__sender.start();
+  }, body);
+
+  let st;
+  try { st = await assertPlaying(page, 'native RTC page'); } catch (e) { throw new Error(e.message + ' — page log: ' + logs.join(' | ')); }
+  assert.match(st.badge, /Olive Owner/);
+  // The QML layer is shown while the title says rtc:video (TalkVideo.qml).
+  await waitFor(() => page.evaluate(() => document.title === 'rtc:video'), 3000, 'title rtc:video');
+  assert.ok(logs.some((l) => l === `[rtc] share playing ${current} `), 'reports playing with its session id: ' + logs.join(' | '));
+
+  await fetch(`${BASE}/api/screen-share/devices/${NAT}`, { method: 'DELETE', headers: H });
+  await waitFor(async () => (await videoState(page)) === null, 10000, 'the share leaves the native page');
+  await waitFor(() => page.evaluate(() => document.title === 'rtc:idle'), 3000, 'title rtc:idle');
+  link.close();
+  await nb.close();
 });

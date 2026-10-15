@@ -14,23 +14,50 @@ import { api } from '../api.js';
 import { t } from '../i18n.js';
 import { esc } from '../utils.js';
 import { showToast } from './toast.js';
-import { ScreenShareSender, pickScreen, shareUnsupportedReason, stopStream } from '../lib/screen-share-client.js';
+import { ScreenShareSender, MultiShareSender, pickScreen, shareUnsupportedReason, stopStream } from '../lib/screen-share-client.js';
 
-let active = null;   // { deviceId, deviceName, state, sender }
+// { deviceIds, deviceName, state, sender, shareId, live, screens } — screens > 1 for a multi share.
+let active = null;
 const listeners = new Set();
 
 export function onScreenShareChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 function notify() { for (const fn of listeners) { try { fn(activeScreenShare()); } catch (_) { /* a listener's problem */ } } }
 
 export function activeScreenShare() {
-  return active ? { deviceId: active.deviceId, deviceName: active.deviceName, state: active.state } : null;
+  return active ? {
+    deviceId: active.deviceIds[0], deviceIds: active.deviceIds.slice(), deviceName: active.deviceName,
+    state: active.state, screens: active.screens, live: active.live, shareId: active.shareId,
+  } : null;
+}
+
+/*
+ * The kind of player a screen runs, as people know it — for "This screen can't show a screen share
+ * (Roku)". Brand names, so not translated. platformFamily() names (lib/player-capabilities.js).
+ */
+const PLAYER_NAMES = {
+  android: 'Android', tizen: 'Samsung Tizen', brightsign: 'BrightSign', vega: 'Amazon Fire TV (Vega)',
+  linux: 'Raspberry Pi', windows: 'Windows', macos: 'macOS', ios: 'iPad / iPhone', roku: 'Roku',
+  embedded: 'e-ink', web: 'web player',
+};
+// Players that have a receiver in a current release: a screen of that kind that cannot show one is
+// running an older app (update it), not a platform that never will.
+const CAN_UPDATE = new Set(['android', 'linux', 'windows', 'macos', 'ios']);
+
+/** Why a screen cannot show a share, in words, from its platform family. */
+export function screenShareUnsupportedNote(platform) {
+  const player = PLAYER_NAMES[platform] || PLAYER_NAMES.web;
+  if (platform === 'tizen') return t('screen_share.card.unsupported_tizen');
+  if (!platform) return t('screen_share.card.unsupported');
+  if (platform === 'web') return t('screen_share.card.unsupported_browser');
+  if (CAN_UPDATE.has(platform)) return t('screen_share.card.unsupported_update', { player });
+  return t('screen_share.card.unsupported_platform', { player });
 }
 
 const REASONS = new Set([
   'stopped_by_sharer', 'stopped_by_owner', 'max_duration', 'connection_failed', 'screen_unreachable',
   'screen_offline', 'screen_left', 'screen_unsupported', 'signalling_closed', 'signalling_failed',
   'invalid_ticket', 'not_connected', 'disabled_by_admin', 'sharer_left',
-  'disabled', 'workspace_disabled', 'unsupported', 'offline', 'busy', 'invalid_code',
+  'disabled', 'workspace_disabled', 'unsupported', 'offline', 'busy', 'invalid_code', 'none_available',
 ]);
 /** Words for an end reason or a refusal reason from the server. */
 export function screenShareReasonText(reason) {
@@ -47,7 +74,10 @@ export function screenShareUnsupportedText() {
  * Start sharing to `device` ({ id, name }). Call it straight from a click: the screen picker needs
  * the gesture. Resolves true when a share started.
  */
-export async function startScreenShare(device, { audio = false } = {}) {
+export async function startScreenShare(device, { audio = false, also = [] } = {}) {
+  // "Also show on…": the same share on more screens is a multi share.
+  const extra = (also || []).filter((id) => id && id !== device.id);
+  if (extra.length) return startScreenShareTo({ deviceIds: [device.id, ...extra], label: device.name }, { audio });
   if (active) { showToast(t('screen_share.already_sharing', { name: active.deviceName }), 'warning'); return false; }
   const why = screenShareUnsupportedText();
   if (why) { showToast(why, 'error', 8000); return false; }
@@ -65,7 +95,7 @@ export async function startScreenShare(device, { audio = false } = {}) {
     showToast((e && e.body && e.body.reason) ? screenShareReasonText(e.body.reason) : (e.message || t('screen_share.reason.generic')), 'error', 7000);
     return false;
   }
-  const me = { deviceId: device.id, deviceName: device.name || start.screen_name || '', state: 'connecting', sender: null };
+  const me = { deviceIds: [device.id], deviceName: device.name || start.screen_name || '', state: 'connecting', sender: null, shareId: start.session_id, screens: 1, live: 0 };
   active = me;
   me.sender = new ScreenShareSender({
     ticket: start.ticket, wsPath: start.ws_path, iceServers: start.ice_servers, stream,
@@ -82,7 +112,93 @@ export async function startScreenShare(device, { audio = false } = {}) {
   return true;
 }
 
+/**
+ * Multi share: one capture on several screens — { deviceIds } and/or { groupId } (a device group).
+ * label names the share in messages when there is one screen. Call it straight from a click (the
+ * picker needs the gesture: it is asked for FIRST, before any network call). Resolves true when a
+ * share started. Screens that cannot take it (no receiver, offline, busy) are skipped and named.
+ */
+export async function startScreenShareTo({ deviceIds = [], groupId = null, label = '' } = {}, { audio = false } = {}) {
+  if (active) { showToast(t('screen_share.already_sharing', { name: active.deviceName }), 'warning'); return false; }
+  const why = screenShareUnsupportedText();
+  if (why) { showToast(why, 'error', 8000); return false; }
+  let stream;
+  try { stream = await pickScreen({ audio }); }
+  catch (e) {
+    if (!(e && e.name === 'NotAllowedError')) showToast(t('screen_share.pick_failed'), 'error');
+    return false;
+  }
+  let start;
+  try {
+    start = await api.startScreenShareMulti({
+      device_ids: deviceIds, group_id: groupId || undefined,
+      audio: !!audio && stream.getAudioTracks().length > 0,
+    });
+  } catch (e) {
+    stopStream(stream);
+    const b = (e && e.body) || {};
+    let msg;
+    if (b.reason === 'too_many_targets') msg = t('screen_share.reason.too_many_targets', { max: b.max_targets, count: b.screens });
+    else if (b.reason === 'none_available' && Array.isArray(b.skipped) && b.skipped.length) msg = t('screen_share.reason.none_available');
+    else msg = b.reason ? screenShareReasonText(b.reason) : (e.message || t('screen_share.reason.generic'));
+    showToast(msg, 'error', 9000);
+    return false;
+  }
+  const legs = Array.isArray(start.legs) ? start.legs : [];
+  if (Array.isArray(start.skipped) && start.skipped.length) {
+    showToast(t('screen_share.multi.skipped', { names: start.skipped.map((s) => s.name).filter(Boolean).join(', ') }), 'warning', 9000);
+  }
+  const name = legs.length === 1 ? (legs[0].screen_name || label) : label;
+  const me = { deviceIds: legs.map((l) => l.device_id), deviceName: name, state: 'connecting', sender: null, shareId: start.share_id, screens: legs.length, live: 0 };
+  active = me;
+  me.sender = new MultiShareSender({
+    legs, wsPath: start.ws_path, stream,
+    onState: (sum) => {
+      if (active !== me) return;
+      me.state = sum.state; me.live = sum.live; me.screens = sum.active;
+      paintBar(); notify();
+    },
+    onLegEnded: (leg, reason) => {
+      if (active !== me) return;
+      me.deviceIds = me.deviceIds.filter((id) => id !== leg.deviceId);
+      showToast(t('screen_share.multi.dropped', { name: leg.name || '' }) + ' ' + screenShareReasonText(reason), 'warning', 7000);
+    },
+    onEnded: (reason) => {
+      if (active === me) { active = null; removeBar(); notify(); }
+      if (reason === 'stopped_by_sharer') showToast(t('screen_share.stopped'), 'success');
+      else showToast(screenShareReasonText(reason), BENIGN.has(reason) ? 'info' : 'error', 7000);
+    },
+  });
+  paintBar();
+  me.sender.start();
+  notify();
+  return true;
+}
+
 export function stopScreenShare() { if (active && active.sender) active.sender.stop(); }
+
+/*
+ * Multi share: wire every "Share my screen to this group" button under `root` ([data-group-share]).
+ * Revealed only when the server has the feature on and the group has a member that can show a share
+ * (data-share-capable). The server decides the real member list; screens that cannot take it are
+ * named in a toast after the picker.
+ */
+export async function wireGroupShareButtons(root = document) {
+  const btns = [...root.querySelectorAll('[data-group-share]')];
+  if (!btns.length) return;
+  let on = false;
+  try { const st = await api.getServerStatus(); on = !!(st && st.features && st.features.screen_share); } catch (_) { on = false; }
+  if (!on) return;
+  for (const b of btns) {
+    if (!document.contains(b) || b.dataset.shareWired) continue;
+    b.dataset.shareWired = '1';
+    if (Number(b.dataset.shareCapable || 0) > 0) b.style.display = '';
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startScreenShareTo({ groupId: b.dataset.groupShare, label: b.dataset.groupName || '' });
+    });
+  }
+}
 
 // ------------------------------------------------------------------ the live bar
 function stateText(st) {
@@ -102,11 +218,14 @@ function paintBar() {
     document.body.appendChild(bar);
   }
   const live = active.state === 'live';
+  const many = active.screens > 1;
+  const title = many ? t('screen_share.bar.sharing_to_n', { count: active.screens }) : t('screen_share.bar.sharing_to', { name: active.deviceName });
+  const detail = many && live ? t('screen_share.state.live_n', { live: active.live, total: active.screens }) : stateText(active.state);
   bar.innerHTML = `
     <span aria-hidden="true" style="width:10px;height:10px;border-radius:50%;flex:0 0 auto;background:${live ? 'var(--danger, #ef4444)' : 'var(--warning, #f59e0b)'}"></span>
     <span style="display:grid;line-height:1.3;min-width:0">
-      <strong style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t('screen_share.bar.sharing_to', { name: active.deviceName }))}</strong>
-      <small style="color:var(--text-muted);font-size:12px">${esc(stateText(active.state))}</small>
+      <strong style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(title)}</strong>
+      <small style="color:var(--text-muted);font-size:12px">${esc(detail)}</small>
     </span>
     <button type="button" class="btn btn-danger btn-sm" data-share-stop>${esc(t('screen_share.stop'))}</button>`;
   bar.querySelector('[data-share-stop]').addEventListener('click', () => stopScreenShare());
@@ -130,7 +249,34 @@ export function renderScreenShareCard(host, device, opts = {}) {
   let status = null;
   let timer = null;
   let disposed = false;
+  // Multi share, "Also show on…": the other screens that can take a share, picked across repaints.
+  let others = null;            // [{ id, name, online }] once loaded
+  const also = new Set();
+  let alsoOpen = false;
   const offChange = onScreenShareChange(() => load());
+
+  async function loadOthers() {
+    if (others) return;
+    try {
+      const all = await api.getDevices();
+      others = (Array.isArray(all) ? all : []).filter((d) => d.id !== device.id
+        && Array.isArray(d.capabilities) && d.capabilities.includes('remote.screen_share'))
+        .map((d) => ({ id: d.id, name: d.name || '', online: d.status === 'online' }));
+    } catch (_) { others = []; }
+    if (!disposed) paint();
+  }
+
+  function alsoHtml() {
+    if (!others) return `<p style="font-size:13px;color:var(--text-muted);margin:8px 0 0">…</p>`;
+    if (!others.length) return `<p style="font-size:13px;color:var(--text-muted);margin:8px 0 0">${esc(t('screen_share.card.also_none'))}</p>`;
+    const more = Math.max(0, (status.max_targets || 6) - 1);
+    return `<p style="font-size:12px;color:var(--text-muted);margin:8px 0 6px">${esc(t('screen_share.card.also_hint', { more }))}</p>
+      <div style="display:grid;gap:4px;max-height:180px;overflow:auto">${others.map((o) => `
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;${o.online ? '' : 'opacity:.55'}">
+          <input type="checkbox" data-share-also="${esc(o.id)}" ${also.has(o.id) ? 'checked' : ''} ${o.online ? '' : 'disabled'}>
+          ${esc(o.name)}${o.online ? '' : ` <small>(${esc(t('screen_share.reason.offline'))})</small>`}
+        </label>`).join('')}</div>`;
+  }
 
   async function load() {
     if (disposed) return;
@@ -141,12 +287,12 @@ export function renderScreenShareCard(host, device, opts = {}) {
 
   function paint() {
     if (!status || !status.feature) { host.innerHTML = ''; opts.onAvailable && opts.onAvailable(false); return; }
-    const mine = active && active.deviceId === device.id;
+    const mine = !!(active && active.deviceIds.includes(device.id));
     const s = status.session;
     const canStart = status.can_share && status.supported && status.workspace_enabled && !s && !mine;
     opts.onAvailable && opts.onAvailable(!!(status.can_share && status.supported && status.workspace_enabled));
     let note = '';
-    if (!status.supported) note = t('screen_share.card.unsupported');
+    if (!status.supported) note = screenShareUnsupportedNote(status.platform);
     else if (!status.workspace_enabled) note = t('screen_share.card.workspace_off');
     else if (status.reason === 'offline') note = t('screen_share.card.offline');
     else if (!status.can_share) note = t('screen_share.card.view_only');
@@ -157,15 +303,23 @@ export function renderScreenShareCard(host, device, opts = {}) {
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 12px">${esc(t('screen_share.card.explain', { minutes: Math.round((status.max_seconds || 3600) / 60) }))}</p>
         ${s ? `
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
-            <span>&#9679; ${esc(t(s.guest ? 'screen_share.card.now_guest' : 'screen_share.card.now', { name: s.shared_by, time: since }))}</span>
-            ${status.can_share && !mine ? `<button type="button" class="btn btn-danger btn-sm" data-share-kick>${esc(t('screen_share.card.kick'))}</button>` : ''}
+            <span>&#9679; ${esc(s.screens > 1
+              ? t('screen_share.card.now_multi', { name: s.shared_by, count: s.screens, time: since })
+              : t(s.guest ? 'screen_share.card.now_guest' : 'screen_share.card.now', { name: s.shared_by, time: since }))}</span>
+            ${status.can_share && !mine ? `<button type="button" class="btn btn-danger btn-sm" data-share-kick>${esc(t(s.screens > 1 ? 'screen_share.card.kick_one' : 'screen_share.card.kick'))}</button>` : ''}
+            ${status.can_share && !mine && s.screens > 1 ? `<button type="button" class="btn btn-danger btn-sm" data-share-kick-all>${esc(t('screen_share.card.stop_all', { count: s.screens }))}</button>` : ''}
             ${mine ? `<button type="button" class="btn btn-danger btn-sm" data-share-mine-stop>${esc(t('screen_share.stop'))}</button>` : ''}
           </div>` : ''}
         ${canStart ? `
           <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
             <button type="button" class="btn btn-primary btn-sm" data-share-start ${status.reason === 'offline' ? 'disabled' : ''}>&#128421;&#65039; ${esc(t('screen_share.start'))}</button>
             <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" data-share-audio> ${esc(t('screen_share.include_audio'))}</label>
-          </div>` : ''}
+          </div>
+          ${(status.max_targets || 1) > 1 ? `
+          <details data-share-also-box style="margin-top:10px" ${alsoOpen ? 'open' : ''}>
+            <summary style="cursor:pointer;font-size:13px">${esc(t('screen_share.card.also'))}${also.size ? ` (${also.size})` : ''}</summary>
+            ${alsoOpen ? alsoHtml() : ''}
+          </details>` : ''}` : ''}
         ${note ? `<p style="font-size:13px;margin:10px 0 0;color:var(--text-muted)">${esc(note)}</p>` : ''}
         ${status.can_admin && status.supported ? `
           <label style="display:flex;align-items:flex-start;gap:10px;margin-top:14px;cursor:pointer">
@@ -177,7 +331,25 @@ export function renderScreenShareCard(host, device, opts = {}) {
     host.querySelector('[data-share-start]')?.addEventListener('click', async (e) => {
       const audio = !!host.querySelector('[data-share-audio]')?.checked;
       e.currentTarget.disabled = true;
-      await startScreenShare(device, { audio });
+      await startScreenShare(device, { audio, also: [...also] });
+      load();
+    });
+    host.querySelector('[data-share-also-box]')?.addEventListener('toggle', (e) => {
+      if (e.currentTarget.open === alsoOpen) return;
+      alsoOpen = e.currentTarget.open;
+      if (alsoOpen && !others) loadOthers(); else paint();
+    });
+    host.querySelectorAll('[data-share-also]').forEach((cb) => cb.addEventListener('change', () => {
+      const max = Math.max(0, (status.max_targets || 6) - 1);
+      if (cb.checked && also.size >= max) { cb.checked = false; showToast(t('screen_share.reason.too_many_targets', { max: status.max_targets, count: also.size + 2 }), 'warning'); return; }
+      if (cb.checked) also.add(cb.dataset.shareAlso); else also.delete(cb.dataset.shareAlso);
+      const sum = host.querySelector('[data-share-also-box] summary');
+      if (sum) sum.textContent = t('screen_share.card.also') + (also.size ? ` (${also.size})` : '');
+    }));
+    host.querySelector('[data-share-kick-all]')?.addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      try { await api.stopScreenShareAll(status.session.share_id); showToast(t('screen_share.card.kicked'), 'success'); }
+      catch (err) { showToast(err.message, 'error'); }
       load();
     });
     host.querySelector('[data-share-mine-stop]')?.addEventListener('click', () => stopScreenShare());

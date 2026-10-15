@@ -18,6 +18,7 @@ import { selectedRemoteOrg } from '../components/workspace-switcher.js';
 import * as cui from '../components/corporate-ui.js';
 import { openDeviceMoveDialog } from '../components/device-move-dialog.js';
 import * as screenVerify from '../components/screen-verify.js';
+import { wireGroupShareButtons } from '../components/screen-share.js';   // 3.0 multi share
 
 const DESTRUCTIVE_COMMANDS = ['reboot', 'shutdown'];
 // Command types only — labels resolved through t('dashboard.cmd.<type>')
@@ -441,6 +442,10 @@ function renderGroupSection(group, devices, playlists) {
                   style="padding:4px 8px;font-size:12px;white-space:nowrap" title="${esc(t('power.section_title'))}">
             ${t('power.group_button')}
           </button>
+          <!-- 3.0 multi share: revealed by wireGroupShareButtons when the feature is on and a member can show one. -->
+          <button type="button" class="btn btn-secondary btn-sm" data-group-share="${esc(group.id)}" data-group-name="${esc(group.name)}"
+                  data-share-capable="${devices.filter((d) => Array.isArray(d.capabilities) && d.capabilities.includes('remote.screen_share')).length}"
+                  style="display:none;padding:4px 8px;font-size:12px;white-space:nowrap">&#128421;&#65039; ${esc(t('screen_share.group.button'))}</button>
           <label class="group-sync-label" style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-secondary);cursor:pointer;white-space:nowrap" title="${esc(t('dashboard.group_sync.hint'))}">
             <input type="checkbox" class="group-sync-cb" data-group-id="${group.id}" ${group.sync_enabled ? 'checked' : ''}> ${t('dashboard.group_sync.label')}
           </label>
@@ -1388,6 +1393,7 @@ function attachGroupHandlers(groupsWithDevices) {
       });
     });
   });
+  wireGroupShareButtons(document);   // 3.0 multi share: "Share my screen to this group"
   document.querySelectorAll('.group-power-btn').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();

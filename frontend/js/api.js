@@ -953,6 +953,10 @@ export const api = {
   startScreenShare: (deviceId, data) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'POST', body: JSON.stringify(data || {}) }),
   stopScreenShare: (deviceId) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
   setScreenShareGuest: (deviceId, enabled) => request(`/screen-share/devices/${encodeURIComponent(deviceId)}/guest`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
+  // 3.0 multi share: one share on several screens (device_ids and/or group_id); stop it everywhere.
+  startScreenShareMulti: (data) => request('/screen-share/shares', { method: 'POST', body: JSON.stringify(data || {}) }),
+  stopScreenShareAll: (shareId) => request(`/screen-share/shares/${encodeURIComponent(shareId)}`, { method: 'DELETE' }),
+  getScreenShareGroup: (groupId) => request(`/screen-share/groups/${encodeURIComponent(groupId)}`),
   getScreenShareWorkspace: (wsId) => request(`/screen-share/workspace/${encodeURIComponent(wsId)}`),
   setScreenShareWorkspace: (wsId, enabled) => request(`/screen-share/workspace/${encodeURIComponent(wsId)}`, { method: 'PUT', body: JSON.stringify({ enabled: !!enabled }) }),
   aiGetSettings: () => request('/ai/settings'),
