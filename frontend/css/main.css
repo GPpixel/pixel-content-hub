@@ -3392,3 +3392,22 @@ a.stock-credit:hover { text-decoration: underline; color: var(--text-secondary);
   background: color-mix(in srgb, var(--warning) 10%, transparent); font-size: 16px; }
 .sign-a11y[hidden] { display: none; }
 .sign-a11y p { margin: 0; display: flex; align-items: center; }
+
+/* 3.0 news feeds: the feed picker (components/news-feed-picker.js), in the widget editor and Simple view. */
+.news-picker-row { display: flex; gap: 8px; align-items: center; }
+.news-picker-row .input { flex: 1; min-width: 0; }
+.news-picker-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.news-picker-status { margin: 8px 0 0; font-size: 13px; color: var(--text-muted); min-height: 1em; }
+.news-picker-status[data-kind="error"], .news-picker-error { color: var(--danger, #b91c1c); }
+.news-picker-found { margin: 8px 0 6px; font-size: 13px; font-weight: 600; }
+.news-picker-list { max-height: 260px; overflow-y: auto; margin-bottom: 8px; }
+.news-picker-list small { display: block; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.news-picker-nofeed { margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.news-picker-nofeed p { margin: 0 0 6px; }
+.news-picker-preview { margin-top: 8px; }
+.news-picker-preview-head { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.news-picker-items { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.news-picker-items li { display: flex; gap: 8px; align-items: center; font-size: 13px; line-height: 1.3; }
+.news-picker-items img, .news-picker-noimg { width: 48px; height: 32px; flex: none; border-radius: 4px; object-fit: cover; background: var(--bg-input); display: flex; align-items: center; justify-content: center; }
+.news-picker--simple .news-picker-row .input { font-size: 16px; padding: 10px 12px; }
+@media (max-width: 520px) { .news-picker-row { flex-direction: column; align-items: stretch; } }

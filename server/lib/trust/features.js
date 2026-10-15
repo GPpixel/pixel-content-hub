@@ -26,6 +26,7 @@ const FEATURES = {
   weather:          { category: 'data' },
   cap_feeds:        { category: 'data' },
   social:           { category: 'data' },
+  news_feeds:       { category: 'data' },
   rooms:            { category: 'data' },
   plugins:          { category: 'data' },
   canva:            { category: 'integrations' },
@@ -67,6 +68,7 @@ const FILES = {
   'lib/data-sources/weather-resolver.js': 'weather', 'lib/local-conditions.js': 'weather',
   'routes/data-sources.js': 'data_sources',
   'routes/cap-feeds.js': 'cap_feeds', 'routes/social.js': 'social', 'routes/rooms.js': 'rooms',
+  'routes/news-feeds.js': 'news_feeds',
   'lib/canva.js': 'canva', 'routes/canva.js': 'canva', 'lib/user-deletion.js': 'canva',
   'lib/m365.js': 'm365', 'lib/cloud-folders.js': 'm365', 'routes/m365.js': 'm365', 'lib/cloud-docs.js': 'm365',
   'routes/bi-connections.js': 'bi',
@@ -84,7 +86,7 @@ const FILES = {
   plugins: 'plugins',
 };
 const PREFIXES = [
-  ['lib/data-sources/', 'data_sources'], ['lib/plugins/', 'plugins'], ['lib/social/', 'social'],
+  ['lib/data-sources/', 'data_sources'], ['lib/plugins/', 'plugins'], ['lib/social/', 'social'], ['lib/news-feed/', 'news_feeds'],
   ['lib/rooms/', 'rooms'], ['lib/cap/', 'cap_feeds'], ['lib/bi/', 'bi'], ['lib/alerts/', 'alert_channels'],
   ['lib/screen-verify/', 'alert_channels'], ['lib/automation/', 'automation'], ['lib/templates/', 'template_catalog'],
   ['lib/mesh/', 'mesh'], ['lib/site-cache/', 'site_cache'], ['lib/migrate/', 'migrate'], ['lib/storage/', 'storage'], ['lib/mcp/', 'mcp'],

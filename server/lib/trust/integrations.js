@@ -225,6 +225,21 @@ const INTEGRATIONS = [
     },
   },
   {
+    // 3.0 news feeds (lib/news-feed): this server reads each feed a news widget names, so screens
+    // never contact the publisher. The hosts are the feeds' own, from the widgets' configuration.
+    id: 'news_feeds', level: 'org', customerData: false,
+    status(ctx) {
+      const sc = wsScope(ctx);
+      // json_valid first: one malformed config row must not make json_extract fail the whole count.
+      const where = "widget_type = 'rss' AND json_valid(config) AND COALESCE(json_extract(config, '$.feed_url'), '') <> ''";
+      const n = count(ctx, 'widgets', where, sc);
+      return {
+        enabled: n > 0, count: n,
+        hosts: n ? hostsFrom(ctx, `SELECT json_extract(config, '$.feed_url') AS u FROM widgets WHERE ${where}`, sc) : [],
+      };
+    },
+  },
+  {
     id: 'social', level: 'org', customerData: false,
     status(ctx) {
       const feeds = count(ctx, 'social_feeds', 'enabled = 1', wsScope(ctx));

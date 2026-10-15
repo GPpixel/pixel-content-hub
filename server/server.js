@@ -2111,6 +2111,18 @@ app.post('/api/migrate/jobs/upload', rateLimit(3600000, 30));
 app.post('/api/plugin-submissions', rateLimit(3600000, 10)); // 10 plugin zips per hour per IP
 app.post('/api/admin/plugins/submissions', rateLimit(3600000, 20));
 app.get('/api/kiosk/:id/render', (req, res, next) => { req._skipAuth = true; next(); });
+/*
+ * 3.0 news feeds (lib/news-feed, routes/news-feeds.js): the items and pictures a widget page reads.
+ * Public — a widget page is a null-origin frame with no session — and answered from this server's
+ * shared cache. Each address carries this server's signature over the feed it names, so these serve
+ * what some widget was rendered with and nothing else. Limited per address like the social wall's
+ * reads: a site behind one NAT address can have hundreds of screens.
+ */
+app.get('/api/news-feeds/items', rateLimit(60000, 600), (req, res) => require('./routes/news-feeds').itemsHandler(req, res));
+app.get('/api/news-feeds/image', rateLimit(60000, 3000), (req, res) => require('./routes/news-feeds').imageHandler(req, res));
+// The editor's "Find feeds" reads a site and up to a handful of its paths: generous for a person.
+app.use('/api/news-feeds/discover', rateLimit(60000, 20));
+app.use('/api/news-feeds/preview', rateLimit(60000, 60));
 
 /*
  * Templates: the two public reads (a preview token and a thumbnail by package hash) are served by
