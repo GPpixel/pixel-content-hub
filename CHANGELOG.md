@@ -204,6 +204,28 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
 - **Platform overview: this server.** Disk, CPU and memory of the machine running ScreenTinker, with a
   warning under "Needs your attention" when the disk or memory runs low.
 
+- **Move your organization to another server.** Import an organization export into another ScreenTinker
+  server from Settings → Data & privacy: pull it straight from the old server (resumable, checked against
+  its digest), upload the zip, or (platform admins) pick it from the server's `imports` folder. Works when
+  the old server is gone (recovery), restores into a new or empty organization with every id remapped,
+  never overwrites, and rolls back on failure. Members become invites, integrations arrive switched off
+  with a reconnect checklist, and a handover file lets the old server send its screens across. Platform
+  admins can export and restore the whole server. See docs/move-server.md.
+- **Screen share on more players, and on several at once.** The Android app, the Raspberry Pi / Windows /
+  macOS app, the iPad app and Samsung Tizen 10+ can now show a share; the remote viewer shows the share
+  while it is up. Multi share shows one capture on several screens or a group (up to
+  `SCREEN_SHARE_MAX_TARGETS`, default 6). Screens that cannot show a share say so by name.
+- **Display links everywhere, and mirrors.** Any display can get a web player link from its page. Opening
+  a display's link in a second place while it is on creates a *mirror*: it plays the same content and has
+  its own status, remote view and proof-of-play (mirrors count as screens on your plan). Different display
+  links in one browser keep separate identities and caches.
+- **Layouts on playlists, portrait versions, and campaigns.** A playlist can carry its own layout, so a
+  group of screens shows the same zones without per-screen setup (head office > schedule > playlist >
+  screen). Layouts can have portrait and 4:3 versions, picked per screen automatically. Campaigns put whole
+  layouts in a playlist (layout A → a full-screen video → layout B); the web player and Android app switch
+  smoothly, other players play a simplified version and the editor names them. See
+  docs/layouts-and-campaigns.md.
+
 ### Changed
 
 - "Screen" is the user-facing noun (Screens, Add screen, Connect screen).
@@ -233,6 +255,11 @@ security notes: `docs/v3-review.md`. Upgrade steps: `docs/upgrading-to-3.0.md`.
   photo) until you let go; it now moves the one you selected.
 - **Settings: the two-factor, passkey and sign-in cards no longer throw** when you leave the page while
   they load.
+
+- **Screen share: the remote viewer showed the paused playlist (or the status card) during a share**; it
+  now shows the share.
+- **Display links: the same link open in two browsers took turns** (one showed "Waiting for content" and
+  the remote view flipped); the second opening is now a mirror.
 
 ### Security
 
