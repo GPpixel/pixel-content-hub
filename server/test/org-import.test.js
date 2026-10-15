@@ -468,6 +468,7 @@ test('a restore that fails is rolled back: the organization and everything in it
   restoreLib.Restorer.prototype.restoreMembers = async function () { throw new Error('boom'); };
   const orgsBefore = db.prepare('SELECT COUNT(*) AS n FROM organizations').get().n;
   const contentBefore = db.prepare('SELECT COUNT(*) AS n FROM content').get().n;
+  const logBefore = db.prepare("SELECT COUNT(*) AS n FROM activity_log WHERE action = 'alpha_did_a_thing'").get().n;
   try {
     await call('POST', `/api/org-import/jobs/${jobId}/restore`, 'imp', { target: { mode: 'new' } });
     const j = await waitJob(jobId, ['failed', 'partial', 'done']);
@@ -476,6 +477,7 @@ test('a restore that fails is rolled back: the organization and everything in it
   } finally { restoreLib.Restorer.prototype.restoreMembers = orig; }
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM organizations').get().n, orgsBefore);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM content').get().n, contentBefore);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM activity_log WHERE action = 'alpha_did_a_thing'").get().n, logBefore, 'the imported history goes too, not just detached');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM org_import_ids WHERE job_id = ?').get(jobId).n, 0);
 });
 
@@ -621,6 +623,42 @@ test('pairing a code into an imported screen keeps its name, groups, playlist an
 test('imports are audited', () => {
   const acts = new Set(db.prepare("SELECT action FROM activity_log WHERE action LIKE 'trust.%'").all().map((r) => r.action));
   for (const a of ['trust.import_started', 'trust.import_restore_started', 'trust.import_done', 'trust.screens_handed_over', 'trust.import_screen_paired']) assert.ok(acts.has(a), a);
+});
+
+test('into an existing EMPTY organization by its admin: its own workspace is kept, ownership is never handed out, rollback removes only what the import made', async () => {
+  cancelActive();
+  org('org-e', 'Echo Empty', U.ownerB);
+  db.prepare("INSERT INTO workspaces (id,organization_id,name) VALUES ('ws-e','org-e','Echo Home')").run();
+  om.run('org-e', U.imp, 'org_admin');
+  // A hand-edited pending invite that tries to make someone an owner.
+  const edited = await rezip(exportFile, (es) => {
+    const m = manifestOf(es);
+    const e = { name: 'tables/workspace_invites.jsonl', data: Buffer.from(JSON.stringify({ id: crypto.randomUUID(), workspace_id: 'ws-a1', email: 'mallory@evil.test', role: 'workspace_admin', org_role: 'org_owner', invited_by: U.ownerA, expires_at: Math.floor(Date.now() / 1000) + 86400 }) + '\n') };
+    const at = es.findIndex((x) => x.name === e.name);
+    if (at >= 0) es.splice(at, 1);
+    es.push(e);
+    m.integrity.entries[e.name] = { sha256: sha(e.data), bytes: e.data.length };
+    setManifest(es, m);
+  });
+  const jobId = await uploadJob('imp', edited);
+  await waitJob(jobId, ['scanned']);
+  const r = await call('POST', `/api/org-import/jobs/${jobId}/restore`, 'imp', { target: { mode: 'existing', organization_id: 'org-e' } });
+  assert.equal(r.status, 202, r.text);
+  const j = await waitJob(jobId, ['done', 'failed']);
+  assert.equal(j.status, 'done', j.error);
+  assert.equal(j.organization_id, 'org-e');
+  assert.ok(db.prepare("SELECT 1 FROM workspaces WHERE id = 'ws-e' AND organization_id = 'org-e'").get(), 'the existing workspace is untouched');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM workspaces WHERE organization_id = 'org-e'").get().n, 3);
+  const owners = db.prepare("SELECT * FROM workspace_invites WHERE import_job_id = ? AND email = 'ownera@import.local'").all(jobId);
+  assert.ok(owners.length && owners.every((i) => i.org_role !== 'org_owner'), 'an org admin cannot hand out ownership through an archive');
+  const mallory = db.prepare("SELECT * FROM workspace_invites WHERE email = 'mallory@evil.test' AND import_job_id = ?").get(jobId);
+  assert.ok(mallory, 'the pending invite came across');
+  assert.equal(mallory.org_role, null, '…as a workspace invite only');
+  // Roll it back by hand (as a failure would): only what the import created goes.
+  require('../lib/trust/import-restore').rollback(db, imp.getJob(db, jobId));
+  assert.deepEqual(db.prepare("SELECT id FROM workspaces WHERE organization_id = 'org-e'").all().map((w) => w.id), ['ws-e']);
+  assert.ok(db.prepare("SELECT 1 FROM organizations WHERE id = 'org-e'").get(), 'the organization itself stays');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM org_sso_providers WHERE organization_id = 'org-e'").get().n, 0, 'organization-level rows the import wrote are gone');
 });
 
 test('rate limits: one import at a time per organization, and at most ten a day', async () => {

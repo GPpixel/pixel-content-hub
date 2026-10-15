@@ -23,7 +23,6 @@ import { copy, sendChunk } from '../components/org-move.js';
 
 let timer = null;
 let uploading = null;      // { jobId, file } while this tab is sending chunks
-const RESUME_KEY = 'st_org_import_upload';
 
 function tk(key, fallback) { const v = t(key); return v === key ? fallback : v; }
 const params = () => new URLSearchParams((window.location.hash.split('?')[1]) || '');
@@ -142,9 +141,7 @@ function uploadForm(el, instance, resumeJob = null) {
       let job = resumeJob;
       if (job && (file.size !== job.declared_bytes)) { showToast(t('imp.upload.not_same'), 'error'); return; }
       if (!job) job = await api.post('/org-import/jobs', { source: 'upload', kind: instance ? 'instance' : 'org', bytes: file.size, file_name: file.name });
-      try { localStorage.setItem(RESUME_KEY, JSON.stringify({ id: job.id, name: file.name, size: file.size })); } catch { /* private window */ }
       await sendFile(job.id, file, el.querySelector('#impUpProgress'), job.offset || 0);
-      try { localStorage.removeItem(RESUME_KEY); } catch { /* */ }
       goJob(job.id, instance);
     } catch (err) { showToast(err.message, 'error'); }
   });

@@ -702,9 +702,10 @@ class Restorer {
       this.map(`int:${t}`).set(String(raw.id), String(r.rowid));
       this.persist(`int:${t}`, [[raw.id, r.rowid]]);
     }
-    // Rows outside the workspaces it created, so a rollback in an existing organization finds them.
+    // Rows a workspace cascade would not delete (organization-level ones, and the activity log, which a
+    // cascade only detaches), so a rollback finds them.
     const sc = exportTables.EXPORTED[t].scope;
-    if (sc.org || (sc.audit && !r.row.workspace_id)) this.persist(`created:${t}`, [[`${r.rowid}`, `${r.rowid}`]]);
+    if (sc.org || sc.audit) this.persist(`created:${t}`, [[`${r.rowid}`, `${r.rowid}`]]);
   }
 
   /* ---------- files ---------- */
@@ -840,7 +841,10 @@ class Restorer {
         const u = byUser.get(uid);
         const email = u && String(u.email || '').trim().toLowerCase();
         if (!email || email === me || (u && u.disabled_at)) { skipped += 1; continue; }
-        const role = ['org_owner', 'org_admin', 'org_member'].includes(orgRole.get(uid)) ? orgRole.get(uid) : null;
+        let role = ['org_owner', 'org_admin', 'org_member'].includes(orgRole.get(uid)) ? orgRole.get(uid) : null;
+        // Never more than the importer may give: an org admin importing into an organization they do
+        // not own cannot hand out ownership of it through an archive.
+        if (role === 'org_owner' && !this.canGrantOwner) role = 'org_admin';
         const memberships = (wsOf.get(uid) || []).map((m) => ({ ws: this.ref('workspaces', m.workspace_id), role: m.role })).filter((m) => m.ws);
         const already = (ws) => this.db.prepare('SELECT 1 FROM workspace_invites WHERE workspace_id = ? AND lower(email) = ?').get(ws, email);
         if (!memberships.length) {
@@ -1009,7 +1013,14 @@ const HOOKS = {
     }
     return row;
   },
-  workspace_invites(r, row) { return row.expires_at && row.expires_at > now() ? row : null; },
+  workspace_invites(r, row) {
+    // A pending invite from the old server grants its workspace role only — never an organization
+    // role, whatever a hand-edited archive says.
+    if (!(row.expires_at && row.expires_at > now())) return null;
+    row.org_role = null; row.org_only = 0; row.import_job_id = r.job.id;
+    if (!['workspace_admin', 'workspace_editor', 'workspace_viewer'].includes(row.role)) row.role = 'workspace_viewer';
+    return row;
+  },
   activity_log(r, row, raw) {
     // Read-only history. In an organization import its people are not accounts here, so who did it
     // is kept as text inside the entry rather than pointing at the importer.

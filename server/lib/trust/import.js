@@ -112,6 +112,17 @@ function parseSourceLink(raw) {
 
 class LimitError extends ImportError {}
 
+/*
+ * An archive is mostly media, which the plan's storage allowance covers — checked properly at the
+ * scan, against the media the manifest lists. Before that, while bytes are still arriving, the
+ * archive as a whole may not exceed the allowance by more than this much (the tables and history),
+ * so a plan with little storage cannot be used to fill the server's disk with an enormous upload.
+ */
+const PLAN_SLACK_BYTES = 2 * 1024 * 1024 * 1024;
+function overPlan(room, bytes) {
+  return room.plan_room_bytes != null && bytes > Math.max(0, room.plan_room_bytes) + PLAN_SLACK_BYTES;
+}
+
 /**
  * Start a job. `who`: { userId, orgId (the requester's current organization), platformAdmin }.
  * `kind` 'org' (default) or 'instance' (platform administrators only).
@@ -150,6 +161,7 @@ async function create(db, who, { source, kind = 'org', url = null, file_name = n
     // Before a byte is accepted: will it fit?
     const room = restoreLib.roomFor(db, who.userId, n, 0);
     if (room.reasons.includes('disk')) throw new ImportError('There is not enough free disk space on this server for that file.', 'no_room', 413);
+    if (overPlan(room, n)) throw new ImportError('That file is larger than your plan\'s storage allows.', 'no_room', 413);
     row.declared_bytes = n;
     row.file_name = String(file_name || 'export.zip').replace(/[^\w .()-]/g, '_').slice(0, 120);
   } else {
@@ -231,6 +243,7 @@ async function fetchArchive(db, job) {
     if (total > MAX_ARCHIVE_BYTES) { res.destroy(); throw new ImportError('The archive is larger than this server accepts.', 'too_large'); }
     const room = restoreLib.roomFor(db, job.requested_by, total - have, 0);
     if (room.reasons.includes('disk')) { res.destroy(); throw new ImportError('There is not enough free disk space on this server for this archive.', 'no_room'); }
+    if (overPlan(room, total - have)) { res.destroy(); throw new ImportError('The archive is larger than your plan\'s storage allows.', 'no_room'); }
   }
   update(db, job.id, { declared_bytes: total, source_sha256: /^[0-9a-f]{64}$/.test(sha) ? sha : job.source_sha256 || null });
   await new Promise((resolve, reject) => {
@@ -359,6 +372,8 @@ async function restoreJob(db, job) {
     db, job, arch, importer, instance: !!job.parent_id, options: JSON.parse(job.options || '{}'),
     orgId: job.organization_id, srcOrgId: arch.manifest.organization.id, createdOrg: !!job.created_org, orgRow, present,
     counts: scan.counts || {},
+    canGrantOwner: !!job.created_org || isPlatformUser(db, job.requested_by)
+      || !!db.prepare("SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ? AND role = 'org_owner'").get(job.organization_id, job.requested_by),
   });
   const result = await r.run();
   if (job.parent_id && job.created_org && orgRow && orgRow.owner_user_id) {
@@ -368,6 +383,11 @@ async function restoreJob(db, job) {
   }
   update(db, job.id, { status: 'done', result, finished_at: now(), progress: { phase: 'done', stats: r.stats } });
   try { require('../audit').audit('trust.import_done', { userId: job.requested_by, details: { import_id: job.id, organization_id: job.organization_id, screens: result.screens, invites: result.invites || 0 } }); } catch (_) { /* */ }
+}
+
+function isPlatformUser(db, userId) {
+  const u = db.prepare('SELECT role FROM users WHERE id = ?').get(userId);
+  return !!u && require('../../middleware/auth').isPlatformRole(u.role);
 }
 
 /* ───────────── worker ───────────── */
