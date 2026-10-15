@@ -10,6 +10,7 @@ import { openSmartRulesModal, rulesSummary, loadFolders, DEFAULT_RULES } from '.
 import * as cui from '../components/corporate-ui.js';
 import { openSlotDialog } from '../components/corporate-slot-dialog.js';
 import { confirmAccessibility } from '../components/accessibility.js';
+import { layoutPickerHtml, mountLayoutPicker, zoneSelectHtml, bindZoneSelects } from '../components/playlist-layout.js';
 
 function formatDate(ts) {
   if (!ts) return '--';
@@ -107,6 +108,8 @@ try {
 // Last fetched page, so flipping the toggle filters client-side instead of re-fetching
 // GET /playlists for data already in hand.
 let cachedPlaylists = null;
+// 3.0: the layout the open playlist is drawn in (explicit or derived), for the per-item zone picker.
+let currentLayout = null;
 
 async function renderList(container) {
   container.innerHTML = `
@@ -441,7 +444,11 @@ function layoutMockup(playlist) {
   }
 
   const counts = {};
-  for (const it of items) if (it.zone_id) counts[it.zone_id] = (counts[it.zone_id] || 0) + 1;
+  // 3.0: on a playlist that chose its layout, an item without a zone plays in the main zone.
+  for (const it of items) {
+    const zid = it.zone_id || (layout.explicit ? layout.main_zone_id : null);
+    if (zid) counts[zid] = (counts[zid] || 0) + 1;
+  }
 
   const w = Number(layout.width) || 1920;
   const h = Number(layout.height) || 1080;
@@ -535,6 +542,7 @@ function renderDetailContent(container, playlist) {
          checklist at exactly this hop is what made the flow feel like it ended. -->
     <div id="gettingStarted"></div>
 
+    ${layoutPickerHtml(playlist)}
     ${layoutMockup(playlist)}
     
     <!-- #319: reordering was one-step-at-a-time only. A playlist of 160 photos spanning several
@@ -567,8 +575,10 @@ function renderDetailContent(container, playlist) {
     </div>
   `;
 
+  currentLayout = playlist.layout || null;
   if (playlist.smart_rules) renderSmart(playlist);
   else renderItems(playlist.items || []);
+  mountLayoutPicker(playlist, () => refreshAfterMutation());
   if (corpMode) mountCorporateEditor(container, playlist);
 
   renderApprovalBar(document.getElementById('playlistApprovalBar'), {
@@ -1365,6 +1375,7 @@ function renderItems(items) {
         ${currentPlaybackOrder === 'weighted' && !item.child_playlist_id ? `<label style="font-size:12px;color:var(--text-muted)">${t('playlist.weight')}</label>
         <input type="number" class="input item-weight" data-item-id="${item.id}" value="${item.weight || 1}" min="1" max="1000" style="width:56px;padding:4px 8px;font-size:13px;text-align:center">` : ''}
         ${currentPlaybackOrder === 'sequential' && !item.child_playlist_id && !fillMode ? repeatSelect(item) : ''}
+        ${zoneSelectHtml(item, currentLayout)}
         <label style="font-size:12px;color:var(--text-muted)" title="${esc(t('playlist.play_window_hint'))}">${t('playlist.play_from')}</label>
         <input type="datetime-local" class="input item-play-from" data-item-id="${item.id}" value="${esc(item.play_from || '')}" style="width:168px;padding:4px 6px;font-size:12px">
         <label style="font-size:12px;color:var(--text-muted)">${t('playlist.play_until')}</label>
@@ -1393,6 +1404,7 @@ function renderItems(items) {
     </div>
   `).join('');
   hydrateAuthImages(itemsEl);
+  bindZoneSelects(itemsEl, currentPlaylistId, () => refreshAfterMutation());
   bindSelection(itemsEl, items);
   bindSlotRows(itemsEl);
   if (corpReadOnly) lockCorporateRows(itemsEl);

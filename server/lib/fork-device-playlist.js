@@ -61,6 +61,13 @@ function forkInheritedPlaylist(deviceId, userId) {
     });
     db.prepare('UPDATE playlists SET playback_order = ?, published_playback_order = ? WHERE id = ?')
       .run(source.playback_order || 'sequential', source.published_playback_order || null, newId);
+    // 3.0: the fork keeps the source's layout too (draft and published), or a screen that forks a
+    // zoned group playlist would drop to its own layout and squash the zones.
+    if (require('./corporate/schema-probe').hasColumn(db, 'playlists', 'published_layout_id')) {
+      db.prepare(`UPDATE playlists SET layout_id = (SELECT layout_id FROM playlists WHERE id = ?),
+                    published_layout_id = (SELECT published_layout_id FROM playlists WHERE id = ?) WHERE id = ?`)
+        .run(resolved.playlist_id, resolved.playlist_id, newId);
+    }
 
     /*
      * ⚠️ A SMART source has no items to copy: its content comes from its rules. Copying nothing

@@ -510,7 +510,11 @@ router.get('/:id', (req, res) => {
   // that never reported one, or whose block is unreadable — the card simply does not render.
   const edid = require('../lib/edid').parseEdid(device.hardware_edid);
 
-  res.json({ ...stripDeviceSecrets(device), tags: parseTags(device.tags), group_ids: groupIdsByDevice([device.id])[device.id] || [], local_weather: require('../lib/local-conditions').readingFor(device), capabilities, edid, telemetry, screenshot, assignments, active_layout_zones, playlist_status, playlist_has_published, uptimeData, statusLog, deviceEvents });
+  // 3.0: which layout is on screen and who chose it (docs/layouts-and-campaigns.md).
+  let resolved_layout = null;
+  try { resolved_layout = require('../lib/resolve-device-playlist').resolvedLayoutInfo(req.params.id); } catch (_) { resolved_layout = null; }
+
+  res.json({ ...stripDeviceSecrets(device), tags: parseTags(device.tags), group_ids: groupIdsByDevice([device.id])[device.id] || [], local_weather: require('../lib/local-conditions').readingFor(device), capabilities, edid, telemetry, screenshot, assignments, active_layout_zones, resolved_layout, playlist_status, playlist_has_published, uptimeData, statusLog, deviceEvents });
 });
 
 /*

@@ -195,8 +195,10 @@ router.post('/device/:deviceId', (req, res) => {
   }
 
   // Hardening: clear a zone_id that isn't in THIS device's active layout (prevents new orphans).
+  // Resolved: the layout the screen DRAWS, which may be its playlist's own (3.0) or a schedule's.
   const devLayout = db.prepare('SELECT layout_id FROM devices WHERE id = ?').get(req.params.deviceId);
-  const effZone = validZoneForLayout(zone_id, devLayout?.layout_id, `on add to device ${req.params.deviceId}`);
+  const activeLayout = require('../lib/resolve-device-playlist').resolvedLayoutId(req.params.deviceId) ?? devLayout?.layout_id;
+  const effZone = validZoneForLayout(zone_id, activeLayout, `on add to device ${req.params.deviceId}`);
 
   let order = sort_order;
   if (order === undefined || order === null) {
@@ -397,7 +399,11 @@ router.put('/:id', (req, res) => {
     // zone_id that isn't in that layout (prevents new orphans). Multi-device / fullscreen
     // playlists can't be bound to one layout here, so we leave those to the player fallback.
     let effZone = zone_id || null;
-    if (effZone) {
+    // 3.0: a playlist with its own layout is placed by THAT layout, on every screen it plays on.
+    let ownLayout = null;
+    try { ownLayout = effZone ? (db.prepare('SELECT layout_id FROM playlists WHERE id = ?').get(item.playlist_id) || {}).layout_id || null : null; } catch (_) { ownLayout = null; }
+    if (effZone && ownLayout) effZone = validZoneForLayout(effZone, ownLayout, `on update of item ${req.params.id}`);
+    else if (effZone) {
       const devs = db.prepare(`SELECT d.layout_id FROM devices d
         JOIN device_resolved_playlist r ON r.device_id = d.id
         WHERE r.playlist_id = ? AND d.layout_id IS NOT NULL AND d.wall_id IS NULL`).all(item.playlist_id);

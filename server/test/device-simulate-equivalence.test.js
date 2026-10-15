@@ -211,3 +211,67 @@ test('FORECAST vs LIVE: at every instant the simulator resolves and builds exact
 test('simulate() self-checks its mirror against the live view', () => {
   for (const id of deviceIds()) assert.equal(sim.simulate(id, Date.parse('2026-03-09T12:35:00Z')).resolver_check, 'ok', id);
 });
+
+/*
+ * 3.0 layouts (docs/layouts-and-campaigns.md): the view gained a tier — the resolved playlist's own
+ * published layout, below a schedule's and above the device's, skipped on wall members — and the
+ * payload picks an orientation version of the layout from the screen's shape. The tests above run
+ * the fleet with no playlist layouts (and prove the old behaviour is untouched); these run it again
+ * WITH them, so the mirror and the forecast are held to the new tier too.
+ */
+function withPlaylistLayouts(fn) {
+  const L1 = crypto.randomUUID(), L2 = crypto.randomUUID();
+  db.prepare('INSERT INTO layouts (id, name, user_id) VALUES (?, ?, ?), (?, ?, ?)').run(L1, 'PL1', f.userId, L2, 'PL2', f.userId);
+  const z = (lid, n, x, w) => { const id = crypto.randomUUID(); db.prepare('INSERT INTO layout_zones (id, layout_id, name, x_percent, y_percent, width_percent, height_percent, sort_order) VALUES (?, ?, ?, ?, 0, ?, 100, 0)').run(id, lid, n, x, w); return id; };
+  const a = z(L1, 'A', 0, 60); z(L1, 'B', 60, 40); z(L2, 'C', 0, 50); z(L2, 'D', 50, 50);
+  db.prepare("INSERT INTO layout_zone_variants (zone_id, layout_id, variant, x_percent, y_percent, width_percent, height_percent) VALUES (?, ?, 'portrait', 0, 0, 100, 60)").run(a, L1);
+  const withLayout = { Own: L1, GroupHigh: L2, Promo: L1, Wall: L2, HQ: L2, Night: L1 };
+  for (const [name, lid] of Object.entries(withLayout)) db.prepare('UPDATE playlists SET layout_id = ?, published_layout_id = ? WHERE id = ?').run(lid, lid, f.playlists[name]);
+  db.prepare("UPDATE devices SET layout_id = ?, orientation = 'portrait' WHERE id = ?").run(L2, f.devices.raw);
+  db.prepare("UPDATE devices SET orientation = 'portrait' WHERE id = ?").run(f.devices.tie);
+  try { return fn({ L1, L2 }); } finally {
+    db.prepare('UPDATE playlists SET layout_id = NULL, published_layout_id = NULL').run();
+    db.prepare("UPDATE devices SET layout_id = NULL, orientation = 'landscape' WHERE id IN (?, ?)").run(f.devices.raw, f.devices.tie);
+    clearScheduled();
+  }
+}
+
+test('MIRROR vs VIEW with playlist layouts: the playlist tier is mirrored for every device and schedule state', () => {
+  withPlaylistLayouts(({ L1, L2 }) => {
+    const playlists = [null, ...Object.values(f.playlists)];
+    let n = 0, fromPlaylist = 0;
+    for (const id of deviceIds()) {
+      for (const sp of playlists) for (const sl of [null, L1, L2]) {
+        db.prepare('UPDATE devices SET scheduled_playlist_id = ?, scheduled_layout_id = ? WHERE id = ?').run(sp, sl, id);
+        const mine = sim.resolveFromInputs(sim.resolverInputs(db, id), { playlist_id: sp, layout_id: sl });
+        assert.deepEqual(mine, viewRow(id), `device ${id} with scheduled ${sp}/${sl}`);
+        if (!sl && mine.layout_id && mine.source !== 'corporate') fromPlaylist++;
+        n++;
+      }
+    }
+    assert.ok(n >= deviceIds().length * playlists.length * 3);
+    assert.ok(fromPlaylist > 10, `the playlist tier was actually exercised (${fromPlaylist})`);
+  });
+});
+
+test('FORECAST vs LIVE with playlist layouts and a portrait screen: same resolution, same payload', () => {
+  withPlaylistLayouts(() => {
+    const offline = f.devices.offline;
+    let n = 0;
+    const all = instants();
+    for (const at of all.filter((_, i) => i % 3 === 0)) {
+      clearScheduled();
+      scheduler.evaluateSchedules(fakeIo, new Date(at));
+      for (const id of deviceIds()) {
+        if (id === offline) continue;
+        const st = sim.stateAt(sim.loadContext(id), at);
+        assert.deepEqual(st.entry.resolved, viewRow(id), `resolution of ${id} at ${new Date(at).toISOString()}`);
+        assert.deepEqual(json(st.entry.payload), json(setupDeviceSocket.buildPlaylistPayloadUnchecked(id)),
+          `payload of ${id} at ${new Date(at).toISOString()}`);
+        n++;
+      }
+    }
+    assert.ok(n > 300);
+    for (const id of deviceIds()) assert.equal(sim.simulate(id, Date.parse('2026-03-09T12:35:00Z')).resolver_check, 'ok', id);
+  });
+});

@@ -103,6 +103,9 @@ function capturePlaylist(db, row) {
       schedules: scheduleBlocksFor(db, it.id),
     }));
   const state = { name: row.name, description: row.description || '', playback_order: row.playback_order || 'sequential', items };
+  // 3.0 playlist layout: part of what a reviewer approves. Only when set, so an unchanged
+  // pre-feature playlist captures the same state (and the same approval hash) as before.
+  if (row.layout_id) state.layout_id = row.layout_id;
   if (row.smart_rules) {
     state.smart_rules = row.smart_rules;
     // ⚠️ A smart playlist's items are what its rules match NOW, not playlist_items (it has none).
@@ -575,6 +578,12 @@ function restoreToDraft(db, { type, id, revisionId, actor, materialized = null }
       }
       db.prepare("UPDATE playlists SET name = ?, description = ?, playback_order = ?, smart_rules = ?, status = 'draft', updated_at = ? WHERE id = ?")
         .run(state.name || row.name, state.description || '', state.playback_order || row.playback_order || 'sequential', state.smart_rules || null, now, id);
+      if (require('./corporate/schema-probe').hasColumn(db, 'playlists', 'layout_id')) {
+        // A layout that has since been deleted (or now belongs elsewhere) is not restored.
+        const l = state.layout_id ? db.prepare('SELECT is_template, workspace_id FROM layouts WHERE id = ?').get(state.layout_id) : null;
+        const ok = l && (l.is_template || l.workspace_id === row.workspace_id);
+        db.prepare('UPDATE playlists SET layout_id = ? WHERE id = ?').run(ok ? state.layout_id : null, id);
+      }
     });
     txn();
   } else if (type === 'layout') {

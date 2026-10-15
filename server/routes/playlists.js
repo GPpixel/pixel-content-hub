@@ -14,6 +14,7 @@ const { parseTags, parseMeta } = require('../lib/content-tags');
 const smartPlaylist = require('../lib/smart-playlist');
 const { applyRepeatEvery, normalizeRepeatEvery } = require('../lib/repeat-every');
 const playToEnd = require('../lib/play-to-end');
+const playlistLayout = require('../lib/playlist-layout');
 const { emitMuteChanged } = require('../lib/mute-sync');
 const corpGuard = require('../lib/corporate/guard');
 const corpActor = require('../lib/corporate/actor');
@@ -321,6 +322,23 @@ function slotSnapshotEntry(row, slot, keepSlots) {
  * Every existing caller passes neither, and for a playlist without slots the output is unchanged.
  */
 function buildSnapshotItems(playlistId, _depth = 0, _ancestors = null, opts = {}) {
+  const items = buildSnapshotItemsInner(playlistId, _depth, _ancestors, opts);
+  /*
+   * 3.0 playlist layouts: at the TOP level only, items without a zone go to the playlist's main
+   * zone (lib/playlist-layout.js). Here, in the one function every snapshot comes from, so the
+   * editor, the Simple view, Make a sign, content requests and experiments — none of which set a
+   * zone — all land in the same place. A nested child's own layout is ignored: only the playlist a
+   * screen actually resolved to decides the layout. No layout (every playlist until one is picked)
+   * leaves the list untouched.
+   */
+  if (_depth === 0 && schemaProbe.hasColumn(db, 'playlists', 'layout_id')) {
+    const row = db.prepare('SELECT layout_id FROM playlists WHERE id = ?').get(playlistId);
+    if (row && row.layout_id) playlistLayout.fillMainZone(items, playlistLayout.loadLayout(db, row.layout_id));
+  }
+  return items;
+}
+
+function buildSnapshotItemsInner(playlistId, _depth = 0, _ancestors = null, opts = {}) {
   // A nesting cycle (A contains B contains A) would recurse here until the stack overflows and
   // publish/preview 500s. The old MAX_NEST_DEPTH guard was DEAD: this function recursed via
   // expandChildPlaylists which called back in with depth reset to 0. Thread the depth, and also
@@ -500,6 +518,24 @@ function derivePreviewLayout(assignments) {
   return layout;
 }
 
+/*
+ * 3.0: the layout the editor and the preview draw. A playlist that CHOSE a layout (the draft one —
+ * the editor is showing the draft) is drawn in it, flagged `explicit` so the page can offer to
+ * change it; one that did not keeps #104's derivation from its zoned items.
+ */
+function playlistPreviewLayout(playlist, items) {
+  if (playlist && playlist.layout_id) {
+    const l = playlistLayout.loadLayout(db, playlist.layout_id);
+    if (l) {
+      l.explicit = true;
+      const main = playlistLayout.mainZone(l.zones);
+      l.main_zone_id = main ? main.id : null;
+      return l;
+    }
+  }
+  return derivePreviewLayout(items);
+}
+
 // Map an item's schedule rows into the evaluator's block shape.
 function schedulesForItem(itemId) {
   return db.prepare(
@@ -670,8 +706,13 @@ function publishPlaylist(playlistId, reqOrIo, seen = new Set([playlistId])) {
     return slot_id ? { ...out, slot_id } : out;
   }));
 
+  // 3.0 playlist layouts: the layout goes live WITH the snapshot whose zones it explains.
+  const hasLayout = schemaProbe.hasColumn(db, 'playlists', 'published_layout_id');
+  const layoutRow = hasLayout ? db.prepare('SELECT layout_id, published_layout_id FROM playlists WHERE id = ?').get(playlistId) : null;
+  const nextLayout = layoutRow ? (layoutRow.layout_id || null) : null;
+  const layoutSame = !layoutRow || (layoutRow.published_layout_id || null) === nextLayout;
   if (prev && prev.status === 'published' && prev.published_snapshot === next && (prev.published_playback_order || 'sequential') === order
-      && (!hasComposable || (prev.published_composable || null) === composable)) {
+      && (!hasComposable || (prev.published_composable || null) === composable) && layoutSame) {
     /*
      * The resolved list is unchanged, so no device is touched and nothing restarts — that is the
      * point of this early exit. But STRUCTURE can differ while the flat output does not: replacing
@@ -699,7 +740,7 @@ function publishPlaylist(playlistId, reqOrIo, seen = new Set([playlistId])) {
   // The composable's pairing with this snapshot, so a snapshot some other version writes is noticed.
   const hasPair = hasComposable && schemaProbe.hasColumn(db, 'playlists', 'published_composable_of');
   const pair = composable ? require('../lib/corporate/digest').snapshotDigest(next) : null;
-  db.prepare(`UPDATE playlists SET status = 'published', published_snapshot = ?, published_structure = ?, published_playback_order = ?, published_smart_rules = smart_rules${hasComposable ? ', published_composable = ?' : ''}${hasPair ? ', published_composable_of = ?' : ''}${hasRev ? ', published_rev = published_rev + 1' : ''}, updated_at = strftime('%s','now') WHERE id = ?`)
+  db.prepare(`UPDATE playlists SET status = 'published', published_snapshot = ?, published_structure = ?, published_playback_order = ?, published_smart_rules = smart_rules${hasComposable ? ', published_composable = ?' : ''}${hasPair ? ', published_composable_of = ?' : ''}${hasRev ? ', published_rev = published_rev + 1' : ''}${hasLayout ? ', published_layout_id = layout_id' : ''}, updated_at = strftime('%s','now') WHERE id = ?`)
     .run(...[next, structure, order, ...(hasComposable ? [composable] : []), ...(hasPair ? [pair] : []), playlistId]);
   pushToDevices(playlistId, reqOrIo, { skipCorporate: isCorporate });
   corpFanout.afterPublish(corpCtx, reqOrIo);
@@ -886,7 +927,7 @@ router.get('/:id', requirePlaylistRead, (req, res) => {
   // the page lists a zone NAME with no sense of where that zone sits on the screen. Null (no
   // zoned items) means fullscreen, which the UI draws as a single frame.
   let layout = null;
-  try { layout = derivePreviewLayout(items); } catch (e) { layout = null; }
+  try { layout = playlistPreviewLayout(req.playlist, items); } catch (e) { layout = null; }
   // A smart playlist shows what its rules select right now, so the editor never has to guess.
   let smart = null;
   if (req.playlist.smart_rules) {
@@ -913,6 +954,40 @@ router.get('/:id', requirePlaylistRead, (req, res) => {
   res.json({ ...req.playlist, items: decorateEditorItems(items), item_count: items.length, display_count: displayCount, paused_count: pausedCount, layout, smart, ...(corporateSlot ? { corporate_slot: corporateSlot } : {}) });
 });
 
+/*
+ * 3.0: before a playlist changes layout, where would its zoned items go? Returns the zones in use
+ * (with how many items each holds) and a SUGGESTED new zone for each (same name, else the zone in
+ * the same place, else the main zone — lib/playlist-layout.js suggestZoneMap). Read-only: the editor
+ * shows it, the person confirms or changes each row, and PUT /:id sends the confirmed zone_map.
+ */
+router.get('/:id/layout-zone-map', requirePlaylistRead, (req, res) => {
+  const target = typeof req.query.layout_id === 'string' && req.query.layout_id ? req.query.layout_id : null;
+  if (target) {
+    const why = playlistLayout.layoutRefusal(db, target, req.playlist.workspace_id);
+    if (why) return res.status(why === 'Layout not found' ? 404 : 403).json({ error: why });
+  }
+  const to = target ? playlistLayout.loadLayout(db, target) : null;
+  // The zones this playlist's items sit in now, wherever they came from (its old layout, or zones a
+  // screen's own layout gave them before the playlist had one).
+  const used = db.prepare(`SELECT z.id, z.name, z.layout_id, z.x_percent, z.y_percent, z.width_percent, z.height_percent,
+                                  l.name AS layout_name, COUNT(*) AS items
+                             FROM playlist_items pi JOIN layout_zones z ON z.id = pi.zone_id
+                             LEFT JOIN layouts l ON l.id = z.layout_id
+                            WHERE pi.playlist_id = ?
+                            GROUP BY z.id ORDER BY l.name, z.sort_order`).all(req.params.id);
+  const unzoned = db.prepare('SELECT COUNT(*) AS n FROM playlist_items WHERE playlist_id = ? AND zone_id IS NULL').get(req.params.id).n;
+  // Zones already in the target layout need no move.
+  const moving = to ? used.filter((z) => z.layout_id !== to.id) : used;
+  const suggestion = to ? playlistLayout.suggestZoneMap(moving, to.zones) : {};
+  const main = to ? playlistLayout.mainZone(to.zones) : null;
+  res.json({
+    layout: to ? { id: to.id, name: to.name, width: to.width, height: to.height, zones: to.zones } : null,
+    main_zone_id: main ? main.id : null,
+    zones: moving.map((z) => ({ id: z.id, name: z.name, layout_name: z.layout_name || null, items: z.items, suggested: suggestion[z.id] || null })),
+    unzoned_items: unzoned,
+  });
+});
+
 // #104: device-free draft preview payload. Same shape the device player consumes
 // (via assemblePayload, so it can't drift), but built from LIVE items (draft-aware,
 // not published_snapshot) with a layout derived from the playlist's own zones. JWT-
@@ -922,8 +997,11 @@ const PREVIEW_ORIENTATIONS = new Set(['landscape', 'portrait', 'landscape-flippe
 router.get('/:id/preview-payload', requirePlaylistRead, (req, res) => {
   const { assemblePayload } = require('../ws/deviceSocket');
   const assignments = buildSnapshotItems(req.params.id);
-  const layout = derivePreviewLayout(assignments);
+  const layout = playlistPreviewLayout(req.playlist, assignments);
   const orientation = PREVIEW_ORIENTATIONS.has(req.query.orientation) ? req.query.orientation : 'landscape';
+  // 3.0: the portrait toggle shows the layout's portrait version, as a portrait screen would get it.
+  const lv = require('../lib/layout-variants');
+  if (layout && lv.orientationVariant(orientation)) lv.applyVariant(db, layout, lv.orientationVariant(orientation));
   res.json(assemblePayload({
     assignments, layout, orientation, wall_config: null, timezone: null,
     // Without this the preview's data-source play_when gating and custom shader transitions no-op
@@ -984,15 +1062,74 @@ router.put('/:id', requirePlaylistWrite, (req, res) => {
     values.push(rules ? JSON.stringify(rules) : null);
     rulesChanged = true;
   }
-  if (updates.length > 0) {
-    updates.push("updated_at = strftime('%s','now')");
-    values.push(req.params.id);
-    db.prepare(`UPDATE playlists SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+  /*
+   * 3.0: the playlist's own layout (docs/layouts-and-campaigns.md). null = none (screens use their
+   * own, as before). `zone_map` {oldZoneId: newZoneId|null} moves the items in the same transaction
+   * — the editor offers a suggestion (GET /:id/layout-zone-map) and sends what the person confirmed.
+   * A DRAFT change like playback order: screens get the layout on Publish, with the moved items.
+   */
+  let layoutChanged = false;
+  let zoneMoves = null;
+  if (req.body.layout_id !== undefined && schemaProbe.hasColumn(db, 'playlists', 'layout_id')) {
+    const next = req.body.layout_id || null;
+    if (next !== null && typeof next !== 'string') return res.status(400).json({ error: 'layout_id must be a layout id or null' });
+    if (next && req.playlist.corporate) {
+      return res.status(400).json({ error: 'A head office playlist takes its layout from the head office assignment, not from the playlist.', code: 'CORPORATE_LAYOUT' });
+    }
+    if (next && corpFillsLib().fillsOfPlaylist(db, req.params.id).length) {
+      return res.status(400).json({ error: 'Content for a head office slot plays inside head office\'s layout, so it cannot have a layout of its own.', code: 'FILL_LAYOUT' });
+    }
+    if (next) {
+      const why = playlistLayout.layoutRefusal(db, next, req.playlist.workspace_id);
+      if (why) return res.status(why === 'Layout not found' ? 400 : 403).json({ error: why });
+    }
+    if (next !== (req.playlist.layout_id || null)) {
+      updates.push('layout_id = ?');
+      values.push(next);
+      layoutChanged = true;
+    }
+    const map = req.body.zone_map;
+    if (map !== undefined && map !== null) {
+      if (typeof map !== 'object' || Array.isArray(map) || Object.keys(map).length > 200) {
+        return res.status(400).json({ error: 'zone_map must be an object of old zone id -> new zone id (or null)' });
+      }
+      // Every target must be a zone OF THE NEW LAYOUT: a map cannot be used to point items at
+      // another tenant's zone, or at a zone the screen will not draw.
+      const valid = next ? new Set(db.prepare('SELECT id FROM layout_zones WHERE layout_id = ?').all(next).map((r) => r.id)) : new Set();
+      zoneMoves = [];
+      for (const [from, to] of Object.entries(map)) {
+        if (to !== null && (typeof to !== 'string' || !valid.has(to))) {
+          return res.status(400).json({ error: 'zone_map points at a zone that is not in the new layout' });
+        }
+        zoneMoves.push([from, to]);
+      }
+    }
+  }
+
+  const moving = !!(zoneMoves && zoneMoves.length);
+  if (updates.length > 0 || moving) {
+    if (updates.length) {
+      updates.push("updated_at = strftime('%s','now')");
+      values.push(req.params.id);
+    }
+    // One transaction: a layout change and the item moves that go with it land together or not at all.
+    db.transaction(() => {
+      if (updates.length) db.prepare(`UPDATE playlists SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+      const move = db.prepare('UPDATE playlist_items SET zone_id = ? WHERE playlist_id = ? AND zone_id = ?');
+      for (const [from, to] of zoneMoves || []) move.run(to, req.params.id, from);
+    })();
     const summary = rulesChanged ? 'Changed smart rules'
-      : req.body.playback_order !== undefined ? 'Changed playback order' : 'Renamed';
+      : req.body.playback_order !== undefined ? 'Changed playback order'
+        : (layoutChanged || moving) ? 'Changed layout' : 'Renamed';
     require('../lib/revisions').recordCurrent(db, 'playlist', req.params.id, { actor: require('../lib/releases').actorOf(req), summary });
     if (req.body.playback_order !== undefined) markDraft(req.params.id, req, 'Changed playback order');
     if (rulesChanged) markDraft(req.params.id, req, 'Changed smart rules');
+    if (layoutChanged || moving) {
+      markDraft(req.params.id, req, 'Changed layout');
+      require('../lib/audit').auditFromReq(req, 'playlist.layout_changed', {
+        playlist_id: req.params.id, layout_id: req.body.layout_id || null, moved_zones: moving ? zoneMoves.length : 0,
+      });
+    }
   }
   res.json(db.prepare('SELECT * FROM playlists WHERE id = ?').get(req.params.id));
 });
@@ -1118,6 +1255,10 @@ router.post('/:id/discard', requirePlaylistWrite, (req, res) => {
     for (const sid of restoredSlots) db.prepare('UPDATE corporate_slots SET retired_at = NULL WHERE id = ?').run(sid);
     // A smart playlist's rules are part of what was published; discarding a rule edit restores them.
     db.prepare("UPDATE playlists SET status = 'published', playback_order = COALESCE(published_playback_order, playback_order, 'sequential'), smart_rules = published_smart_rules, updated_at = strftime('%s','now') WHERE id = ?").run(req.params.id);
+    // A layout change is part of the draft too: discarding it puts back the layout screens have.
+    if (schemaProbe.hasColumn(db, 'playlists', 'published_layout_id')) {
+      db.prepare('UPDATE playlists SET layout_id = published_layout_id WHERE id = ?').run(req.params.id);
+    }
   });
   transaction();
   require('../lib/revisions').recordCurrent(db, 'playlist', req.params.id, { actor: require('../lib/releases').actorOf(req), summary: 'Draft discarded' });

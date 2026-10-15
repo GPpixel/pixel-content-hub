@@ -239,15 +239,36 @@ function checkPlaylist(db, workspaceId, playlistId) {
   const settings = getSettings(db, workspaceId);
   const devices = db.prepare(`SELECT ${DEVICE_COLS} FROM devices WHERE workspace_id = ? AND playlist_id = ?`).all(workspaceId, playlistId);
   const view = worstView(devices.map((d) => deviceView(d, settings)), settings);
+  /*
+   * 3.0 playlist layouts: an item in a ZONE is drawn smaller than the screen, so its text is too.
+   * When the playlist chose a layout, each item is checked on the part of the screen its zone covers
+   * (its own zone, or the main zone for one without) — the full-screen assumption could only pass
+   * text that is too small. Cheap and one-sided: a playlist without a layout is checked as before.
+   */
+  const zoneViews = new Map();
+  let mainZoneId = null;
+  try {
+    const own = db.prepare('SELECT layout_id FROM playlists WHERE id = ? AND workspace_id = ?').get(playlistId, workspaceId);
+    const lay = own && own.layout_id ? require('../playlist-layout').loadLayout(db, own.layout_id) : null;
+    if (lay && lay.zones.length > 1) {
+      mainZoneId = (require('../playlist-layout').mainZone(lay.zones) || {}).id || null;
+      for (const z of lay.zones) {
+        const fw = Math.max(0.01, (Number(z.width_percent) || 100) / 100), fh = Math.max(0.01, (Number(z.height_percent) || 100) / 100);
+        zoneViews.set(z.id, { ...view, widthMm: view.widthMm * fw, heightMm: view.heightMm * fh, pxW: Math.round(view.pxW * fw), pxH: Math.round(view.pxH * fh) });
+      }
+    }
+  } catch (_) { /* pre-migration schema: full screen */ }
+  const viewFor = (zoneId) => zoneViews.get(zoneId || mainZoneId) || view;
   const deckOf = deckWidgetIndex(db, workspaceId);
   const sources = [];
   const seen = new Set();
-  const visit = (pid, depth) => {
+  const visit = (pid, depth, parentZone = null) => {
     if (depth > 5 || seen.has('p:' + pid)) return;
     seen.add('p:' + pid);
     const pl = db.prepare('SELECT id FROM playlists WHERE id = ? AND workspace_id = ?').get(pid, workspaceId);
     if (!pl) return;
-    for (const it of db.prepare('SELECT content_id, widget_id, child_playlist_id FROM playlist_items WHERE playlist_id = ? ORDER BY sort_order').all(pid)) {
+    for (const it of db.prepare('SELECT content_id, widget_id, child_playlist_id, zone_id FROM playlist_items WHERE playlist_id = ? ORDER BY sort_order').all(pid)) {
+      const view = viewFor(it.zone_id || parentZone);
       if (it.content_id && !seen.has('c:' + it.content_id)) {
         seen.add('c:' + it.content_id);
         const c = contentRow(db, workspaceId, it.content_id);
@@ -267,7 +288,7 @@ function checkPlaylist(db, workspaceId, playlistId) {
         const w = db.prepare('SELECT * FROM widgets WHERE id = ? AND workspace_id = ?').get(it.widget_id, workspaceId);
         if (w) pushSource(sources, { type: 'widget', id: w.id, name: w.name, widget_type: w.widget_type }, checkWidgetRow(db, w, view));
       }
-      if (it.child_playlist_id) visit(it.child_playlist_id, depth + 1);
+      if (it.child_playlist_id) visit(it.child_playlist_id, depth + 1, it.zone_id || parentZone);
     }
   };
   visit(playlistId, 0);

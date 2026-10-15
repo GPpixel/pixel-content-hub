@@ -85,6 +85,8 @@ const EXPORTED = {
   // layouts
   layouts: { category: 'layouts', scope: ws() },
   layout_zones: { category: 'layouts', scope: via('layout_id', 'layouts') },
+  // 3.0: a layout's portrait / 4:3 versions (lib/layout-variants.js).
+  layout_zone_variants: { category: 'layouts', scope: via('layout_id', 'layouts') },
   // slides, signs, kiosks
   slide_decks: { category: 'signs', scope: ws() },
   kiosk_pages: { category: 'signs', scope: ws() },

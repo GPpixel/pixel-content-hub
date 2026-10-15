@@ -3247,6 +3247,37 @@ const migrations = [
   'ALTER TABLE ai_settings ADD COLUMN stt_base_url TEXT',
   'ALTER TABLE ai_settings ADD COLUMN stt_model TEXT',
   'ALTER TABLE ai_settings ADD COLUMN stt_api_key_enc TEXT',
+  /*
+   * 3.0: a layout on a playlist (docs/layouts-and-campaigns.md). layout_id is what the editor
+   * shows; published_layout_id is what screens get, written on Publish next to published_snapshot
+   * so a layout change and the zone moves that go with it reach screens together. Both NULL =
+   * exactly the old behaviour (the resolver view falls through to the device's layout).
+   * layout_zones.is_main marks the zone that items without a zone play in; none marked = the
+   * largest zone, which is also what every player already does with an orphaned item.
+   */
+  'ALTER TABLE playlists ADD COLUMN layout_id TEXT REFERENCES layouts(id) ON DELETE SET NULL',
+  'ALTER TABLE playlists ADD COLUMN published_layout_id TEXT REFERENCES layouts(id) ON DELETE SET NULL',
+  'ALTER TABLE layout_zones ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0',
+  /*
+   * 3.0: portrait and 4:3 versions of a layout (lib/layout-variants.js). The SAME zones (zone_id),
+   * different geometry per version. A side table rather than layout_zones columns because every
+   * payload is built with SELECT * FROM layout_zones: columns there would add fields to every
+   * screen's payload; rows here change nothing for a layout without versions. layout_id is
+   * denormalised so "this layout's versions" is one indexed read.
+   */
+  `CREATE TABLE IF NOT EXISTS layout_zone_variants (
+     zone_id TEXT NOT NULL REFERENCES layout_zones(id) ON DELETE CASCADE,
+     layout_id TEXT NOT NULL REFERENCES layouts(id) ON DELETE CASCADE,
+     variant TEXT NOT NULL CHECK (variant IN ('portrait','square')),
+     x_percent REAL NOT NULL DEFAULT 0,
+     y_percent REAL NOT NULL DEFAULT 0,
+     width_percent REAL NOT NULL DEFAULT 100,
+     height_percent REAL NOT NULL DEFAULT 100,
+     PRIMARY KEY (zone_id, variant))`,
+  'CREATE INDEX IF NOT EXISTS idx_layout_zone_variants_layout ON layout_zone_variants(layout_id, variant)',
+  // A zone deleted while foreign_keys is off (see routes/layouts.js) takes its versions with it.
+  `CREATE TRIGGER IF NOT EXISTS trg_layout_zone_variants_zone_del AFTER DELETE ON layout_zones
+     BEGIN DELETE FROM layout_zone_variants WHERE zone_id = OLD.id; END`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

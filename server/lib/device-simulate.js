@@ -114,7 +114,25 @@ const INPUTS_SQL = `
     LEFT JOIN corporate_mandates cm ON cm.id = d.mandate_id`;
 
 function resolverInputs(db, deviceId) {
-  return db.prepare(INPUTS_SQL).get(deviceId) || null;
+  const r = db.prepare(INPUTS_SQL).get(deviceId) || null;
+  if (!r) return null;
+  /*
+   * The view's playlist-layout tier reads the PUBLISHED layout of whichever playlist the screen
+   * resolves to — and under a hypothetical schedule that can be any playlist, so it is a lookup
+   * rather than a column. Not enumerable: the inputs stay a plain row for anything that compares or
+   * logs them.
+   */
+  const memo = new Map();
+  const hasCol = require('./corporate/schema-probe').hasColumn(db, 'playlists', 'published_layout_id');
+  Object.defineProperty(r, 'playlistLayout', {
+    enumerable: false,
+    value: (playlistId) => {
+      if (!playlistId || !hasCol) return null;
+      if (!memo.has(playlistId)) memo.set(playlistId, (db.prepare('SELECT published_layout_id FROM playlists WHERE id = ?').get(playlistId) || {}).published_layout_id ?? null);
+      return memo.get(playlistId);
+    },
+  });
+  return r;
 }
 
 /**
@@ -149,7 +167,10 @@ function resolveFromInputs(r, sched = { playlist_id: null, layout_id: null }) {
   else if (r.group_playlist_id != null) source = 'group';
   else if (r.playlist_id != null) source = 'device';
   else source = null;
-  return { playlist_id, source, layout_id: sl ?? r.layout_id ?? null };
+  // Schedule's layout > the playlist's own (not on a wall member) > the device's.
+  const playlistLayout = r.wall_id == null && playlist_id != null && typeof r.playlistLayout === 'function'
+    ? r.playlistLayout(playlist_id) : null;
+  return { playlist_id, source, layout_id: sl ?? playlistLayout ?? r.layout_id ?? null };
 }
 
 /* ============================== schedule reasons ============================== */
@@ -366,6 +387,23 @@ function fallbackTrail(ctx, resolved) {
   return steps;
 }
 
+/*
+ * Which tier chose the layout — the same order as the view (mandate > schedule > the playlist's own
+ * > the device's), read back from the inputs so the preview can say "this playlist's layout".
+ */
+function layoutInfo(ctx, resolved, sched) {
+  const id = resolved.layout_id || null;
+  if (!id) return null;
+  const r = ctx.inputs || {};
+  let source = 'device';
+  if (resolved.source === 'corporate') source = 'mandate';
+  else if (sched && sched.layout_id) source = 'schedule';
+  else if (r.wall_id == null && resolved.playlist_id && typeof r.playlistLayout === 'function' && r.playlistLayout(resolved.playlist_id) === id) source = 'playlist';
+  let name = null;
+  try { name = (ctx.db.prepare('SELECT name FROM layouts WHERE id = ?').get(id) || {}).name || null; } catch (_) { name = null; }
+  return { id, name, source };
+}
+
 function liveNow(deviceId) {
   const db = dbOf();
   const out = [];
@@ -473,6 +511,7 @@ function simulate(deviceId, atMs, opts = {}) {
     default_content: playing === 0 && entry.payload.default_content
       ? { content_id: entry.payload.default_content.content_id, label: entry.payload.default_content.filename || '' } : null,
     layout_id: resolved.layout_id || null,
+    layout: layoutInfo(ctx, resolved, entry.sched),
     power: {
       schedule: !!ctx.power,
       supported: ctx.powerSupported,

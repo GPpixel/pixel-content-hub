@@ -609,6 +609,7 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
       d.local_api_enabled, d.local_api_secret,
       d.default_content_id, d.workspace_id, d.latitude, d.longitude,
       d.capabilities, d.platform, d.android_version, d.client_type,
+      d.screen_width, d.screen_height, -- 3.0: which orientation version of a layout this screen gets
       d.id -- an experiment's per-screen variant condition (lib/local-conditions 'screens') needs it
       FROM devices d JOIN device_resolved_playlist r ON r.device_id = d.id
       WHERE d.id = ?`).get(deviceId);
@@ -870,10 +871,13 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
 
   let layout = null;
   if (device?.layout_id && !overrideNow && !hookNow) {
-    layout = db.prepare('SELECT * FROM layouts WHERE id = ?').get(device.layout_id);
-    if (layout) {
-      layout.zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(layout.id);
-    }
+    /*
+     * The layout the resolver chose (the device's, a schedule's, its playlist's, or head office's),
+     * in the version for THIS screen's shape: a portrait screen gets the portrait version when the
+     * layout has one, else the default geometry exactly as before (lib/layout-variants.js).
+     */
+    layout = require('../lib/playlist-layout').layoutForPayload(db, device.layout_id,
+      require('../lib/layout-variants').canvasVariant(device));
   }
 
   // Wall membership flips the player into wall mode. The renderer needs two
@@ -951,9 +955,9 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
         : (db.prepare('SELECT scheduled_layout_id FROM devices WHERE id = ?').get(deviceId)?.scheduled_layout_id || null);
       const wallLayoutId = scheduledWallLayout || wall.layout_id;
       if (wallLayoutId && !overrideNow && !hookNow && !corporateSource) {
-        const wl = db.prepare('SELECT * FROM layouts WHERE id = ?').get(wallLayoutId);
+        // A wall's own geometry: never an orientation version (the wall is the canvas, not a panel).
+        const wl = require('../lib/playlist-layout').layoutForPayload(db, wallLayoutId, null);
         if (wl) {
-          wl.zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(wl.id);
           const wallLayout = require('../lib/wall-layout');
           if (wallLayout.isZonedLayout(wl)) {
             layout = wl;
