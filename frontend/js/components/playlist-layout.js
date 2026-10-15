@@ -25,6 +25,8 @@ async function loadLayouts() {
 /** The row under the playlist header. Read-only playlists (head office's, a slot's content) get none. */
 export function layoutPickerHtml(playlist) {
   if (!playlist || playlist.corporate || playlist.corporate_slot) return '';
+  // A campaign switches between whole layouts (its layout items); it does not play in one.
+  if ((playlist.items || []).some((it) => it.layout_ref_id)) return '';
   const explicit = !!(playlist.layout && playlist.layout.explicit);
   return `
     <div id="playlistLayoutRow" ${explicit ? "" : "data-advanced-ui"} style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;font-size:13px">

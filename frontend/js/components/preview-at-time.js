@@ -210,6 +210,13 @@ export function mountPreviewAtTime(host, device) {
     if (sim.resolver_check === 'mismatch') notes.push(t('forecast.note.mismatch'));
     if (sim.weather && sim.weather.group) notes.push(t(sim.weather.assumed ? 'forecast.note.weather_assumed' : 'forecast.note.weather_current', { weather: t(`forecast.weather.${sim.weather.group}`) }));
 
+    // 3.0 campaigns: the steps this screen switches between, or why it plays the simple version.
+    const steps = sim.campaign && !sim.campaign.fallback ? sim.campaign.steps.map((s) => {
+      const what = s.type === 'layout' ? t('campaign.step_layout', { name: s.label || '', zones: s.zones, items: s.items }) : (s.label || t('forecast.unnamed'));
+      const reason = s.reason ? t(`forecast.item.${s.reason}`, { at: '', from: '', until: '' }) : t('forecast.item.plays');
+      return `<li class="${s.plays ? 'pat-on' : 'pat-off'}"><span class="pat-mark" aria-hidden="true">${s.plays ? '&#10003;' : '&#10005;'}</span><span class="pat-item-name">${esc(what)}</span> <span class="pat-muted">${esc(reason)}${s.duration_sec ? ' · ' + esc(t('campaign.step_secs', { n: s.duration_sec })) : ''}</span></li>`;
+    }).join('') : '';
+    if (sim.campaign && sim.campaign.fallback) notes.push(t('campaign.forecast_fallback'));
     const triggers = (sim.triggers || []).map((tr) => `<li>${esc(tr.name || t('forecast.unnamed'))}${tr.kind === 'emergency' ? ` <span class="pat-badge">${esc(t('forecast.trigger_emergency'))}</span>` : ''}</li>`).join('');
 
     $('#patExplain').innerHTML = `
@@ -219,7 +226,8 @@ export function mountPreviewAtTime(host, device) {
         <div class="pat-muted">${esc(tn('forecast.playing_count', sim.playing, { total: sim.items.length }))}</div>
       </div>
       <h4>${esc(t('forecast.why'))}</h4><ul class="pat-list">${lines.join('')}</ul>
-      <h4>${esc(t('forecast.items'))}</h4>
+      ${steps ? `<h4>${esc(t('campaign.forecast_steps'))}</h4><ul class="pat-list pat-items">${steps}</ul>` : ''}
+      <h4>${esc(steps ? t('campaign.forecast_fallback_items') : t('forecast.items'))}</h4>
       <ul class="pat-list pat-items">${items || `<li class="pat-muted">${esc(t('forecast.no_items'))}</li>`}${skipped}</ul>
       ${triggers ? `<h4>${esc(t('forecast.triggers'))}</h4><p class="pat-muted">${esc(t('forecast.triggers_note'))}</p><ul class="pat-list">${triggers}</ul>` : ''}
       ${notes.length ? `<ul class="pat-notes">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}`;

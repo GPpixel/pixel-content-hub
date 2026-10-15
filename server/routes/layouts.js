@@ -336,8 +336,22 @@ router.delete('/:id', (req, res) => {
   // read BEFORE the delete, they are pushed the full-screen fallback after it.
   let affected = [];
   try { affected = db.prepare(SCREENS_ON_LAYOUT_SQL).all(req.params.id, req.params.id, req.params.id).map((d) => d.id); } catch (_) { affected = []; }
+  // 3.0 campaigns: playlists that show this layout as an item. The items go with the layout (a layout
+  // item with no layout is skipped anyway); published campaigns are republished so screens drop the
+  // step now rather than at their next unrelated publish.
+  let campaigns = [];
+  try { campaigns = db.prepare('SELECT DISTINCT playlist_id FROM playlist_items WHERE layout_ref_id = ?').all(req.params.id).map((r) => r.playlist_id); } catch (_) { campaigns = []; }
   db.prepare('DELETE FROM layouts WHERE id = ?').run(req.params.id);
   try { db.prepare('DELETE FROM layout_zone_variants WHERE layout_id = ?').run(req.params.id); } catch (_) { /* pre-migration schema */ }
+  if (campaigns.length) {
+    try { db.prepare('DELETE FROM playlist_items WHERE layout_ref_id = ?').run(req.params.id); } catch (_) { /* gone with the FK */ }
+    for (const pid of campaigns) {
+      try {
+        const p = db.prepare('SELECT status FROM playlists WHERE id = ?').get(pid);
+        if (p && p.status === 'published') require('../lib/corporate/actor').runAsSystem(() => require('./playlists').publishPlaylist(pid, req));
+      } catch (e) { console.warn(`[campaign] republish of ${pid} after layout delete failed: ${e && e.message}`); }
+    }
+  }
   // foreign_keys is OFF here, so ON DELETE SET NULL never fires: clear walls that used it by hand.
   db.prepare('UPDATE video_walls SET layout_id = NULL WHERE layout_id = ?').run(req.params.id);
   // Same for playlists that chose it (3.0 playlist layouts): they go back to "the screen's own".

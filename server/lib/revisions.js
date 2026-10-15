@@ -83,12 +83,19 @@ function smartItemsState(db, row) {
   } catch (_) { return []; }
 }
 
+function zoneSourcesOf(db, itemId) {
+  const out = {};
+  try { for (const r of db.prepare('SELECT zone_id, playlist_id FROM playlist_item_zone_sources WHERE item_id = ? ORDER BY zone_id').all(itemId)) out[r.zone_id] = r.playlist_id; } catch (_) { /* pre-migration */ }
+  return out;
+}
+
 function capturePlaylist(db, row) {
   // slot_id (a corporate local slot placement) only when set — with its name, so a restore can say
   // which slot it could not bring back — and only where the column exists (hand-built fixtures).
   const hasSlots = require('./corporate/schema-probe').hasColumn(db, 'playlist_items', 'slot_id');
+  const hasLayoutRef = require('./corporate/schema-probe').hasColumn(db, 'playlist_items', 'layout_ref_id');
   const items = db.prepare(`SELECT pi.id, pi.content_id, pi.widget_id, pi.child_playlist_id, pi.zone_id, pi.sort_order, pi.duration_sec, pi.muted, pi.play_from, pi.play_until, pi.enabled, pi.log_play, pi.fit_mode, pi.play_when, pi.weight, pi.repeat_every_sec, pi.play_to_end
-                                   ${hasSlots ? ', pi.slot_id, (SELECT s.name FROM corporate_slots s WHERE s.id = pi.slot_id) AS slot_name' : ''}
+                                   ${hasSlots ? ', pi.slot_id, (SELECT s.name FROM corporate_slots s WHERE s.id = pi.slot_id) AS slot_name' : ''}${hasLayoutRef ? ', pi.layout_ref_id' : ''}
                               FROM playlist_items pi WHERE pi.playlist_id = ? ORDER BY pi.sort_order ASC, pi.id ASC`).all(row.id)
     .map((it) => ({
       content_id: it.content_id || null, widget_id: it.widget_id || null, child_playlist_id: it.child_playlist_id || null,
@@ -100,6 +107,8 @@ function capturePlaylist(db, row) {
       ...(it.repeat_every_sec ? { repeat_every_sec: it.repeat_every_sec } : {}),
       ...(it.play_to_end ? { play_to_end: 1 } : {}),
       ...(it.slot_id ? { slot_id: it.slot_id, slot_name: it.slot_name || null } : {}),
+      // 3.0 campaigns: a layout item and its zones' playlists, only when set (same reason).
+      ...(it.layout_ref_id ? { layout_ref_id: it.layout_ref_id, zone_sources: zoneSourcesOf(db, it.id) } : {}),
       schedules: scheduleBlocksFor(db, it.id),
     }));
   const state = { name: row.name, description: row.description || '', playback_order: row.playback_order || 'sequential', items };
@@ -563,7 +572,15 @@ function restoreToDraft(db, { type, id, revisionId, actor, materialized = null }
           db.prepare('UPDATE corporate_slots SET retired_at = NULL WHERE id = ?').run(it.slot_id);
         }
         try {
+          // 3.0 campaigns: a layout item whose layout is gone is not restored (nothing to show).
+          if (it.layout_ref_id && !db.prepare('SELECT 1 FROM layouts WHERE id = ?').get(it.layout_ref_id)) continue;
           const r = ins.run(id, it.content_id || null, it.widget_id || null, it.child_playlist_id || null, it.zone_id || null, it.sort_order, it.duration_sec, it.muted ? 1 : 0, it.play_from || null, it.play_until || null, it.enabled === 0 ? 0 : 1, it.log_play === 0 ? 0 : 1, it.fit_mode || null, it.play_when || null, it.weight || 1, it.repeat_every_sec || null, it.play_to_end ? 1 : null, ...(hasSlots ? [it.slot_id || null] : []));
+          if (it.layout_ref_id) {
+            db.prepare('UPDATE playlist_items SET layout_ref_id = ? WHERE id = ?').run(it.layout_ref_id, r.lastInsertRowid);
+            for (const [zid, pid] of Object.entries(it.zone_sources || {})) {
+              try { db.prepare('INSERT INTO playlist_item_zone_sources (item_id, zone_id, playlist_id) VALUES (?, ?, ?)').run(r.lastInsertRowid, zid, pid); } catch (_) { /* zone or playlist gone */ }
+            }
+          }
           for (const b of it.schedules || []) {
             const cols = Object.keys(b);
             if (!cols.length) continue;

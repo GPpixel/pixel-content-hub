@@ -39,6 +39,9 @@ import com.remotedisplay.player.player.PipOverlay
 import com.remotedisplay.player.player.SlideAudioPlayer
 import com.remotedisplay.player.player.WallController
 import com.remotedisplay.player.player.GroupScheduleController
+import com.remotedisplay.player.player.Campaign
+import com.remotedisplay.player.player.CampaignPlayer
+import com.remotedisplay.player.player.CampaignStep
 import com.remotedisplay.player.player.LayoutMode
 import com.remotedisplay.player.player.layoutModeOf
 import com.remotedisplay.player.player.ZoneManager
@@ -75,6 +78,8 @@ class MainActivity : AppCompatActivity() {
     private var slideAudioPlayer: SlideAudioPlayer? = null
     private lateinit var updateChecker: UpdateChecker
     private var zoneManager: ZoneManager? = null
+    // 3.0 campaigns: whole layouts switching with full-screen items (player/CampaignPlayer.kt).
+    private var campaignPlayer: CampaignPlayer? = null
     // Wall zones: a video wall's own layout, each zone paced by the shared clock (WallZoneRenderer).
     private var wallZones: WallZoneRenderer? = null
     // #473: walk-up interactive web pages (fullscreen only; passive in zones, walls and groups).
@@ -317,6 +322,18 @@ class MainActivity : AppCompatActivity() {
         zoneManager = ZoneManager(this, rootView as FrameLayout) {
             playlistController.onVideoComplete()
         }
+        campaignPlayer = CampaignPlayer(
+            stage = rootView,
+            zones = { zoneManager },
+            render = { step -> renderCampaignStep(step) },
+            // Proof of play: the layout itself, and a full-screen step's item, like any played item.
+            onLayoutStart = { l -> if (l.gate.optInt("log_play", 1) != 0) wsService?.sendLayoutStart(l.layoutId, l.layoutName, (l.durationMs / 1000).toInt()) },
+            onItemStart = { s ->
+                val cid = if (!s.item.isNull("widget_id") && s.item.optString("widget_id", "").isNotEmpty()) s.item.optString("widget_id") else s.item.optString("content_id", "")
+                if (s.item.optInt("log_play", 1) != 0) wsService?.sendPlayStart(cid, s.item.optString("filename", s.item.optString("widget_name", "")), (s.durationMs / 1000).toInt())
+            },
+            onNothingAllowed = { zoneManager?.cleanup(); showStatus("Nothing scheduled right now") },
+        )
         // Wall zones draw into the wall-transformed rootView, just above the static fullscreen views
         // (and below the status overlay and anything layered on later).
         wallZones = WallZoneRenderer(
@@ -1016,6 +1033,7 @@ class MainActivity : AppCompatActivity() {
             val wallObj = if (data.isNull("wall_config")) null else data.optJSONObject("wall_config")
             if (wallObj != null) {
                 com.remotedisplay.player.util.DebugLog.i("Player", "Layout: VIDEO-WALL (${assignments.length()} assignments)")
+                if (campaignPlayer?.isActive == true) handler.post { campaignPlayer?.stop() }   // a wall never runs a campaign
                 if (zoneManager?.hasZones() == true) zoneManager?.cleanup()
                 groupSchedule.exit()                 // wall and group are mutually exclusive
                 kiosk?.hide()                        // interactive pages render passively on a wall
@@ -1053,6 +1071,22 @@ class MainActivity : AppCompatActivity() {
             val layoutObj = if (data.isNull("layout")) null else data.optJSONObject("layout")
             val layoutZones = layoutObj?.optJSONArray("zones")
 
+            // 3.0 campaigns (player/Campaign.kt): whole layouts switching with full-screen items. The
+            // server sends `campaign` only because PlayerCapabilities declares layout.campaign; never
+            // in a synced group (one shared item clock), where the fallback in assignments plays.
+            val campaign = if (groupObj == null) Campaign.parse(data) else null
+            if (campaign != null) {
+                com.remotedisplay.player.util.DebugLog.i("Player", "Layout: CAMPAIGN (${campaign.steps.size} steps)")
+                handler.post { campaignPlayer?.apply(campaign) }
+            } else {
+            if (campaignPlayer?.isActive == true) {
+                handler.post {
+                    campaignPlayer?.stop()
+                    zoneManager?.cleanup()
+                    zoneManager?.lastAssignmentSig = null
+                    zoneManager?.lastZoneSig = null
+                }
+            }
             if (layoutZones != null && layoutZones.length() > 1) {
                 // Multi-zone mode - use ZoneManager
                 val layoutId = layoutObj?.optString("id", "") ?: ""
@@ -1092,6 +1126,7 @@ class MainActivity : AppCompatActivity() {
                 if (zoneManager?.hasZones() == true) handler.post { zoneManager?.cleanup() }
                 playlistController.updatePlaylist(assignments, data.optString("playback_order", "sequential"))
             }
+            } // end else (not a campaign)
             } // end else (not a video wall)
 
             // #170: a genuine content change (first load, reassignment, toggle-back) resets any
@@ -1131,8 +1166,13 @@ class MainActivity : AppCompatActivity() {
                     } catch (e: Exception) { Log.w("MainActivity", "cache sweep failed: ${e.message}") }
                 }
 
-                for (i in 0 until assignments.length()) {
-                    val item = assignments.getJSONObject(i)
+                // 3.0 campaigns: every zone and full-screen item a campaign can show is downloaded too,
+                // so the next layout's media is on disk before the switch (this player's preload).
+                val toFetch = org.json.JSONArray()
+                for (i in 0 until assignments.length()) toFetch.put(assignments.getJSONObject(i))
+                try { for (it in Campaign.items(Campaign.parse(data))) toFetch.put(it) } catch (e: Exception) { /* fallback list only */ }
+                for (i in 0 until toFetch.length()) {
+                    val item = toFetch.getJSONObject(i)
                     // Widget assignments have no downloadable content file - skip
                     // (also avoids getString throwing on a null content_id).
                     val widgetId = if (item.isNull("widget_id")) "" else item.optString("widget_id", "")
@@ -1707,6 +1747,34 @@ class MainActivity : AppCompatActivity() {
 
     /** Build zones and render assignments into them, recording the change-detection signatures so a
      *  later identical server payload is a no-op. Call on the main thread. */
+    /*
+     * 3.0 campaigns: draw one step. A layout step is its own zones; a full-screen item is a one-zone
+     * layout. The single-item engine stays stopped while a campaign runs, and the zone signatures are
+     * cleared so the normal path rebuilds from scratch if the campaign ends.
+     */
+    private fun renderCampaignStep(step: CampaignStep) {
+        hideStatus()
+        kiosk?.hide()
+        if (::mediaPlayer.isInitialized) mediaPlayer.stop()
+        playlistController.stop()
+        playerView.visibility = View.GONE
+        imageView.visibility = View.GONE
+        val zm = zoneManager ?: return
+        when (step) {
+            is CampaignStep.Layout -> {
+                zm.setupZones(step.zones, step.layoutId)
+                zm.renderAssignments(step.assignments(), config.serverUrl, contentCache, config.deviceId)
+            }
+            is CampaignStep.Item -> {
+                zm.setupZones(Campaign.fullScreenZones(), Campaign.FULL_ZONE_ID)
+                val a = JSONObject(step.item.toString()).put("zone_id", Campaign.FULL_ZONE_ID)
+                zm.renderAssignments(org.json.JSONArray().put(a), config.serverUrl, contentCache, config.deviceId)
+            }
+        }
+        zm.lastAssignmentSig = null
+        zm.lastZoneSig = null
+    }
+
     private fun applyMultiZoneLayout(layoutZones: org.json.JSONArray, layoutId: String, assignments: org.json.JSONArray) {
         hideStatus()
         kiosk?.hide()

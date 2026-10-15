@@ -1621,6 +1621,21 @@ class WebSocketService : Service() {
         } catch (e: Throwable) { Log.w("WebSocketService", "sendPlayStart: ${e.message}") }
     }
 
+    /** 3.0 campaigns: a whole layout went on screen (server: play-event layout_start). Live only. */
+    fun sendLayoutStart(layoutId: String, layoutName: String, durationSec: Int) {
+        if (socket?.connected() != true || layoutId.isEmpty()) return
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("event", "layout_start")
+                put("layout_id", layoutId)
+                put("content_name", layoutName)
+                put("duration_sec", if (durationSec > 0) durationSec else JSONObject.NULL)
+            }
+            socket?.emit("device:play-event", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendLayoutStart: ${e.message}") }
+    }
+
     fun sendPlayEnd(contentId: String, contentName: String, completed: Boolean) {
         if (socket?.connected() != true) {
             /*

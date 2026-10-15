@@ -75,6 +75,8 @@ const EXPORTED = {
   playlists: { category: 'playlists', scope: ws() },
   playlist_items: { category: 'playlists', scope: via('playlist_id', 'playlists') },
   playlist_item_schedules: { category: 'playlists', scope: via('playlist_item_id', 'playlist_items') },
+  // 3.0 campaigns: what each zone of a layout item plays (lib/campaign.js).
+  playlist_item_zone_sources: { category: 'playlists', scope: via('item_id', 'playlist_items') },
   corporate_slots: { category: 'playlists', scope: org() },
   corporate_mandates: { category: 'playlists', scope: org() },
   corporate_slot_fills: { category: 'playlists', scope: ws() },

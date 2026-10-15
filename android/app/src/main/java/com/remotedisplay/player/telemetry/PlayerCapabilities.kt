@@ -54,6 +54,9 @@ object PlayerCapabilities {
                 // server's strip keeps rtsp items off screens that cannot open rtsp://.
                 "playback.rtsp",
                 "playback.zones", "playback.transitions", "playback.pip",
+                // 3.0 campaigns: a playlist whose items are whole layouts (player/CampaignPlayer.kt).
+                // In no server baseline: an older APK gets the plain fallback list instead.
+                "layout.campaign",
                 // HOLD items (application/x-st-hold, hold://blank | hold://freeze): fullscreen
                 // (MediaPlayerManager.holdFreeze/holdBlank on the item's timer, or the group/wall
                 // tick), normal zones (ZoneManager) and wall zones. In no server baseline: an older

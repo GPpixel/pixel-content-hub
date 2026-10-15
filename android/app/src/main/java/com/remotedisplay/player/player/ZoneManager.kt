@@ -70,6 +70,9 @@ class ZoneManager(
 
     fun hasZones(): Boolean = zones.isNotEmpty()
 
+    /** 3.0 campaigns: the same schedule / window / enabled gate a zone item gets, for a whole step. */
+    fun allows(a: JSONObject): Boolean = assignmentAllows(a)
+
     fun setupZones(zonesJson: JSONArray, layoutId: String? = null) {
         currentLayoutId = layoutId
         cleanup()

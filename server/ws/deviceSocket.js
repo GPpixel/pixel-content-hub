@@ -130,6 +130,21 @@ const _insertPlay = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?, 'playlist', (SELECT workspace_id FROM devices WHERE id = ?))
 `);
 
+/*
+ * 3.0 campaigns (lib/campaign.js): a layout step's own proof-of-play row, and the layout a zone
+ * item played in. The layout must be one this device's workspace may show (its own, or a template):
+ * a player cannot attribute plays to another tenant's layout by naming its id.
+ */
+// Prepared on first use, not at load: a hand-built test schema without play_logs.layout_id must
+// still be able to load this module.
+const _layoutForPlay = { get: (...a) => db.prepare(`SELECT l.id, l.name FROM layouts l WHERE l.id = ?
+  AND (l.is_template = 1 OR l.workspace_id = (SELECT workspace_id FROM devices WHERE id = ?))`).get(...a) };
+const _insertLayoutPlay = { run: (...a) => db.prepare(`
+  INSERT INTO play_logs (device_id, content_id, widget_id, zone_id, content_name, started_at, trigger_type, workspace_id, layout_id)
+  VALUES (?, NULL, NULL, NULL, ?, ?, 'layout', (SELECT workspace_id FROM devices WHERE id = ?), ?)
+`).run(...a) };
+const lastLayoutLogAt = new Map();
+
 /* Close by rowid — the whole point of remembering it. */
 const _closePlayById = db.prepare(`
   UPDATE play_logs SET ended_at = ?,
@@ -655,6 +670,7 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
 
   let assignments = [];
   let playback_order = 'sequential';
+  let campaignRaw = null;
   /*
    * ⚠️ CORPORATE: a head office mandate drives this screen (source 'corporate', with or without a
    * playlist — a DARK mandate has none). Three things differ from an ordinary payload:
@@ -768,6 +784,11 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
     assignments = dropLiveIfUnsupported(assignments, baseSink);
   } else if (device?.playlist_id) {
     const playlist = db.prepare('SELECT published_snapshot, published_playback_order, workspace_id FROM playlists WHERE id = ?').get(device.playlist_id);
+    // 3.0 campaigns (lib/campaign.js): the stored structure, read only for a player that can use it.
+    if (playlist && capsLib.supports(device, 'layout.campaign')) {
+      try { campaignRaw = (db.prepare('SELECT published_campaign FROM playlists WHERE id = ?').get(device.playlist_id) || {}).published_campaign || null; }
+      catch (_) { campaignRaw = null; }   // pre-migration schema
+    }
     if (playlist?.published_snapshot) {
       try { assignments = JSON.parse(playlist.published_snapshot); } catch (e) { assignments = []; }
       /*
@@ -1056,6 +1077,32 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
    * missed the change still stops counting on its next payload.
    */
   assembled.audience = require('../lib/audience').payloadConfig(deviceId);
+  /*
+   * 3.0 CAMPAIGNS (lib/campaign.js, docs/layouts-and-campaigns.md): a player that declares
+   * layout.campaign also gets the structure — whole layouts switching with full-screen items — while
+   * `assignments` above stays the documented fallback. Every zone item goes through the same
+   * per-item pipeline as a playlist item (revisions, unsupported-media strip, weather/area, file URLs,
+   * data-source bag). Not on a wall or in a synced group (both run one shared item clock) and never
+   * under an emergency or automation override: those play the fallback. Never fatal.
+   */
+  if (campaignRaw && !wall_config && !group_sync && !overrideNow && !hookNow) {
+    try {
+      const processList = (list) => {
+        let l = Array.isArray(list) ? list : [];
+        refreshWidgetRevs(l, deviceId);
+        refreshContentRevs(l);
+        l = dropLiveIfUnsupported(l);
+        stampFileUrls(l, deviceId);
+        l = require('../lib/local-conditions').filterItems(l, device, opts.weather || undefined);
+        attachDataSourceBag(l, device.workspace_id || null);
+        return l;
+      };
+      const c = require('../lib/campaign').payloadCampaign(db, JSON.parse(campaignRaw), device, processList);
+      if (c) assembled.campaign = c;
+    } catch (e) {
+      console.warn(`[campaign] structure for ${deviceId} skipped: ${e && e.message}`);
+    }
+  }
   /*
    * The zone's UTC-offset table (lib/tz-table.js), for a player with no time-zone database of its
    * own (the Roku) — so it evaluates schedules and power windows in the zone `timezone` names, not
@@ -1890,6 +1937,10 @@ const EVENT_APPLIERS = Object.freeze({
           // (better-sqlite3 refuses positional .run() against ?1-style placeholders, so the
           // parameter cannot simply be reused by number.)
           const info = _insertPlay.run(device_id, cid, wid, zone_id || null, content_name || 'Unknown', Math.floor(nowMs / 1000), device_id);
+          // 3.0 campaigns: which layout this zone item played in (sent only by campaign players).
+          if (data.layout_id && typeof data.layout_id === 'string') {
+            try { if (_layoutForPlay.get(data.layout_id, device_id)) db.prepare('UPDATE play_logs SET layout_id = ? WHERE rowid = ?').run(data.layout_id, info.lastInsertRowid); } catch (_) { /* pre-migration */ }
+          }
           /*
            * ⚠️ #307: REMEMBER THE ROW WE JUST OPENED.
            *
@@ -1945,6 +1996,20 @@ const EVENT_APPLIERS = Object.freeze({
           duration_sec: typeof duration_sec === 'number' && duration_sec > 0 ? duration_sec : null,
           started_at: Date.now(),
         });
+      } else if (event === 'layout_start') {
+        /*
+         * 3.0 campaigns: a whole layout went on screen for a campaign step. Its own row (trigger_type
+         * 'layout', named after the layout), throttled like play_start but on its own clock, so a
+         * layout switch and the first zone item starting in the same second both count.
+         */
+        const nowMs = eventTimeMs(data, ctx);
+        if (nowMs - (lastLayoutLogAt.get(device_id) || 0) >= PLAY_LOG_MIN_GAP_MS && typeof data.layout_id === 'string') {
+          const l = _layoutForPlay.get(data.layout_id, device_id);
+          if (l) {
+            lastLayoutLogAt.set(device_id, nowMs);
+            try { _insertLayoutPlay.run(device_id, l.name || 'Layout', Math.floor(nowMs / 1000), device_id, l.id); } catch (_) { /* pre-migration */ }
+          }
+        }
       } else if (event === 'play_offline') {
         /*
          * #299 BACKFILL. A player that kept playing while the socket was down replays what it

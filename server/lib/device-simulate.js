@@ -339,7 +339,10 @@ function stateAt(ctx, ms) {
     return itemVerdict(it, LI);
   });
   const powerOff = !!(ctx.powerSupported && ctx.power && powerOffAt(ctx.power, ctx.powerClock(ms)));
-  return { ms, active, entry, verdicts, powerOff };
+  // 3.0 campaigns: each step's own verdict (its dayparts / window / play_when), for the timeline.
+  const steps = entry.payload && entry.payload.campaign && Array.isArray(entry.payload.campaign.steps) ? entry.payload.campaign.steps : null;
+  const stepVerdicts = steps ? steps.map((s) => itemVerdict(s.type === 'layout' ? s : s.item, LI)) : null;
+  return { ms, active, entry, verdicts, powerOff, stepVerdicts };
 }
 
 function playlistName(ctx, id) {
@@ -402,6 +405,34 @@ function layoutInfo(ctx, resolved, sched) {
   let name = null;
   try { name = (ctx.db.prepare('SELECT name FROM layouts WHERE id = ?').get(id) || {}).name || null; } catch (_) { name = null; }
   return { id, name, source };
+}
+
+/*
+ * 3.0 campaigns: what a campaign screen shows at this instant — its steps (layouts and full-screen
+ * items) with the same per-step verdicts as items — or, for a screen that will play the simplified
+ * fallback, says so (`fallback: true`; `items` above is then that fallback, which is what it plays).
+ */
+function campaignInfo(ctx, entry, LI) {
+  const c = entry.payload && entry.payload.campaign;
+  if (c && Array.isArray(c.steps)) {
+    return {
+      fallback: false,
+      steps: c.steps.map((s) => {
+        const reason = itemVerdict(s.type === 'layout' ? s : s.item, LI);
+        if (s.type === 'layout') {
+          const zones = Object.values(s.zones || {});
+          return { type: 'layout', layout_id: s.layout_id, label: (s.layout && s.layout.name) || '', duration_sec: s.duration_sec || null,
+            zones: zones.length, items: zones.reduce((n, l) => n + l.length, 0), variant: (s.layout && s.layout.variant) || null, plays: reason === null, reason };
+        }
+        return { type: 'item', label: itemLabel(s.item), duration_sec: (s.item && s.item.duration_sec) || null, plays: reason === null, reason };
+      }),
+    };
+  }
+  const pid = entry.resolved && entry.resolved.playlist_id;
+  if (!pid) return null;
+  let has = false;
+  try { has = !!(ctx.db.prepare('SELECT published_campaign FROM playlists WHERE id = ?').get(pid) || {}).published_campaign; } catch (_) { has = false; }
+  return has ? { fallback: true, steps: [] } : null;
 }
 
 function liveNow(deviceId) {
@@ -512,6 +543,7 @@ function simulate(deviceId, atMs, opts = {}) {
       ? { content_id: entry.payload.default_content.content_id, label: entry.payload.default_content.filename || '' } : null,
     layout_id: resolved.layout_id || null,
     layout: layoutInfo(ctx, resolved, entry.sched),
+    campaign: campaignInfo(ctx, entry, LI),
     power: {
       schedule: !!ctx.power,
       supported: ctx.powerSupported,
@@ -580,7 +612,11 @@ function edgeMinutes(ctx) {
     add(a); add(b); if (b !== null) add(b + 1);
   }
   for (const e of ctx.payloads.values()) {
-    for (const it of e.items) {
+    // 3.0 campaigns: a step's own gates and every zone item's are edges too.
+    const steps = e.payload && e.payload.campaign && Array.isArray(e.payload.campaign.steps) ? e.payload.campaign.steps : [];
+    const campaignGated = steps.map((s) => (s.type === 'layout' ? s : s.item))
+      .concat(...steps.filter((s) => s.type === 'layout').map((s) => [].concat(...Object.values(s.zones || {}))));
+    for (const it of e.items.concat(campaignGated)) {
       if (!it) continue;
       for (const b of it.schedules || []) { add(hmToMin(b && b.start)); add(hmToMin(b && b.end)); }
       for (const k of ['play_from', 'play_until']) {
@@ -594,7 +630,8 @@ function edgeMinutes(ctx) {
 }
 
 function signatureOf(st) {
-  return `${st.active ? st.active.id : ''}|${st.entry.key}|${st.powerOff ? 1 : 0}|${st.verdicts.map((v) => (v === null ? '1' : '0')).join('')}`;
+  return `${st.active ? st.active.id : ''}|${st.entry.key}|${st.powerOff ? 1 : 0}|${st.verdicts.map((v) => (v === null ? '1' : '0')).join('')}`
+    + (st.stepVerdicts ? `|c${st.stepVerdicts.map((v) => (v === null ? '1' : '0')).join('')}` : '');
 }
 
 /**
@@ -675,6 +712,10 @@ function segmentOf(ctx, st) {
     total: st.entry.items.length,
     items: names,
     default_content: playing === 0 && !!st.entry.payload.default_content,
+    // 3.0 campaigns: the steps that play in this segment, by name ("Lunch layout", "promo.mp4").
+    ...(st.stepVerdicts ? { campaign: st.entry.payload.campaign.steps
+      .filter((s, i) => st.stepVerdicts[i] === null)
+      .map((s) => (s.type === 'layout' ? (s.layout && s.layout.name) || '' : itemLabel(s.item))).slice(0, 8) } : {}),
   };
 }
 

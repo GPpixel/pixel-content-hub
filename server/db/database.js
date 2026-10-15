@@ -3278,6 +3278,27 @@ const migrations = [
   // A zone deleted while foreign_keys is off (see routes/layouts.js) takes its versions with it.
   `CREATE TRIGGER IF NOT EXISTS trg_layout_zone_variants_zone_del AFTER DELETE ON layout_zones
      BEGIN DELETE FROM layout_zone_variants WHERE zone_id = OLD.id; END`,
+  /*
+   * 3.0 campaigns (lib/campaign.js, docs/layouts-and-campaigns.md). A playlist item may be a WHOLE
+   * LAYOUT (layout_ref_id); each of its zones plays a chosen playlist (playlist_item_zone_sources)
+   * or this playlist's rows bound to that zone. published_campaign is the structure players that
+   * declare layout.campaign get; NULL for every playlist without a layout item, whose snapshot and
+   * payload are unchanged. play_logs.layout_id records which layout a play happened in.
+   */
+  'ALTER TABLE playlist_items ADD COLUMN layout_ref_id TEXT REFERENCES layouts(id) ON DELETE CASCADE',
+  `CREATE TABLE IF NOT EXISTS playlist_item_zone_sources (
+     item_id INTEGER NOT NULL REFERENCES playlist_items(id) ON DELETE CASCADE,
+     zone_id TEXT NOT NULL REFERENCES layout_zones(id) ON DELETE CASCADE,
+     playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+     PRIMARY KEY (item_id, zone_id))`,
+  'CREATE INDEX IF NOT EXISTS idx_pizs_playlist ON playlist_item_zone_sources(playlist_id)',
+  // Paths that delete with foreign_keys off (see routes/layouts.js) still take the rows with them.
+  `CREATE TRIGGER IF NOT EXISTS trg_pizs_item_del AFTER DELETE ON playlist_items
+     BEGIN DELETE FROM playlist_item_zone_sources WHERE item_id = OLD.id; END`,
+  `CREATE TRIGGER IF NOT EXISTS trg_pizs_zone_del AFTER DELETE ON layout_zones
+     BEGIN DELETE FROM playlist_item_zone_sources WHERE zone_id = OLD.id; END`,
+  'ALTER TABLE playlists ADD COLUMN published_campaign TEXT',
+  'ALTER TABLE play_logs ADD COLUMN layout_id TEXT',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.
