@@ -5784,4 +5784,10 @@ export default {
   'campaign.forecast_steps': 'Lay-outs en items, op volgorde',
   'campaign.forecast_fallback_items': 'Vereenvoudigde versie (oudere spelers)',
   'campaign.forecast_fallback': 'De speler van dit scherm kan niet van lay-out wisselen, dus hij speelt de vereenvoudigde versie van deze afspeellijst: de items op volledig scherm en de hoofdzone van elke lay-out op volledig scherm.',
+  'device.mirror.now_playing': 'Spiegelt {source}: speelt {playlist}',
+  'device.mirror.now_playing_item': 'Spiegelt {source}: speelt {playlist} (nu: {item})',
+  'device.mirror.now_nothing': 'Spiegelt {source}: daar is nog niets aan toegewezen',
+  'screen_share.card.mirrors_line': 'Wordt ook getoond op de spiegels ({count}): {names}',
+  'screen_share.multi.joined': '{name} doet mee met het delen.',
+  'screen_share.multi.full': '{name} is verbonden maar toont het delen niet: het staat al op zoveel schermen als één deelsessie kan bereiken.',
 };

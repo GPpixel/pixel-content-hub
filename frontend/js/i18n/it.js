@@ -4061,4 +4061,10 @@ export default {
   'campaign.forecast_steps': 'Layout ed elementi, in ordine',
   'campaign.forecast_fallback_items': 'Versione semplificata (player meno recenti)',
   'campaign.forecast_fallback': 'Il player di questo schermo non può cambiare layout, quindi riproduce la versione semplificata di questa playlist: gli elementi a schermo intero e la zona principale di ogni layout, a schermo intero.',
+  'device.mirror.now_playing': 'Replica di {source}: riproduce {playlist}',
+  'device.mirror.now_playing_item': 'Replica di {source}: riproduce {playlist} (ora: {item})',
+  'device.mirror.now_nothing': 'Replica di {source}: non ha ancora nulla di assegnato',
+  'screen_share.card.mirrors_line': 'Si vede anche sulle sue repliche ({count}): {names}',
+  'screen_share.multi.joined': '{name} si è unito alla condivisione.',
+  'screen_share.multi.full': '{name} si è collegato ma non mostra la condivisione: è già su tutti gli schermi che una condivisione può raggiungere.',
 };

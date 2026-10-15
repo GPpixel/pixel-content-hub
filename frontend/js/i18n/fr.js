@@ -4819,4 +4819,10 @@ export default {
   'campaign.forecast_steps': 'Mises en page et éléments, dans l’ordre',
   'campaign.forecast_fallback_items': 'Version simplifiée (anciens lecteurs)',
   'campaign.forecast_fallback': 'Le lecteur de cet écran ne sait pas changer de mise en page : il diffuse donc la version simplifiée de cette liste de lecture, c’est-à-dire les éléments en plein écran et la zone principale de chaque mise en page, en plein écran.',
+  'device.mirror.now_playing': 'Miroir de {source} : diffuse {playlist}',
+  'device.mirror.now_playing_item': 'Miroir de {source} : diffuse {playlist} (en cours : {item})',
+  'device.mirror.now_nothing': 'Miroir de {source} : rien ne lui est encore attribué',
+  'screen_share.card.mirrors_line': 'S\'affiche aussi sur ses miroirs ({count}) : {names}',
+  'screen_share.multi.joined': '{name} a rejoint le partage.',
+  'screen_share.multi.full': '{name} est connecté mais n\'affiche pas le partage : il est déjà diffusé sur autant d\'écrans qu\'un partage peut en atteindre.',
 };

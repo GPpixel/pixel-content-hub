@@ -2915,4 +2915,10 @@ export default {
   'campaign.forecast_steps': 'लेआउट और आइटम, क्रम से',
   'campaign.forecast_fallback_items': 'सरल संस्करण (पुराने प्लेयर)',
   'campaign.forecast_fallback': 'इस स्क्रीन का प्लेयर लेआउट नहीं बदल सकता, इसलिए यह इस प्लेलिस्ट का सरल संस्करण चलाता है: फ़ुल-स्क्रीन आइटम और हर लेआउट का मुख्य ज़ोन, फ़ुल स्क्रीन में।',
+  'device.mirror.now_playing': '{source} को मिरर कर रहा है: {playlist} चल रही है',
+  'device.mirror.now_playing_item': '{source} को मिरर कर रहा है: {playlist} चल रही है (अभी: {item})',
+  'device.mirror.now_nothing': '{source} को मिरर कर रहा है: उसे अभी तक कुछ असाइन नहीं किया गया है',
+  'screen_share.card.mirrors_line': 'इसके मिरर पर भी दिखता है ({count}): {names}',
+  'screen_share.multi.joined': '{name} शेयर में शामिल हो गया।',
+  'screen_share.multi.full': '{name} कनेक्ट हो गया, पर शेयर नहीं दिखा रहा: यह शेयर पहले ही उतनी स्क्रीन पर है जितनी एक शेयर तक पहुँच सकता है।',
 };

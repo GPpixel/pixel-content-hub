@@ -4103,4 +4103,10 @@ export default {
   'campaign.forecast_steps': 'Layouts e itens, em ordem',
   'campaign.forecast_fallback_items': 'Versão simplificada (players mais antigos)',
   'campaign.forecast_fallback': 'O player desta tela não consegue alternar layouts, então ele reproduz a versão simplificada desta playlist: os itens em tela cheia e a zona principal de cada layout, em tela cheia.',
+  'device.mirror.now_playing': 'Espelhando {source}: reproduz {playlist}',
+  'device.mirror.now_playing_item': 'Espelhando {source}: reproduz {playlist} (agora: {item})',
+  'device.mirror.now_nothing': 'Espelhando {source}: ainda não há nada atribuído a ela',
+  'screen_share.card.mirrors_line': 'Também aparece nos seus espelhos ({count}): {names}',
+  'screen_share.multi.joined': '{name} entrou no compartilhamento.',
+  'screen_share.multi.full': '{name} conectou, mas não mostra o compartilhamento: ele já está em tantas telas quanto um compartilhamento pode alcançar.',
 };

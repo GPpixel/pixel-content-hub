@@ -3730,4 +3730,10 @@ export default {
   'campaign.forecast_steps': '布局和项目（按顺序）',
   'campaign.forecast_fallback_items': '简化版本（旧版播放器）',
   'campaign.forecast_fallback': '此屏幕的播放器不能切换布局，因此会播放此播放列表的简化版本：全屏项目，以及全屏显示每个布局的主区域。',
+  'device.mirror.now_playing': '正在镜像 {source}：播放 {playlist}',
+  'device.mirror.now_playing_item': '正在镜像 {source}：播放 {playlist}（当前：{item}）',
+  'device.mirror.now_nothing': '正在镜像 {source}：尚未分配任何内容',
+  'screen_share.card.mirrors_line': '也会显示在其镜像上（{count}）：{names}',
+  'screen_share.multi.joined': '{name} 已加入共享。',
+  'screen_share.multi.full': '{name} 已连接，但未显示共享：此共享已达到可覆盖的屏幕数量上限。',
 };

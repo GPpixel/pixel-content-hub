@@ -4819,4 +4819,10 @@ export default {
   'campaign.forecast_steps': 'レイアウトとアイテム（再生順）',
   'campaign.forecast_fallback_items': '簡易版（古いプレーヤー向け）',
   'campaign.forecast_fallback': 'この画面のプレーヤーはレイアウトを切り替えられないため、このプレイリストの簡易版を再生します。全画面のアイテムと、各レイアウトのメインゾーンを全画面で表示します。',
+  'device.mirror.now_playing': '{source} をミラー中：{playlist} を再生中',
+  'device.mirror.now_playing_item': '{source} をミラー中：{playlist} を再生中（現在：{item}）',
+  'device.mirror.now_nothing': '{source} をミラー中：まだ何も割り当てられていません',
+  'screen_share.card.mirrors_line': 'ミラーにも表示されます（{count}）：{names}',
+  'screen_share.multi.joined': '{name} が共有に参加しました。',
+  'screen_share.multi.full': '{name} は接続しましたが、共有は表示されていません。1 つの共有で表示できる画面数の上限に達しています。',
 };

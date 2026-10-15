@@ -4186,4 +4186,10 @@ export default {
   'campaign.forecast_steps': 'Layouts und Elemente, der Reihe nach',
   'campaign.forecast_fallback_items': 'Vereinfachte Version (ältere Player)',
   'campaign.forecast_fallback': 'Der Player dieses Bildschirms kann nicht zwischen Layouts wechseln, daher spielt er die vereinfachte Version dieser Playlist: die Vollbild-Elemente und die Hauptzone jedes Layouts im Vollbild.',
+  'device.mirror.now_playing': 'Spiegelt {source}: spielt {playlist}',
+  'device.mirror.now_playing_item': 'Spiegelt {source}: spielt {playlist} (jetzt: {item})',
+  'device.mirror.now_nothing': 'Spiegelt {source}: dort ist noch nichts zugewiesen',
+  'screen_share.card.mirrors_line': 'Wird auch auf seinen Spiegelungen angezeigt ({count}): {names}',
+  'screen_share.multi.joined': '{name} ist dem Teilen beigetreten.',
+  'screen_share.multi.full': '{name} ist verbunden, zeigt das Teilen aber nicht: Es läuft bereits auf so vielen Bildschirmen, wie ein Teilen erreichen kann.',
 };

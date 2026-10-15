@@ -4137,4 +4137,10 @@ export default {
   'campaign.forecast_steps': 'Diseños y elementos, en orden',
   'campaign.forecast_fallback_items': 'Versión simplificada (reproductores antiguos)',
   'campaign.forecast_fallback': 'El reproductor de esta pantalla no puede cambiar de diseño, así que reproduce la versión simplificada de esta lista: los elementos a pantalla completa y la zona principal de cada diseño, a pantalla completa.',
+  'device.mirror.now_playing': 'Reflejando {source}: reproduce {playlist}',
+  'device.mirror.now_playing_item': 'Reflejando {source}: reproduce {playlist} (ahora: {item})',
+  'device.mirror.now_nothing': 'Reflejando {source}: todavía no tiene nada asignado',
+  'screen_share.card.mirrors_line': 'También se muestra en sus espejos ({count}): {names}',
+  'screen_share.multi.joined': '{name} se unió a la pantalla compartida.',
+  'screen_share.multi.full': '{name} se conectó, pero no muestra la pantalla compartida: ya está en tantas pantallas como puede alcanzar una sola.',
 };
