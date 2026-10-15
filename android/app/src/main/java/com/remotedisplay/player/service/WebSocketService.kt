@@ -1,0 +1,2282 @@
+package com.remotedisplay.player.service
+
+import android.app.Notification
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.wifi.WifiManager
+import android.os.Binder
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import kotlin.random.Random
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.remotedisplay.player.MainActivity
+import com.remotedisplay.player.RemoteDisplayApp
+import com.remotedisplay.player.data.DeletedDeviceWipe
+import com.remotedisplay.player.data.OfflinePlayQueue
+import com.remotedisplay.player.data.ServerConfig
+import com.remotedisplay.player.telemetry.DeviceInfo
+import io.socket.client.IO
+import io.socket.client.Socket
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
+
+class WebSocketService : Service() {
+
+    private var socket: Socket? = null
+    // #148 root-cause guard: the single-socket invariant. currentUrl + socketActive track the
+    // ONE socket so connect() is idempotent across every entry point (boot, service start,
+    // activity bind, foreground re-bind) — a re-bind can never open a duplicate. See
+    // ConnectionGuard. socketActive == "connected OR Socket.IO is auto-reconnecting it".
+    @Volatile private var socketActive = false
+    @Volatile private var currentUrl: String? = null
+    private var reopenRunnable: Runnable? = null
+    private var reconnectWatchdog: Runnable? = null
+    private lateinit var config: ServerConfig
+    private lateinit var deviceInfo: DeviceInfo
+    private val handler = Handler(Looper.getMainLooper())
+    // #314: pending hold from a server device:throttled, so we do not reconnect into the refusal.
+    private var throttleHold: Runnable? = null
+    private var heartbeatRunnable: Runnable? = null
+    private val binder = LocalBinder()
+
+    // v4 liveness watchdog state (see LivenessWatchdog for the pure decision logic).
+    // lastServerMessageAt: ANY inbound server message refreshes it (markAlive, wired into safeOn) —
+    // uses the monotonic elapsedRealtime clock so an NTP/wall-clock jump can't false-fire or blind
+    // the watchdog. livenessConfirmed: ARMED only after a device:heartbeat-ack (degrade-safe — an
+    // ack-less/old server never arms us, so no false-fire storm). currentThresholdMs: per-connection
+    // jittered 45s ± up to 10s. watchdogAttempt/lastWatchdogAttemptAt: exponential-backoff gate.
+    @Volatile private var lastServerMessageAt = 0L
+    @Volatile private var livenessConfirmed = false
+    @Volatile private var currentThresholdMs = LivenessWatchdog.THRESHOLD_BASE_MS
+    private var watchdogAttempt = 0
+    private var lastWatchdogAttemptAt = 0L
+
+    private fun markAlive() { lastServerMessageAt = SystemClock.elapsedRealtime() }
+
+    // feat/offline-cause-log: device-diagnostics / incident-log. All ADDITIVE and fully guarded — a
+    // panel whose ROM lacks any of these APIs must degrade to silence, never crash.
+    //  - disconnectedAtMs: elapsedRealtime of the FIRST socket 'disconnect' of the current offline
+    //    gap (0 = currently connected / no in-process gap). On 'connect' after a gap we emit a
+    //    device:connectivity-report so the server can tell "app survived the gap" (network/router)
+    //    from a reboot (the app can't report its own reboot — cold_start best-effort covers that).
+    //  - linkLostDuringGap: set by the default-network callback's onLost — "the physical link went
+    //    away at some point during the gap" (Wi-Fi/Ethernet down) vs "link up but server unreachable".
+    //  - lastIpSnapshot: last observed local IPv4, to compute ip_changed (DHCP/router change).
+    //  - sawFirstConnect: gates the one-shot cold-start report to the process's very first connect.
+    @Volatile private var disconnectedAtMs = 0L
+    @Volatile private var linkLostDuringGap = false
+    //  - internetOkDuringGap: a public-host reachability probe (1.1.1.1 / 8.8.8.8 :443) fired at
+    //    disconnect. When the link is UP but we're offline, this splits "OUR server is down"
+    //    (wider internet reachable) from "no internet — router/ISP down". null = probe didn't
+    //    finish / not run, in which case the server falls back to the generic router/upstream detail.
+    @Volatile private var internetOkDuringGap: Boolean? = null
+    private var lastIpSnapshot: String? = null
+    @Volatile private var sawFirstConnect = false
+    // A connectivity-report needs device auth on the (re)connected socket, so it is ARMED at
+    // 'connect' but FLUSHED from device:registered (once the server knows who we are).
+    @Volatile private var pendingReport = false
+    private var pendingOfflineMs = 0L
+    private var pendingLinkLost = false
+    private var pendingColdStart = false
+    private var pendingInternetOk: Boolean? = null
+    // Registered-once diagnostics plumbing; unregistered in onDestroy. Nullable so a register
+    // failure (locked-down ROM) just leaves the feature dark.
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var screenReceiver: BroadcastReceiver? = null
+
+    companion object {
+        // feat/offline-cause-log: if the process's FIRST connect happens within this long of boot
+        // (elapsedRealtime, which is wall-time since boot), treat it as a cold start (power/reboot)
+        // rather than a network gap. Generous so a slow panel's boot→launch→network still counts.
+        private const val COLD_START_WINDOW_MS = 120_000L
+        // #148: backoff before re-opening the single socket after a disconnect that Socket.IO
+        // does NOT auto-reconnect (io server/client disconnect) — never a blind immediate re-open.
+        private const val RECONNECT_AFTER_EVICT_MS = 3000L
+        // Reconnect backstop: tick period + how long a disconnect/silence must persist before we FORCE
+        // a fresh socket. Long enough to let Socket.IO reconnect on its own first; short enough that a
+        // wedged manager (network change, stuck reconnect) can't strand a panel offline for good.
+        private const val RECONNECT_WATCHDOG_TICK_MS = 20_000L
+        private const val RECONNECT_WATCHDOG_STALL_MS = 45_000L
+        // Fix 2: re-pair re-register backoff bounds (see handleServerRejection / scheduleRepairRegister).
+        private const val REPAIR_BACKOFF_MIN_MS = 3000L
+        private const val REPAIR_BACKOFF_MAX_MS = 60_000L
+    }
+
+    // Callbacks
+    var onPaired: ((String, String) -> Unit)? = null
+    var onUnpaired: (() -> Unit)? = null
+    var onRegistered: ((String) -> Unit)? = null
+    var onPlaylistUpdate: ((JSONObject) -> Unit)? = null
+    var onContentDelete: ((String) -> Unit)? = null
+    // #170: fired when the default network (re)connects — the player clears stuck download backoff
+    // so items that failed to download while the link was settling retry on the next sweep.
+    var onNetworkAvailable: (() -> Unit)? = null
+    var onScreenshotRequest: (() -> Unit)? = null
+    var onRemoteStart: (() -> Unit)? = null
+    var onRemoteStop: (() -> Unit)? = null
+    // #talk: duck (true) / restore (false) the content playback while a call/PA is active.
+    var onTalkDuck: ((Boolean) -> Unit)? = null
+    // 3.0 screen share: duck (true) / restore (false) the content while a share is on screen.
+    var onShareDuck: ((Boolean) -> Unit)? = null
+    private val screenShare by lazy {
+        com.remotedisplay.player.remote.ScreenShareController(
+            applicationContext,
+            credentials = {
+                val id = config.deviceId; val token = config.deviceToken; val url = config.serverUrl
+                if (id.isEmpty() || token.isEmpty() || url.isEmpty()) null else Triple(url, id, token)
+            },
+            onDuck = { on -> try { onShareDuck?.invoke(on) } catch (e: Throwable) { Log.e("WebSocketService", "share duck: ${e.message}") } },
+        )
+    }
+    var onRemoteTouch: ((Float, Float, String) -> Unit)? = null
+    var onRemoteKey: ((String) -> Unit)? = null
+    var onCommand: ((String, JSONObject?) -> Unit)? = null
+    var onWallSync: ((JSONObject) -> Unit)? = null
+    var onWallSyncRequest: ((JSONObject) -> Unit)? = null
+    var onGroupSync: ((JSONObject) -> Unit)? = null            // legacy leader-relay (unused by clock/schedule)
+    var onGroupSyncRequest: ((JSONObject) -> Unit)? = null     // legacy leader-relay (unused by clock/schedule)
+    var onGroupResync: (() -> Unit)? = null                    // #group-sync: server-nudged immediate re-align
+    var onPipShow: ((JSONObject) -> Unit)? = null
+    var onPipClear: ((JSONObject) -> Unit)? = null
+    var onMuteChanged: ((JSONObject) -> Unit)? = null
+
+    inner class LocalBinder : Binder() {
+        fun getService(): WebSocketService = this@WebSocketService
+    }
+
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        config = ServerConfig(this)
+        deviceInfo = DeviceInfo(this)
+        // Preferred durable path: if provisioning granted WRITE_SECURE_SETTINGS, turn our OWN
+        // accessibility service on here. It captures the whole screen AND survives every OTA (no
+        // MediaProjection consent to lose), and gives remote D-pad. No-op without the grant.
+        AccessibilityEnabler.ensureEnabled(this)
+        // An OTA restarts the app, which drops MediaProjection consent and silently downgrades the
+        // live view to the player's own window. Re-arm it here when this panel had it and can
+        // regrant without a dialog. No-op otherwise; see restoreIfPreviouslyGranted for why.
+        com.remotedisplay.player.ScreenCapturePermissionActivity.restoreIfPreviouslyGranted(this)
+        // #5: claim ONLY the mediaPlayback FGS type. The 2-arg startForeground
+        // claims every manifest-declared type, and on Android 14+ claiming
+        // mediaProjection without a consent token throws and kills the service at
+        // boot (the "app won't run on newer Android" symptom). Screen capture has
+        // its own mediaProjection-typed service (MediaProjectionService).
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            startForeground(1, createNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(1, createNotification())
+        }
+
+        // Keep CPU alive so the WebSocket connection stays alive in background
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "RemoteDisplay:WebSocket")
+        wakeLock?.acquire()
+
+        /*
+         * The backlight schedule, restored and ticking BEFORE any socket exists. A panel that
+         * reboots at 02:00 with no WAN must come back dark and stay dark until its window ends; if
+         * this waited for a connection it would sit lit in an empty shop all night, which is the
+         * cost the feature exists to avoid. START_STICKY brings the service back after a kill, and
+         * this runs again on that path too.
+         */
+        /*
+         * Saved endpoints, restored and ticking before any socket exists — a panel that reboots at
+         * 03:00 with no WAN must still poll its PLC. Owned HERE and not by the Activity for the
+         * same reason as the power schedule: an Activity-scoped poller stops whenever the screen
+         * sleeps, which on a panel running a display-power schedule is most of the time, and the
+         * two features would silently disable each other.
+         */
+        endpointPoller = com.remotedisplay.player.net.EndpointPoller(applicationContext) { result ->
+            handler.post {
+                try { socket?.emit("device:http-result", result.put("device_id", config.deviceId)) }
+                catch (e: Throwable) { Log.w("WebSocketService", "endpoint result emit: ${e.message}") }
+            }
+        }.also { it.restore(); it.start() }
+
+        powerSchedule = com.remotedisplay.player.power.PowerScheduleManager(
+            applicationContext,
+            onApply = { off -> applyScheduledPower(off) },
+            onStateChanged = { state -> setDisplayPowerState(state) }
+        ).also {
+            it.restore()     // applies the current window immediately — no waiting for an edge
+            it.start()
+        }
+
+        startReconnectWatchdog()
+
+        // feat/offline-cause-log: best-effort diagnostics plumbing (both guarded, both cleaned up in
+        // onDestroy). Failure to register either just leaves that signal dark — never fatal.
+        registerNetworkCallback()
+        registerScreenReceiver()
+    }
+
+    /**
+     * feat/offline-cause-log: watch the DEFAULT network so a connectivity-report can distinguish a
+     * lost physical link (Wi‑Fi/Ethernet down) from "link up but the server is unreachable". onLost
+     * of the default network during an offline gap flips linkLostDuringGap; it is reset after the
+     * next report. registerDefaultNetworkCallback is API 24; Android 6 registers for any network
+     * instead (API 21), which is the same signal for a single-link signage box. Everything is still
+     * wrapped so a locked-down ROM can't crash the service.
+     */
+    private fun registerNetworkCallback() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onLost(network: Network) {
+                    // Only meaningful mid-gap; if we're still connected this is a transient handoff.
+                    if (disconnectedAtMs != 0L) linkLostDuringGap = true
+                }
+                override fun onAvailable(network: Network) {
+                    // #170: fresh connectivity (boot Wi-Fi coming up, reconnect after a drop). Clear
+                    // any download backoff that ballooned while the link was settling, then pull the
+                    // current playlist so missing content re-downloads promptly. requestPlaylistRefresh
+                    // no-ops if the socket isn't connected yet; the normal register will follow.
+                    handler.post {
+                        onNetworkAvailable?.invoke()
+                        requestPlaylistRefresh()
+                    }
+                }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) cm.registerDefaultNetworkCallback(cb)
+            else cm.registerNetworkCallback(android.net.NetworkRequest.Builder().build(), cb)
+            netCallback = cb
+        } catch (e: Throwable) { Log.w("WebSocketService", "registerNetworkCallback: ${e.message}") }
+    }
+
+    /**
+     * feat/offline-cause-log: ACTION_SCREEN_ON/OFF can ONLY be delivered to a context-registered
+     * receiver (the framework refuses them from the manifest), so we register here and drop a
+     * device:event display_on/display_off — "the screen went black" as an incident, not an outage.
+     */
+    private fun registerScreenReceiver() {
+        try {
+            val r = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_OFF -> emitEvent("display_off", detail = "Screen off / sleep")
+                        Intent.ACTION_SCREEN_ON -> emitEvent("display_on", detail = "Screen on")
+                    }
+                }
+            }
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+            }
+            // Protected system broadcasts (SCREEN_ON/OFF) are exempt from the API 34 export-flag
+            // rule, but pass RECEIVER_NOT_EXPORTED explicitly so no OEM ROM can reject the register.
+            ContextCompat.registerReceiver(this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            screenReceiver = r
+        } catch (e: Throwable) { Log.w("WebSocketService", "registerScreenReceiver: ${e.message}") }
+    }
+
+    /**
+     * App-level reconnect backstop. Runs continuously (independent of the heartbeat, which STOPS on
+     * disconnect — so the #146 half-open watchdog can't cover a disconnected socket). If we've been
+     * disconnected + silent past the stall threshold, Socket.IO's own reconnect has likely wedged, so
+     * reset the guard and force ONE fresh socket. Idempotent while connected (does nothing).
+     */
+    private fun startReconnectWatchdog() {
+        reconnectWatchdog?.let { handler.removeCallbacks(it) }
+        reconnectWatchdog = object : Runnable {
+            override fun run() {
+                try {
+                    val connected = socket?.connected() == true
+                    val silenceMs = SystemClock.elapsedRealtime() - lastServerMessageAt
+                    if (!connected && silenceMs > RECONNECT_WATCHDOG_STALL_MS && config.serverUrl.isNotEmpty()) {
+                        Log.w("WebSocketService", "reconnect backstop: disconnected+silent ${silenceMs}ms — forcing a fresh socket")
+                        socketActive = false        // let ConnectionGuard permit a new socket over the wedged one
+                        connect()
+                    }
+                } catch (e: Throwable) { Log.w("WebSocketService", "reconnect backstop: ${e.message}") }
+                handler.postDelayed(this, RECONNECT_WATCHDOG_TICK_MS)
+            }
+        }
+        handler.postDelayed(reconnectWatchdog!!, RECONNECT_WATCHDOG_TICK_MS)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // #148 single owner: the SERVICE owns the one connection. Idempotent (ConnectionGuard),
+        // so a START_STICKY restart / re-delivery / boot start reuses a live socket and never
+        // opens a duplicate. No-op until a server url is configured (provisioning).
+        connect()
+        return START_STICKY
+    }
+
+    // Wrap every Socket.IO listener body in try/catch. A malformed payload from the server
+    // (or a transient state error during disconnect) used to surface as an unhandled
+    // exception on the Socket.IO IO thread and crash the whole app.
+    private fun Socket.safeOn(event: String, handler: (Array<Any?>) -> Unit): Socket {
+        on(event) { args ->
+            // v4: ANY inbound server message refreshes liveness (not just acks). The half-open
+            // decision additionally requires socket.connected(), so refreshing on a disconnect
+            // event is harmless. This is the single central receive-path hook.
+            markAlive()
+            try {
+                @Suppress("UNCHECKED_CAST")
+                handler(args as Array<Any?>)
+            } catch (e: Throwable) {
+                Log.e("WebSocketService", "Listener for '$event' failed: ${e.message}", e)
+            }
+        }
+        return this
+    }
+
+    /**
+     * Idempotent connect — the #148 root-cause guard. Safe to call from EVERY entry point
+     * (service start, activity bind, foreground transition, reconnect). If we already hold a
+     * live or self-healing socket to the same url, REUSE it; only ever open ONE socket per
+     * device. @Synchronized so racing entry points can't open two.
+     */
+    @Synchronized
+    fun connect(serverUrl: String? = null) {
+        val url = serverUrl ?: config.serverUrl
+        if (url.isEmpty()) {
+            consecutiveFailures++
+            Log.e("WebSocketService", "No server URL configured (${consecutiveFailures} consecutive)")
+            return
+        }
+        if (!ConnectionGuard.shouldOpenNewSocket(socket != null, currentUrl == url, socketActive)) {
+            Log.i("WebSocketService", "connect(): reusing existing socket to $url — no duplicate (#148)")
+            return
+        }
+        openSocket(url)
+    }
+
+    @Synchronized
+    private fun openSocket(url: String) {
+        disconnect()
+        currentUrl = url
+        socketActive = true
+
+        // v4 watchdog: a fresh socket is assumed alive; DIS-arm until it earns an ack again
+        // (degrade-safe), and pick a new jittered threshold for this connection so a fleet doesn't
+        // declare half-open in lockstep. watchdogAttempt is intentionally NOT reset here — it
+        // tracks repeated reconnect failures across sockets and resets on a healthy ack.
+        lastServerMessageAt = SystemClock.elapsedRealtime()
+        livenessConfirmed = false
+        currentThresholdMs = LivenessWatchdog.thresholdMs(Random.nextDouble())
+
+        try {
+            val options = IO.Options().apply {
+                forceNew = true
+                reconnection = true
+                reconnectionAttempts = Integer.MAX_VALUE
+                // Exponential backoff: starts at 1s, doubles each attempt, capped at 60s,
+                // ±50% jitter so a fleet doesn't reconnect in lockstep after a server blip.
+                reconnectionDelay = 1000
+                reconnectionDelayMax = 60_000
+                randomizationFactor = 0.5
+                timeout = 20000
+            }
+
+            socket = IO.socket(URI.create("$url/device"), options).apply {
+                safeOn(Socket.EVENT_CONNECT) {
+                    Log.i("WebSocketService", "Connected to server")
+                    consecutiveFailures = 0
+                    armConnectivityReport()   // feat/offline-cause-log: capture the gap, flush post-auth
+                    register()
+                    /*
+                     * Re-assert the backlight state on every reconnect, forced. While we were away
+                     * the panel's ACTUAL state may have drifted from ours — someone walked up and
+                     * touched it, the OS slept it, an OTA restarted the Activity — and a tick that
+                     * only acts on CHANGE would leave that drift in place until the next edge,
+                     * which for an overnight window is hours away.
+                     */
+                    try { powerSchedule?.applyNow(force = true) }
+                    catch (e: Throwable) { Log.w("WebSocketService", "power re-apply on connect: ${e.message}") }
+                }
+
+                safeOn(Socket.EVENT_DISCONNECT) { args ->
+                    val reason = args.firstOrNull()?.toString() ?: "unknown"
+                    Log.w("WebSocketService", "Disconnected from server: $reason")
+                    // feat/offline-cause-log: mark the START of an in-process offline gap. Keep the
+                    // EARLIEST timestamp if several disconnects fire before we reconnect, so offline_ms
+                    // spans the whole gap. elapsedRealtime = monotonic (immune to wall-clock jumps).
+                    if (disconnectedAtMs == 0L) {
+                        disconnectedAtMs = SystemClock.elapsedRealtime()
+                        // Probe the wider internet DURING the gap so a link-up outage can be split into
+                        // "our server down" (internet reachable) vs "no internet" (router/ISP down).
+                        internetOkDuringGap = null
+                        probeInternetAsync()
+                    }
+                    // Stop heartbeat while disconnected; player keeps showing cached content.
+                    stopHeartbeat()
+                    // #148 reconnect discipline: Socket.IO auto-reconnects the SAME socket on a
+                    // transport drop (reconnection=true) — leave socketActive true so connect()
+                    // keeps reusing it. But on a server- or client-initiated disconnect it does
+                    // NOT auto-reconnect, so mark the socket inert and bring up exactly ONE new
+                    // connection after a backoff — never a blind re-open that gets evicted again.
+                    if (reason == "io server disconnect" || reason == "io client disconnect") {
+                        socketActive = false
+                        scheduleReopen(RECONNECT_AFTER_EVICT_MS)
+                    }
+                }
+
+                safeOn(Socket.EVENT_CONNECT_ERROR) { args ->
+                    consecutiveFailures++
+                    Log.e("WebSocketService", "Connection error (${consecutiveFailures} consecutive): ${args.firstOrNull()}")
+                }
+
+                safeOn("device:registered") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val newDeviceId = data.optString("device_id", "")
+                    if (newDeviceId.isEmpty()) {
+                        Log.w("WebSocketService", "device:registered missing device_id")
+                        return@safeOn
+                    }
+                    config.deviceId = newDeviceId
+                    // Persist device_token (issued on first register, or refreshed on reconnect)
+                    if (data.has("device_token")) {
+                        config.deviceToken = data.optString("device_token", "")
+                    }
+                    Log.i("WebSocketService", "Registered as: $newDeviceId")
+                    pairingCodeLive = true // server accepted this registration — any shown code is now pairable
+                    if (config.isPaired) {
+                        resetRepairBackoff() // normal authenticated reconnect — fully exit repair mode
+                    } else if (awaitingRepair) {
+                        // Re-pair code ISSUED (settle window cleared): stop retrying and keep the code on
+                        // screen until an admin claims it (device:paired) — don't re-register on reconnect.
+                        repairRetryPending = false; repairBackoffMs = 0L; repairHoldUntilMs = 0L
+                    }
+                    handler.post { try { onRegistered?.invoke(newDeviceId) } catch (e: Throwable) { Log.e("WebSocketService", "onRegistered cb: ${e.message}") } }
+                    startHeartbeat()
+                    // feat/offline-cause-log: now authenticated on this socket — safe to flush the
+                    // connectivity-report armed at 'connect' (requireDeviceAuth gates it server-side).
+                    flushConnectivityReport()
+                    // #299: authenticated now, so any plays recorded while offline can be replayed.
+                    flushOfflinePlays()
+                    // #473 v2: interactive-page sessions queued while offline (or before this boot).
+                    kioskFlushInFlight = false
+                    flushKioskSessions()
+                    flushKioskErrors()
+                    audienceFlushInFlight = false
+                    flushAudience()
+                }
+
+                // Audience counts the server has (or refused for good): drop them from the queue.
+                safeOn("device:audience-ack") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val ids = data.optJSONArray("ids") ?: JSONArray()
+                    val list = (0 until ids.length()).map { ids.optString(it, "") }.filter { it.isNotEmpty() }
+                    com.remotedisplay.player.audience.AudienceLog.ack(applicationContext, list)
+                    audienceFlushInFlight = false
+                    if (list.isNotEmpty() && com.remotedisplay.player.audience.AudienceLog.peek(applicationContext).isNotEmpty()) {
+                        handler.post { flushAudience() }
+                    }
+                }
+
+                // #473 v2: the server stored these session ids (or already had them): drop them.
+                safeOn("device:kiosk-sessions-ack") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val ids = data.optJSONArray("ids") ?: JSONArray()
+                    val list = (0 until ids.length()).map { ids.optString(it, "") }.filter { it.isNotEmpty() }
+                    com.remotedisplay.player.kiosk.KioskSessionLog.ack(applicationContext, list)
+                    kioskFlushInFlight = false
+                    if (list.isNotEmpty() && com.remotedisplay.player.kiosk.KioskSessionLog.peek(applicationContext).isNotEmpty()) {
+                        handler.post { flushKioskSessions() }
+                    }
+                }
+
+                // v4 degrade-safe ARM: the watchdog arms ONLY after the first heartbeat-ack, so a
+                // server that never acks (old/pre-contract) never arms us -> no false-fire storm.
+                // markAlive already fired via safeOn (any inbound); a healthy ack also resets the
+                // reconnect backoff. Known ack-gap (reconnecting-not-yet-re-registered) is benign:
+                // arm-after-ack + any-inbound-refresh keep the watchdog from firing in that window.
+                safeOn("device:heartbeat-ack") { args ->
+                    if (!livenessConfirmed) Log.i("WebSocketService", "v4 watchdog: ARMED (first heartbeat-ack)")
+                    livenessConfirmed = true
+                    watchdogAttempt = 0
+                    (args.firstOrNull() as? JSONObject)?.let { ingestClockSample(it.optLong("server_ms", 0L), it.optLong("client_ms", 0L)) }
+                }
+
+                safeOn("device:unpaired") { args ->
+                    // Deleted by an operator: its downloads belong to nobody now (DeletedDeviceWipe
+                    // says why not_found never gets here). Done in the service, not MainActivity, so
+                    // it happens even when no Activity is attached to hear about it.
+                    if (DeletedDeviceWipe.isDeletion(args.firstOrNull())) {
+                        val keep = lastTriggerContentIds + DeletedDeviceWipe.triggerContentIds(config.cachedPlaylist)
+                        config.cachedPlaylist = ""
+                        DeletedDeviceWipe.wipe(DeletedDeviceWipe.dirsUnder(filesDir), keep)
+                    }
+                    handleServerRejection("device:unpaired (removed on server)")
+                }
+
+                /*
+                 * ⚠️ HONOUR device:throttled INSTEAD OF RECONNECTING INTO IT (#314).
+                 *
+                 * Three gates in the server's register handler can refuse — the burst throttle, the
+                 * flap limiter and the session-settle hold — and every one refuses BEFORE the
+                 * playlist is sent, then drops the socket. No player implemented this event, so the
+                 * server asked for a pause and we came straight back on the 1s reconnect timer: the
+                 * panel sat on "Waiting for content" with all its media already cached, and each
+                 * retry re-tripped the very window it was waiting out. Seen in the field after an
+                 * OTA, where the post-update relaunch cascade supplies the opening burst.
+                 *
+                 * ⚠️ AND IT MUST GO THROUGH safeOn. markAlive is wired into safeOn, so a handler
+                 * registered directly on the socket would not refresh the liveness watchdog — the
+                 * throttle notice would arrive and still count as silence from the server.
+                 *
+                 * Take the server's number, stop reconnecting for that long, come back once.
+                 * Clamped at both ends: a missing or absurd value must not strand a screen, and a
+                 * zero must not turn this into a busy loop.
+                 */
+                safeOn("device:throttled") { args ->
+                    val payload = args.firstOrNull() as? JSONObject
+                    val asked = payload?.optLong("retry_after_ms", 0L) ?: 0L
+                    val waitMs = asked.coerceIn(1000L, 5 * 60 * 1000L)
+                    val why = payload?.optString("reason", "") ?: ""
+                    Log.w("WebSocketService", "throttled by server: holding off ${waitMs}ms ($why)")
+                    throttleHold?.let { handler.removeCallbacks(it) }
+                    val resume = Runnable {
+                        throttleHold = null
+                        try { if (socket?.connected() != true) connect() } catch (e: Throwable) {
+                            Log.w("WebSocketService", "throttle resume failed: ${e.message}")
+                        }
+                    }
+                    throttleHold = resume
+                    handler.postDelayed(resume, waitMs)
+                }
+
+                safeOn("device:auth-error") { args ->
+                    val msg = (args.firstOrNull() as? JSONObject)?.optString("error", "Authentication failed") ?: "Authentication failed"
+                    handleServerRejection("auth-error: $msg")
+                }
+
+                safeOn("device:paired") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val id = data.optString("device_id", "")
+                    val name = data.optString("name", "Display")
+                    config.setPaired(true)
+                    pairingCodeLive = false
+                    resetRepairBackoff() // re-pair complete — exit the re-pair/hold state
+                    // Pairing code consumed — drop it so a future re-pair mints a fresh one.
+                    getSharedPreferences("remote_display", MODE_PRIVATE).edit().remove("pairing_code").apply()
+                    config.deviceName = name
+                    // Server-provisioned settings PIN — unique per device, stored encrypted.
+                    // If the server doesn't send one (old server), ServerConfig generates a
+                    // random PIN on first access so the gate is never left with a hardcoded default.
+                    val pin = data.optString("settings_pin", "")
+                    if (pin.isNotEmpty()) {
+                        config.settingsPin = pin
+                    }
+                    Log.i("WebSocketService", "Paired as: $name")
+                    handler.post { try { onPaired?.invoke(id, name) } catch (e: Throwable) { Log.e("WebSocketService", "onPaired cb: ${e.message}") } }
+                }
+
+                // A PIN set or rotated from the dashboard takes effect NOW, not at the next pairing.
+                // Without this an operator who rotated a leaked PIN would believe they had revoked
+                // access while the old one still opened the menu — worse than not offering it.
+                safeOn("device:settings-pin") { args ->
+                    val data = args.getOrNull(0) as? org.json.JSONObject ?: return@safeOn
+                    val pin = data.optString("settings_pin", "")
+                    if (pin.isNotEmpty()) {
+                        config.settingsPin = pin
+                        Log.i("WebSocketService", "Settings PIN updated from dashboard")   // never log the PIN
+                    }
+                }
+                
+                safeOn("device:playlist-update") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: run {
+                        Log.w("WebSocketService", "playlist-update with non-JSONObject payload: ${args.firstOrNull()}")
+                        return@safeOn
+                    }
+                    Log.i("WebSocketService", "Playlist update received, assignments=${data.optJSONArray("assignments")?.length() ?: "null"}")
+                    // Remembered for DeletedDeviceWipe: the stored offline payload is only written
+                    // when it has assignments, so a trigger-only screen's triggers are not in it.
+                    data.optJSONArray("triggers")?.let { lastTriggerContentIds = DeletedDeviceWipe.triggerContentIds(it) }
+                    /*
+                     * ⚠️ The power schedule is adopted HERE, in the service, and not in the
+                     * Activity's onPlaylistUpdate. The Activity may be stopped or destroyed — it
+                     * certainly is during a scheduled-off window, since blanking the panel is
+                     * lockNow() — and a schedule edit that only landed when a UI happened to be
+                     * alive would be lost exactly when it matters. `optJSONObject` returns null
+                     * when the field is absent, and null CLEARS.
+                     */
+                    handler.post {
+                        try { powerSchedule?.update(data.optJSONObject("power_schedule")) }
+                        catch (e: Throwable) { Log.w("WebSocketService", "power schedule adopt: ${e.message}") }
+                    }
+                    // Saved endpoints ride every payload too. Absent CLEARS, same contract.
+                    handler.post {
+                        try {
+                            endpointPoller?.update(data.optJSONArray("endpoints"))
+                            endpointPoller?.persist()
+                        } catch (e: Throwable) { Log.w("WebSocketService", "endpoint adopt: ${e.message}") }
+                    }
+                    handler.post { try { onPlaylistUpdate?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onPlaylistUpdate cb: ${e.message}") } }
+                }
+
+                safeOn("device:content-delete") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val contentId = data.optString("content_id", "")
+                    if (contentId.isNotEmpty()) {
+                        handler.post { try { onContentDelete?.invoke(contentId) } catch (e: Throwable) { Log.e("WebSocketService", "onContentDelete cb: ${e.message}") } }
+                    }
+                }
+
+                safeOn("device:screenshot-request") {
+                    captureAndSendScreenshot()
+                    handler.post { try { onScreenshotRequest?.invoke() } catch (e: Throwable) { Log.e("WebSocketService", "onScreenshotRequest cb: ${e.message}") } }
+                }
+
+                safeOn("device:remote-start") {
+                    startScreenshotStream()
+                    handler.post { try { onRemoteStart?.invoke() } catch (e: Throwable) { Log.e("WebSocketService", "onRemoteStart cb: ${e.message}") } }
+                }
+
+                safeOn("device:remote-stop") {
+                    stopScreenshotStream()
+                    handler.post { try { onRemoteStop?.invoke() } catch (e: Throwable) { Log.e("WebSocketService", "onRemoteStop cb: ${e.message}") } }
+                }
+
+                // #go2rtc: live-video publish. The dashboard asks this panel to stream its screen
+                // over WebRTC. MediaProjection captures at the OS level (no browser, no per-frame
+                // gesture, immune to a browser's resistFingerprinting), so it is the robust signage
+                // path the web player only approximates. Best-effort: consent + capture run in
+                // LiveVideoService; a failure there never touches playback.
+                safeOn("device:live-publish") { args ->
+                    val data = args.firstOrNull() as? JSONObject
+                    val action = data?.optString("action", "start") ?: "start"
+                    if (action == "stop") {
+                        try { LiveVideoService.stop(this@WebSocketService) } catch (e: Throwable) { Log.e("WebSocketService", "live stop: ${e.message}") }
+                        return@safeOn
+                    }
+                    val id = config.deviceId; val token = config.deviceToken; val srvUrl = config.serverUrl
+                    if (id.isEmpty() || token.isEmpty() || srvUrl.isEmpty()) {
+                        Log.w("WebSocketService", "live-publish requested but device is not provisioned"); return@safeOn
+                    }
+                    val iceJson = (data?.optJSONArray("iceServers") ?: org.json.JSONArray()).toString()
+                    try {
+                        // Requests MediaProjection consent if not already held, then starts the
+                        // sender in LiveVideoService (its own mediaProjection FGS).
+                        com.remotedisplay.player.ScreenCapturePermissionActivity.requestForLive(
+                            this@WebSocketService, srvUrl, id, token, iceJson)
+                    } catch (e: Throwable) { Log.e("WebSocketService", "live-publish start: ${e.message}") }
+                }
+
+                // #talk: two-way voice intercom. The dashboard asks this device to join a call —
+                // subscribe the operator's mic (play it) and publish its own mic. Runs in TalkService
+                // (a microphone FGS); best-effort, never touches playback. Needs RECORD_AUDIO.
+                safeOn("device:talk-start") { args ->
+                    val data = args.firstOrNull() as? JSONObject
+                    val id = config.deviceId; val token = config.deviceToken; val srvUrl = config.serverUrl
+                    if (id.isEmpty() || token.isEmpty() || srvUrl.isEmpty()) {
+                        Log.w("WebSocketService", "talk requested but device is not provisioned"); return@safeOn
+                    }
+                    // Only a 2-way per-device call captures this device's mic (needs RECORD_AUDIO).
+                    // A broadcast listen and a one-way per-device call just play the operator's audio.
+                    val listen = data?.optString("mode") == "listen"
+                    val duplex = !listen && (data?.optBoolean("duplex", false) ?: false)
+                    if (duplex && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        Log.w("WebSocketService", "2-way talk requested but RECORD_AUDIO not granted"); return@safeOn
+                    }
+                    val iceJson = (data?.optJSONArray("iceServers") ?: org.json.JSONArray()).toString()
+                    val scope = data?.optJSONObject("scope")
+                    val scopeKind = if (listen) scope?.optString("kind") else null
+                    val scopeId = if (listen) scope?.optString("id") else null
+                    try { com.remotedisplay.player.service.TalkService.start(this@WebSocketService, srvUrl, id, token, iceJson, scopeKind, scopeId, duplex) }
+                    catch (e: Throwable) { Log.e("WebSocketService", "talk start: ${e.message}") }
+                    handler.post { try { onTalkDuck?.invoke(true) } catch (e: Throwable) { Log.e("WebSocketService", "talk duck: ${e.message}") } }
+                }
+
+                safeOn("device:talk-stop") {
+                    try { com.remotedisplay.player.service.TalkService.stop(this@WebSocketService) }
+                    catch (e: Throwable) { Log.e("WebSocketService", "talk stop: ${e.message}") }
+                    handler.post { try { onTalkDuck?.invoke(false) } catch (e: Throwable) { Log.e("WebSocketService", "talk unduck: ${e.message}") } }
+                }
+
+                // 3.0 screen share: a person's screen, peer to peer, fullscreen over the content
+                // (remote/ScreenShareController + ScreenShareReceiver; docs/screen-share.md).
+                safeOn("device:screenshare-start") { args -> screenShare.onStart(args.firstOrNull() as? JSONObject) }
+                safeOn("device:screenshare-stop") { args -> screenShare.onStop(args.firstOrNull() as? JSONObject) }
+                safeOn("device:screenshare-code") { args -> screenShare.onCode(args.firstOrNull() as? JSONObject) }
+
+                safeOn("device:remote-touch") { args ->
+                    if (privacyOn()) { Log.i("WebSocketService", "remote touch refused: interactive session in progress"); return@safeOn }
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val x = data.optDouble("x", 0.0).toFloat()
+                    val y = data.optDouble("y", 0.0).toFloat()
+                    val action = data.optString("action", "tap")
+                    val svc = PowerAccessibilityService.instance
+                    when {
+                        // #159: drag = a swipe gesture (scroll). Dashboard sends normalized end point + duration.
+                        svc != null && svc.canDispatchGestures && action == "swipe" -> {
+                            val x2 = data.optDouble("x2", x.toDouble()).toFloat()
+                            val y2 = data.optDouble("y2", y.toDouble()).toFloat()
+                            val dur = data.optLong("duration", 300L).coerceIn(50L, 3000L)
+                            handler.post { try { svc.injectSwipe(x, y, x2, y2, dur) } catch (e: Throwable) { Log.e("WebSocketService", "injectSwipe: ${e.message}") } }
+                        }
+                        svc != null && svc.canDispatchGestures && action == "tap" -> {
+                            handler.post { try { svc.injectTap(x, y) } catch (e: Throwable) { Log.e("WebSocketService", "injectTap: ${e.message}") } }
+                        }
+                        else -> {
+                            handler.post { try { onRemoteTouch?.invoke(x, y, action) } catch (e: Throwable) { Log.e("WebSocketService", "onRemoteTouch cb: ${e.message}") } }
+                        }
+                    }
+                    svc?.clearDpadCursor()   // direct touch: dismiss the D-pad navigation highlight
+                    nudgeCapture()   // reflect the tap/swipe in the remote view promptly
+                }
+
+                safeOn("device:remote-key") { args ->
+                    if (privacyOn()) { Log.i("WebSocketService", "remote key refused: interactive session in progress"); return@safeOn }
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val keycode = data.optString("keycode", "")
+                    if (keycode.isEmpty()) return@safeOn
+                    injectKey(keycode)
+                    handler.post { try { onRemoteKey?.invoke(keycode) } catch (e: Throwable) { Log.e("WebSocketService", "onRemoteKey cb: ${e.message}") } }
+                    nudgeCapture()   // reflect the key/D-pad move in the remote view promptly
+                }
+
+                // Video wall. Post to the main thread: the handlers drive ExoPlayer
+                // (seek/speed/position), which is main-thread-only.
+                safeOn("wall:sync") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    handler.post { try { onWallSync?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onWallSync cb: ${e.message}") } }
+                }
+
+                safeOn("wall:sync-request") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    handler.post { try { onWallSyncRequest?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onWallSyncRequest cb: ${e.message}") } }
+                }
+
+                safeOn("group:sync") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    handler.post { try { onGroupSync?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onGroupSync cb: ${e.message}") } }
+                }
+
+                safeOn("group:sync-request") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    handler.post { try { onGroupSyncRequest?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onGroupSyncRequest cb: ${e.message}") } }
+                }
+
+                // #group-sync: server-nudged immediate re-align (dashboard "Resync now").
+                safeOn("group:resync") {
+                    handler.post { try { onGroupResync?.invoke() } catch (e: Throwable) { Log.e("WebSocketService", "onGroupResync cb: ${e.message}") } }
+                }
+
+                // #109: PiP overlay. Post to the main thread — the handlers build Views.
+                safeOn("device:pip-show") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    handler.post { try { onPipShow?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onPipShow cb: ${e.message}") } }
+                }
+                safeOn("device:pip-clear") { args ->
+                    val data = (args.firstOrNull() as? JSONObject) ?: JSONObject()
+                    handler.post { try { onPipClear?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onPipClear cb: ${e.message}") } }
+                }
+
+                // #129: real-time mute toggle. Post to the main thread — it touches the player.
+                safeOn("device:mute-changed") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    handler.post { try { onMuteChanged?.invoke(data) } catch (e: Throwable) { Log.e("WebSocketService", "onMuteChanged cb: ${e.message}") } }
+                }
+
+                safeOn("device:command") { args ->
+                    val data = args.firstOrNull() as? JSONObject ?: return@safeOn
+                    val type = data.optString("type", "")
+                    if (type.isEmpty()) return@safeOn
+                    val payload = data.optJSONObject("payload")
+                    Log.i("WebSocketService", "Command received: $type")
+
+                    dispatchCommand(type, payload)
+                }
+
+                connect()
+            }
+        } catch (e: Throwable) {
+            Log.e("WebSocketService", "Socket setup error: ${e.message}", e)
+        }
+    }
+
+    // v4 client identity block — additive, canonical snake_case (same field shape as the .wgt and
+    // /player), piggybacked on the register message the client already sends. Backward-compatible:
+    // an old server ignores unknown fields. Capture-don't-act — the server stores it; no client
+    // logic is built on it here.
+    private fun JSONObject.putIdentity() {
+        try {
+            put("client_type", "apk")
+            put("client_version", deviceInfo.getAppVersion())
+            put("platform", "Android " + android.os.Build.VERSION.RELEASE)
+            put("contract_version", "v4")
+            // What this panel can actually do, so the dashboard stops offering controls that
+            // cannot work on it. Recomputed on EVERY register rather than cached: accessibility
+            // gets switched on months after install, device owner arrives via provisioning, and
+            // WRITE_SETTINGS can be revoked — a value captured once would be wrong on the same
+            // hardware from one boot to the next.
+            put("capabilities", com.remotedisplay.player.telemetry.PlayerCapabilities.declare(this@WebSocketService))
+        } catch (e: Throwable) { Log.w("WebSocketService", "identity: ${e.message}") }
+    }
+
+    private fun register(fromRepairRetry: Boolean = false) {
+        // While awaiting re-pair, ONLY the scheduled retry may register. A reconnect's EVENT_CONNECT
+        // register() during the hold would hit the reclaim guard again and restart the churn — and
+        // once a pairing code is shown, the server keeps it valid, so re-registering is unnecessary.
+        if (awaitingRepair && !config.isPaired && !fromRepairRetry) {
+            Log.i("WebSocketService", "register suppressed — awaiting re-pair (hold ${repairHoldRemainingMs()}ms)")
+            return
+        }
+        try {
+            val data = JSONObject().apply {
+                if (config.isProvisioned && config.isPaired) {
+                    put("device_id", config.deviceId)
+                    val token = config.deviceToken
+                    if (token.isNotEmpty()) {
+                        put("device_token", token)
+                    }
+                } else {
+                    // Reuse a stable pairing code across reconnects / re-pair prompts so an admin
+                    // isn't chasing a rotating number mid-pairing; only mint one when we don't have
+                    // one yet. Cleared on a successful device:paired so the NEXT pairing is fresh.
+                    val prefs = getSharedPreferences("remote_display", MODE_PRIVATE)
+                    var pairingCode = prefs.getString("pairing_code", "") ?: ""
+                    if (pairingCode.isEmpty()) {
+                        pairingCode = (100000..999999).random().toString()
+                        prefs.edit().putString("pairing_code", pairingCode).apply()
+                    }
+                    put("pairing_code", pairingCode)
+                    config.deviceId = ""
+                }
+                try { put("device_info", deviceInfoPayload()) } catch (e: Throwable) { Log.w("WebSocketService", "device_info: ${e.message}") }
+                try { put("fingerprint", deviceInfo.getFingerprint()) } catch (e: Throwable) { Log.w("WebSocketService", "fingerprint: ${e.message}") }
+                putIdentity()
+            }
+            socket?.emit("device:register", data)
+        } catch (e: Throwable) {
+            Log.e("WebSocketService", "register failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * #160: re-report device_info (capability flags + current media volume) WITHOUT a full
+     * re-register — used right after a volume/brightness change so the dashboard reflects it.
+     * No-op if not yet paired/connected. Never throws.
+     */
+    fun reportInfoNow() {
+        try {
+            val id = config.deviceId
+            if (id.isEmpty() || socket?.connected() != true) return
+            socket?.emit("device:info", org.json.JSONObject().apply {
+                put("device_id", id)
+                put("device_info", deviceInfoPayload())
+            })
+        } catch (e: Throwable) { Log.w("WebSocketService", "reportInfoNow: ${e.message}") }
+    }
+
+    fun getPairingCode(): String {
+        return getSharedPreferences("remote_display", MODE_PRIVATE)
+            .getString("pairing_code", "") ?: ""
+    }
+
+    // Fix 2 re-pair backoff. A server that keeps rejecting registration — notably the #150
+    // fingerprint reclaim-settle window ("retry after it has been offline for 300 seconds") — must
+    // NOT be answered with a tight re-register loop. Without this, every auth-error triggered an
+    // immediate re-register that hit the guard again ~20x/sec (a self-inflicted storm, worse than
+    // the stuck screen it replaced). Debounce to a SINGLE pending retry with exponential backoff.
+    @Volatile private var repairRetryPending = false
+    private var repairBackoffMs = 0L
+    // #150 reclaim-settle: when the server says "retry after it has been offline for N seconds",
+    // HOLD the re-pair screen for that whole window (all registration suppressed) instead of churning
+    // — the operator sees a stable "re-pairing available in Xs" countdown, and we retry exactly ONCE
+    // when it elapses. awaitingRepair spans from the first rejection until an actual device:paired
+    // (or a normal authenticated reconnect), so the "waiting for re-pair" screen never flickers.
+    @Volatile private var awaitingRepair = false
+    @Volatile private var repairHoldUntilMs = 0L
+    // register() stores the pairing code locally BEFORE emitting, so getPairingCode() is non-empty
+    // even for a registration the server then REJECTS (reclaim-settle). This flag tracks whether the
+    // server actually ACCEPTED it (device:registered) — only then is the code pairable and shown.
+    @Volatile private var pairingCodeLive = false
+
+    /** True from the first server rejection until the device is (re)paired — UI stays on re-pair. */
+    fun isAwaitingRepair(): Boolean = awaitingRepair
+
+    /**
+     * Why the server last refused us, verbatim from device:auth-error (e.g. "Device blocked").
+     * The server always says why; the player used to throw it away and fall back to a generic
+     * connection failure, so an operator block read as "couldn't reach the server, check the url"
+     * and sent people off debugging their network. #234.
+     */
+    @Volatile var lastRejectionReason: String? = null
+    /**
+     * True when the last rejection came with a settle window — the server is asking us to wait and
+     * try again, not telling us we are gone. This service already holds, retries once and recovers
+     * on its own, so a listener must not tear the player down over it.
+     */
+    @Volatile var lastRejectionTransient: Boolean = false
+        private set
+    /** Milliseconds left in the reclaim-settle hold (0 once elapsed) — drives the UI countdown. */
+    fun repairHoldRemainingMs(): Long = maxOf(0L, repairHoldUntilMs - SystemClock.elapsedRealtime())
+    /** True only when the shown pairing code is server-accepted (pairable) — not a rejected/stale one. */
+    fun isPairingCodeLive(): Boolean = pairingCodeLive && !config.isPaired
+
+    // Pull the settle window out of the #150 reclaim message ("...offline for 300 seconds.").
+    private fun parseSettleSeconds(reason: String): Int =
+        Regex("offline for (\\d+) seconds").find(reason)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+    /**
+     * The server rejected this device mid-session (removed from the dashboard -> device:unpaired,
+     * or reclaim-settle / bad token -> device:auth-error). Clear credentials, surface the re-pair
+     * screen ONCE, honor any reclaim-settle window, and schedule ONE re-register.
+     *
+     * We never re-register inline (that stormed the reclaim guard) or disconnect/reconnect (that
+     * thrashed the socket). While awaitingRepair, ALL registration is suppressed except the single
+     * scheduled retry, so the screen is stable — no register/reject/register churn.
+     */
+    /** Content ids the last payload's triggers referenced; kept by the delete wipe. */
+    @Volatile private var lastTriggerContentIds: Set<String> = emptySet()
+
+    private fun handleServerRejection(reason: String) {
+        lastRejectionReason = reason
+        val settleSec = parseSettleSeconds(reason)
+        lastRejectionTransient = settleSec > 0
+        Log.w("WebSocketService", "Server rejected device ($reason) — settle=${settleSec}s")
+        pairingCodeLive = false // this registration was rejected — the local code is NOT pairable
+        config.clearDeviceCredentials()
+        if (settleSec > 0) repairHoldUntilMs = SystemClock.elapsedRealtime() + settleSec * 1000L
+        if (!awaitingRepair) {
+            awaitingRepair = true
+            handler.post { try { onUnpaired?.invoke() } catch (e: Throwable) { Log.e("WebSocketService", "onUnpaired cb: ${e.message}") } }
+        }
+        scheduleRepairRegister()
+    }
+
+    private fun scheduleRepairRegister() {
+        if (repairRetryPending) return   // debounce: one pending retry per window kills the storm
+        repairRetryPending = true
+        val hold = repairHoldUntilMs - SystemClock.elapsedRealtime()
+        val delay = if (hold > 0) hold else {  // honor the reclaim-settle window verbatim; else back off
+            repairBackoffMs = if (repairBackoffMs <= 0L) REPAIR_BACKOFF_MIN_MS
+                              else minOf(repairBackoffMs * 2, REPAIR_BACKOFF_MAX_MS)
+            repairBackoffMs
+        }
+        Log.i("WebSocketService", "re-register for pairing in ${delay}ms")
+        handler.postDelayed({
+            repairRetryPending = false
+            if (socket?.connected() == true && !config.isPaired) register(fromRepairRetry = true)
+        }, delay)
+    }
+
+    /** Re-pair complete (device:paired, or a normal authenticated reconnect) — clear all repair state. */
+    private fun resetRepairBackoff() {
+        lastRejectionReason = null
+        repairRetryPending = false
+        repairBackoffMs = 0L
+        awaitingRepair = false
+        repairHoldUntilMs = 0L
+    }
+
+    private var heartbeatCount = 0
+
+    private fun startHeartbeat() {
+        stopHeartbeat()
+        heartbeatCount = 0
+        heartbeatRunnable = object : Runnable {
+            override fun run() {
+                // A watchdog reconnect (below) tears down + restarts the heartbeat; if this is a
+                // stale runnable superseded by that restart, stop — never let two loops run.
+                if (heartbeatRunnable !== this) return
+                sendHeartbeat()
+                heartbeatCount++
+                // Every 4th heartbeat (60s), request a fresh playlist
+                if (heartbeatCount % 4 == 0) {
+                    requestPlaylistRefresh()
+                }
+                // v4 liveness watchdog: runs on the heartbeat tick (i.e. only while we've been
+                // SENDING heartbeats). If it detects+acts on a half-open socket it tears this loop
+                // down and a fresh one starts on re-register, so do NOT reschedule this one.
+                if (checkHalfOpenAndReconnect()) return
+                handler.postDelayed(this, 15000) // Every 15 seconds
+            }
+        }
+        handler.post(heartbeatRunnable!!)
+    }
+
+    /**
+     * v4 half-open detection. On a HALF-OPEN socket Socket.IO still reports connected()==true
+     * (its own auto-reconnect can't see server-silence), so we detect it here: armed (saw an ack)
+     * + connected + silent past the jittered threshold. Returns true iff it triggered a reconnect
+     * (so the heartbeat loop stops). The exponential backoff gate spaces repeated attempts so the
+     * watchdog can't become the flood #143/#149 fixed. No status/health poll — load is read from
+     * our own ack-silence.
+     */
+    private fun checkHalfOpenAndReconnect(): Boolean {
+        val connected = socket?.connected() == true
+        val silenceMs = SystemClock.elapsedRealtime() - lastServerMessageAt
+        if (!LivenessWatchdog.isHalfOpen(livenessConfirmed, connected, silenceMs, currentThresholdMs)) return false
+        val sinceAttempt = SystemClock.elapsedRealtime() - lastWatchdogAttemptAt
+        val backoff = LivenessWatchdog.backoffMs(watchdogAttempt + 1, Random.nextDouble())
+        if (!LivenessWatchdog.mayReconnectNow(sinceAttempt, backoff)) return false
+        watchdogAttempt++
+        lastWatchdogAttemptAt = SystemClock.elapsedRealtime()
+        Log.w("WebSocketService", "v4 watchdog: HALF-OPEN (silent ${silenceMs}ms > ${currentThresholdMs}ms, attempt=$watchdogAttempt) — teardown+reconnect (#148)")
+        reconnectHalfOpen()
+        return true
+    }
+
+    /**
+     * Teardown-before-reopen (#148) for a half-open socket. disconnect() kills the dead socket AND
+     * its listeners/auto-reconnect FIRST (so we don't race Socket.IO's own reconnect), then
+     * connect() — with socket=null + socketActive=false — opens exactly ONE fresh socket via the
+     * ConnectionGuard. @Synchronized so it can't interleave with a racing connect()/openSocket().
+     * The watchdog LAYERS ON the existing #148 guard; it does not replace it.
+     */
+    @Synchronized
+    private fun reconnectHalfOpen() {
+        disconnect()
+        connect()
+    }
+
+    @Volatile private var lastRefreshAt = 0L
+
+    /**
+     * [force] skips the throttle. Only for MainActivity's catch-up on bind: the payload sent when a
+     * screen is paired arrives while ProvisioningActivity is showing, before MainActivity listens,
+     * so without a fresh one the screen waited for the next 60s heartbeat pull. That cost little
+     * while a re-paired screen still had its files, and a minute of nothing once a delete wiped them.
+     */
+    fun requestPlaylistRefresh(force: Boolean = false) {
+        if (socket?.connected() != true || config.deviceId.isEmpty()) return
+        // #234 follow-up: this emits a FULL device:register (7+ server statements + the identity
+        // path + a playlist rebuild), and PlaylistController.next() calls it on every item advance.
+        // A 10-second image therefore re-registered six times a minute. The heartbeat already pulls
+        // a fresh playlist every 60s, so the per-item call bought nothing and cost a great deal.
+        val now = System.currentTimeMillis()
+        if (!force && !RefreshThrottle.shouldRefresh(lastRefreshAt, now)) return
+        lastRefreshAt = now
+        Log.i("WebSocketService", "Requesting playlist refresh")
+        try {
+            val data = org.json.JSONObject().apply {
+                put("device_id", config.deviceId)
+                val token = config.deviceToken
+                if (token.isNotEmpty()) put("device_token", token)
+                try { put("device_info", deviceInfoPayload()) } catch (e: Throwable) { Log.w("WebSocketService", "device_info: ${e.message}") }
+                putIdentity()
+            }
+            socket?.emit("device:register", data)
+        } catch (e: Throwable) {
+            Log.e("WebSocketService", "requestPlaylistRefresh failed: ${e.message}")
+        }
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatRunnable?.let { handler.removeCallbacks(it) }
+        heartbeatRunnable = null
+    }
+
+    // #group-sync clock discipline. The server is the time authority (see the heartbeat-ack). The
+    // offset is CACHED in prefs so schedule-based group sync stays aligned through an internet outage
+    // (RTC drift is tiny). synced_now = System.currentTimeMillis() + clockOffsetMs.
+    @Volatile private var clockOffsetMs: Long = Long.MIN_VALUE   // sentinel: not yet loaded from prefs
+    private var clockRttMs: Long = -1
+    private fun ensureClockLoaded() {
+        if (clockOffsetMs == Long.MIN_VALUE) {
+            clockOffsetMs = try { getSharedPreferences("remote_display", MODE_PRIVATE).getLong("clock_offset_ms", 0L) } catch (e: Throwable) { 0L }
+        }
+    }
+    fun syncedNowMs(): Long { ensureClockLoaded(); return System.currentTimeMillis() + clockOffsetMs }
+    private fun ingestClockSample(serverMs: Long, clientMs: Long) {
+        if (serverMs <= 0L || clientMs <= 0L) return
+        ensureClockLoaded()
+        val t4 = System.currentTimeMillis()
+        val rtt = (t4 - clientMs).coerceAtLeast(0)
+        if (rtt > 5000) return                                   // absurd RTT (GC/doze stall) — don't poison offset
+        val sample = serverMs - (clientMs + t4) / 2              // NTP-style: offset = server - (t1+t4)/2
+        clockOffsetMs = if (clockRttMs < 0 || kotlin.math.abs(sample - clockOffsetMs) > 1000) sample
+                        else Math.round(clockOffsetMs * 0.8 + sample * 0.2)   // EMA-smooth jitter
+        clockRttMs = rtt
+        try { getSharedPreferences("remote_display", MODE_PRIVATE).edit().putLong("clock_offset_ms", clockOffsetMs).apply() } catch (e: Throwable) {}
+    }
+
+    /*
+     * What the backlight schedule currently says — "on" or "scheduled_off". Set by
+     * PowerScheduleManager through MainActivity whenever the state changes, and reported on every
+     * heartbeat so the dashboard can tell a screen that is DELIBERATELY dark from one that is
+     * broken. Without it the two are indistinguishable from the operator's side, which is the
+     * failure mode this whole feature has to avoid creating.
+     */
+    @Volatile private var displayPowerState: String = "on"
+
+    fun setDisplayPowerState(state: String) { displayPowerState = state }
+
+    /* ------------------------------------------------------------------ display power schedule */
+
+    /**
+     * The weekly backlight schedule, owned by the SERVICE.
+     *
+     * ⚠️ NOT by MainActivity, and the reason is circular in a way that is easy to miss: a scheduled
+     * off is `lockNow()`, which stops the Activity and may let it be destroyed. An Activity-scoped
+     * tick therefore switches the panel off and then dies with it, and the 06:00 wake never runs —
+     * the schedule would reliably work exactly once. The service is the only thing guaranteed to be
+     * alive (foreground, START_STICKY, PARTIAL_WAKE_LOCK), which is the same reasoning the
+     * screen_on branch above already carries in writing.
+     */
+    private var powerSchedule: com.remotedisplay.player.power.PowerScheduleManager? = null
+
+    /** Saved REST endpoints this panel runs on its own clock. See EndpointPoller for why it lives here. */
+    private var endpointPoller: com.remotedisplay.player.net.EndpointPoller? = null
+
+    /**
+     * Set by MainActivity while it exists. Its ONLY job is the window flag, which only a window can
+     * hold; everything else about going dark and coming back happens in this service so it works
+     * with no Activity at all. Null means "no UI attached", which is a normal state mid-window.
+     */
+    var onPowerWindow: ((off: Boolean) -> Unit)? = null
+    /**
+     * Called (on the main thread) right before the panel is blanked, by schedule or by an operator.
+     * The Activity drops its "show when locked" + "turn screen on" settings here.
+     *
+     * ⚠️ WITHOUT THIS A SCHEDULED OFF LASTS HALF A SECOND. screen_on sets setShowWhenLocked(true) +
+     * setTurnScreenOn(true) and nothing cleared them, so once a panel had been woken that way (the
+     * Screen On button, a relaunch, a schedule's own "on" edge), lockNow() blanked it and the
+     * player's window — still asking to turn the screen on when shown — lit it straight back up.
+     * Reported on a device-owner Android 15 panel with an all-day schedule.
+     */
+    var onBeforeBlank: (() -> Unit)? = null
+
+    /**
+     * Make the panel dark — the ONE implementation, shared by the remote screen_off command and the
+     * schedule. A second "make it dark" would drift from the one the operator's button uses, and
+     * the divergence would only ever show up on hardware nobody has in front of them.
+     */
+    private fun blankPanel() {
+        try { onBeforeBlank?.invoke() } catch (e: Throwable) { Log.w("WebSocketService", "before blank: ${e.message}") }
+        try {
+            if (!com.remotedisplay.player.admin.STPolicy(this@WebSocketService).lockNow()) {
+                PowerAccessibilityService.instance?.lockScreen()
+                    ?: Log.w("WebSocketService", "screen_off: no owner/admin/accessibility — unsupported")
+            }
+        } catch (e: Throwable) { Log.e("WebSocketService", "screen_off: ${e.message}") }
+    }
+
+    /**
+     * Wake the panel. The wake LOCK needs only WAKE_LOCK, which this service holds, so this works
+     * whether or not an Activity exists.
+     *
+     * @param bringToFront start MainActivity when no UI is attached. Waking to a keyguard with no
+     *   player behind it is half a fix, and "the screen came back blank" is still a site visit.
+     */
+    private fun wakePanel(bringToFront: Boolean, payload: JSONObject? = null) {
+        val woke = try {
+            com.remotedisplay.player.system.SystemControl(applicationContext).wakeScreen()
+        } catch (e: Throwable) { Log.w("WebSocketService", "wakeScreen: ${e.message}"); false }
+        Log.i("WebSocketService", "wake: $woke")
+        handler.post {
+            // The Activity's half: dismiss the keyguard and show itself over it.
+            val attached = onCommand != null
+            try { onCommand?.invoke("screen_on", payload) } catch (_: Throwable) { }
+            if (bringToFront && !attached) {
+                try {
+                    startActivity(Intent(this@WebSocketService, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    })
+                    Log.i("WebSocketService", "wake: no Activity attached — relaunched MainActivity")
+                } catch (e: Throwable) { Log.e("WebSocketService", "wake relaunch: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Apply a scheduled edge. Called by PowerScheduleManager's tick, which runs on this service.
+     *
+     * The window flag is asked of the Activity first (only a window can hold it) and is simply
+     * skipped when there is none — a destroyed Activity is not holding FLAG_KEEP_SCREEN_ON anyway,
+     * and it re-applies the correct state in onCreate.
+     */
+    private fun applyScheduledPower(off: Boolean) {
+        // The window flag FIRST, then the lock: posting it meant lockNow() ran while the window was
+        // still holding FLAG_KEEP_SCREEN_ON. Run inline on the main thread (the tick and restore()
+        // are already on it); from anywhere else, post the whole sequence so the order holds.
+        val apply = {
+            try { onPowerWindow?.invoke(off) } catch (e: Throwable) { Log.w("WebSocketService", "power window flag: ${e.message}") }
+            if (off) blankPanel() else wakePanel(bringToFront = true)
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) apply() else handler.post { apply() }
+        // An endpoint bound to screen_on/screen_off is how a building system learns the sign went
+        // dark. Fired from the SCHEDULE too, not only from an operator's button — the scheduled
+        // edge is the one that happens every night with nobody watching.
+        try { endpointPoller?.onEvent(if (off) "screen_off" else "screen_on") } catch (e: Throwable) { }
+    }
+
+    private fun sendHeartbeat() {
+        if (socket?.connected() != true) return
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("client_ms", System.currentTimeMillis())   // #group-sync: t1 for NTP-style clock discipline
+                put("display_power", displayPowerState)
+                try { put("telemetry", deviceInfo.getTelemetry()) } catch (e: Throwable) { Log.w("WebSocketService", "telemetry: ${e.message}") }
+            }
+            socket?.emit("device:heartbeat", data)
+        } catch (e: Throwable) {
+            Log.e("WebSocketService", "sendHeartbeat failed: ${e.message}")
+        }
+    }
+
+    // Screenshot streaming from the service (works even when activity is paused)
+    private var streaming = false
+    private var streamRunnable: Runnable? = null
+
+    fun startScreenshotStream() {
+        stopScreenshotStream()
+        streaming = true
+        streamRunnable = Runnable { streamLoop() }
+        handler.post(streamRunnable!!)
+        Log.i("WebSocketService", "Screenshot streaming started")
+    }
+
+    @Volatile private var lastCaptureAtMs = 0L
+    // Remote-mirror pacing lives in CaptureThrottle (pure + unit-tested): the floor sits just above the
+    // ~333ms accessibility screenshot rate limit (going lower only wastes calls; a rate-limited miss
+    // skips cleanly in captureScreen), and the cap keeps a slow capture from freezing the view.
+
+    private fun streamLoop() {
+        if (!streaming) { Log.w("WebSocketService", "streamLoop called but not streaming"); return }
+        Thread {
+            var captureMs = 0L
+            try {
+                val start = SystemClock.elapsedRealtime()
+                val b64 = captureScreen()
+                captureMs = SystemClock.elapsedRealtime() - start
+                if (b64 != null) {
+                    lastCaptureAtMs = SystemClock.elapsedRealtime()
+                    sendScreenshot(b64)
+                    Log.d("WebSocketService", "Screenshot streamed: ${b64.length} chars in ${captureMs}ms")
+                } else {
+                    Log.w("WebSocketService", "Screenshot capture returned null")
+                }
+            } catch (e: Exception) {
+                Log.e("WebSocketService", "Stream error: ${e.message}")
+            }
+            // Adaptive throttle: on a weak panel a slow capture (e.g. accessibility takeScreenshot while
+            // a video decodes) competes with playback and can starve the decoder. Back off proportional
+            // to how long this capture took — ~3× a slow capture, capped at 5s — so the stream
+            // self-throttles under load; when captures are cheap it runs near the floor.
+            val next = com.remotedisplay.player.remote.CaptureThrottle.nextDelayMs(captureMs)
+            if (streaming) handler.postDelayed(streamRunnable ?: return@Thread, next)
+        }.start()
+    }
+
+    /**
+     * Pull the next stream frame in right after an operator input, so the remote view reflects the
+     * action promptly instead of waiting out the steady interval. Rate-limit aware: schedules the
+     * capture for exactly when the accessibility screenshot API will allow it (never sooner, so we do
+     * not waste a call that would just fail), and coalesces to a single pending capture.
+     */
+    private fun nudgeCapture() {
+        if (!streaming) return
+        val r = streamRunnable ?: return
+        val since = SystemClock.elapsedRealtime() - lastCaptureAtMs
+        val delay = (com.remotedisplay.player.remote.CaptureThrottle.MIN_GAP_MS - since)
+            .coerceIn(0L, com.remotedisplay.player.remote.CaptureThrottle.MIN_GAP_MS)
+        handler.removeCallbacks(r)
+        handler.postDelayed(r, delay)
+    }
+
+    fun stopScreenshotStream() {
+        streaming = false
+        streamRunnable?.let { handler.removeCallbacks(it) }
+        streamRunnable = null
+        // Remote session is ending: clear the D-pad highlight so the blue box does not linger on the
+        // panel over the signage after the operator stops controlling it.
+        PowerAccessibilityService.instance?.clearDpadCursor()
+        Log.i("WebSocketService", "Screenshot streaming stopped")
+    }
+
+    // Callback for Activity to provide screenshot
+    var onCaptureScreenshot: (() -> String?)? = null
+
+    /**
+     * #473: true while a visitor is using an interactive web page. Every capture tier then returns a
+     * blank frame and remote input is refused: the operator must not watch, or type into, a stranger's
+     * form. (FLAG_SECURE already blacks MediaProjection and the live video; this also covers the
+     * in-app view-draw tier and the accessibility screenshot, which FLAG_SECURE may not.)
+     */
+    @Volatile var privacyActive: (() -> Boolean)? = null
+    private fun privacyOn(): Boolean = try { privacyActive?.invoke() == true } catch (_: Throwable) { false }
+
+    private val blankFrame: String by lazy {
+        val bmp = android.graphics.Bitmap.createBitmap(160, 90, android.graphics.Bitmap.Config.RGB_565)
+        bmp.eraseColor(android.graphics.Color.BLACK)
+        val out = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 40, out)
+        bmp.recycle()
+        android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+    }
+
+    /*
+     * ⚠️ THE SCREEN'S HDMI INPUT CANNOT BE CAPTURED (player/LiveInput.kt): it is a hardware video
+     * plane — `screencap` exits 1 while it is up, and a view capture reads black where it sits. So
+     * while one is on screen the capture comes from the player's own window with a card painted over
+     * each input; this full-frame card is the fallback when that capture is unavailable, never a
+     * black frame that looks like a dead panel. Set by MainActivity.
+     */
+    var isShowingLiveInput: (() -> Boolean)? = null
+
+    private val liveInputFrame: String by lazy {
+        val bmp = android.graphics.Bitmap.createBitmap(640, 360, android.graphics.Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(bmp)
+        c.drawColor(android.graphics.Color.rgb(17, 17, 17))
+        val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(221, 221, 221); textAlign = android.graphics.Paint.Align.CENTER
+            textSize = 34f; isFakeBoldText = true
+        }
+        c.drawText("Live HDMI input", 320f, 170f, p)
+        p.textSize = 20f; p.isFakeBoldText = false; p.color = android.graphics.Color.rgb(150, 150, 150)
+        c.drawText("Playing on this screen. It can\u2019t be captured.", 320f, 210f, p)
+        val out = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, out)
+        bmp.recycle()
+        android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+    }
+
+    /** The tier the NEXT capture would use. Reported in telemetry so the dashboard can say why a
+     *  screenshot shows only the playlist. Must stay in step with captureScreen() below. */
+    fun currentCaptureMode(): CaptureMode = CaptureMode.current(onCaptureScreenshot != null)
+
+    /**
+     * The device_info payload, plus the capture tier this service is actually able to use.
+     *
+     * ⚠️ ONE builder for all THREE emit sites (register, re-register, heartbeat). capture_mode is
+     * added here rather than inside DeviceInfo because this service owns the capture decision, and
+     * routed through a single function because the payload is emitted from more than one place —
+     * adding the field at one call site is how a panel ends up reporting a capture mode on connect
+     * and none on the next heartbeat.
+     */
+    private fun deviceInfoPayload(): org.json.JSONObject =
+        deviceInfo.getDeviceInfo().apply {
+            try { put("capture_mode", currentCaptureMode().wire) } catch (_: Throwable) { /* best-effort */ }
+        }
+
+    private fun captureScreen(): String? {
+        if (privacyOn()) return blankFrame
+        if (try { isShowingLiveInput?.invoke() == true } catch (_: Throwable) { false }) {
+            // MediaProjection and accessibility both fail on the HDMI plane, so go straight to the
+            // player's own window: it draws everything real and paints a card over each input
+            // (ScreenshotCapture). The full-frame card is only for when even that is unavailable.
+            return try { onCaptureScreenshot?.invoke() } catch (_: Throwable) { null } ?: liveInputFrame
+        }
+        // Priority 1: MediaProjection (system-wide, works in background) — needs operator consent.
+        if (ScreenCaptureService.isReady) {
+            val result = ScreenCaptureService.captureScreen(40)
+            if (result != null) return result
+        }
+
+        // Priority 2 (#161 "see everything"): full display via the accessibility screenshot API — the
+        // WHOLE screen (system UI + other apps) with NO MediaProjection consent dialog. Available when
+        // the accessibility service is enabled (API 30+); nicely covers device-owner kiosk panels.
+        //
+        // ⚠️ When accessibility IS the active tier, a null here is a TRANSIENT miss — takeScreenshot is
+        // rate-limited by Android to ~1/sec and fails on timing jitter — NOT a reason to fall back to
+        // the player-window tier. Doing so flips a single frame from the real screen to the playlist
+        // and back, which the operator sees as the live view flickering between Settings and the
+        // playlist. Return null instead (skip the frame); the dashboard holds the last whole-screen
+        // frame until the next one lands. Only when accessibility is NOT available at all do we fall
+        // through to the player-window tier below.
+        if (CaptureMode.accessibilityCaptureAvailable()) {
+            return PowerAccessibilityService.instance?.captureFullScreen(40)
+        }
+
+        // Priority 3: app-content view capture (the player's OWN window only; foreground only).
+        val fromActivity = onCaptureScreenshot?.invoke()
+        if (fromActivity != null) return fromActivity
+
+        Log.w("WebSocketService", "No screenshot method available")
+        return null
+    }
+
+    fun captureAndSendScreenshot() {
+        Thread {
+            val b64 = captureScreen()
+            if (b64 != null) sendScreenshot(b64)
+        }.start()
+    }
+
+    fun sendScreenshot(imageBase64: String) {
+        if (socket?.connected() != true) return
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("image_b64", imageBase64)
+            }
+            socket?.emit("device:screenshot", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendScreenshot: ${e.message}") }
+    }
+
+    private fun injectKey(keycode: String) {
+        val svc = PowerAccessibilityService.instance
+
+        // Use AccessibilityService global actions for system keys (works without INJECT_EVENTS)
+        if (svc != null) {
+            // Any key other than a D-pad MOVE dismisses the navigation highlight — the operator is
+            // leaving the screen (Home/Back/Recents) or selecting, so the blue box should not linger.
+            when (keycode) {
+                "KEYCODE_DPAD_UP", "KEYCODE_DPAD_DOWN", "KEYCODE_DPAD_LEFT", "KEYCODE_DPAD_RIGHT" -> {}
+                else -> svc.clearDpadCursor()
+            }
+            when (keycode) {
+                "KEYCODE_POWER" -> { handler.post { svc.showPowerDialog() }; return }
+                "KEYCODE_HOME" -> {
+                    // Launch our activity instead of system Home (we ARE the launcher)
+                    // This avoids creating duplicate instances
+                    handler.post {
+                        val intent = Intent(this@WebSocketService, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        }
+                        startActivity(intent)
+                    }
+                    return
+                }
+                "KEYCODE_BACK" -> { handler.post { svc.pressBack() }; return }
+                "KEYCODE_APP_SWITCH" -> { handler.post { svc.openRecents() }; return }
+                // D-pad + select ride the accessibility focus path (no INJECT_EVENTS needed). The old
+                // shell 'input keyevent' below silently failed for these on a normal APK process, which
+                // is exactly why arrows did nothing on a device the operator could tap on.
+                "KEYCODE_DPAD_UP", "KEYCODE_DPAD_DOWN", "KEYCODE_DPAD_LEFT",
+                "KEYCODE_DPAD_RIGHT", "KEYCODE_DPAD_CENTER", "KEYCODE_ENTER" -> {
+                    handler.post {
+                        if (!svc.pressDpad(keycode)) {
+                            Log.w("WebSocketService", "D-pad $keycode had no focus target (accessibility nav)")
+                        }
+                    }
+                    return
+                }
+            }
+        }
+
+        // For other keys, use shell input keyevent. ⚠️ This needs the shell UID / INJECT_EVENTS, which
+        // this process does NOT hold, so it fails on most hardware — surfaced below instead of swallowed.
+        // (D-pad and system keys above take the accessibility path; only VOLUME/MENU still land here.)
+        val code = when (keycode) {
+            "KEYCODE_HOME" -> "3"
+            "KEYCODE_BACK" -> "4"
+            "KEYCODE_MENU" -> "82"
+            "KEYCODE_VOLUME_UP" -> "24"
+            "KEYCODE_VOLUME_DOWN" -> "25"
+            "KEYCODE_DPAD_UP" -> "19"
+            "KEYCODE_DPAD_DOWN" -> "20"
+            "KEYCODE_DPAD_LEFT" -> "21"
+            "KEYCODE_DPAD_RIGHT" -> "22"
+            "KEYCODE_DPAD_CENTER" -> "23"
+            "KEYCODE_ENTER" -> "66"
+            "KEYCODE_POWER" -> "26"
+            else -> return
+        }
+
+        Log.i("WebSocketService", "Injecting key: $keycode ($code)")
+        Thread {
+            try {
+                val exit = Runtime.getRuntime().exec(arrayOf("input", "keyevent", code)).waitFor()
+                if (exit != 0) {
+                    Log.w("WebSocketService", "shell 'input keyevent $code' exited $exit " +
+                        "($keycode not injected - process lacks INJECT_EVENTS)")
+                }
+            } catch (e: Exception) {
+                Log.e("WebSocketService", "Key injection failed for $keycode: ${e.message}")
+            }
+        }.start()
+    }
+
+    fun sendContentAck(contentId: String, status: String) {
+        if (socket?.connected() != true) return
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("content_id", contentId)
+                put("status", status)
+            }
+            socket?.emit("device:content-ack", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendContentAck: ${e.message}") }
+    }
+
+    // #109: surface a log line to the dashboard device-detail screen (dashboard:device-log).
+    // Used for PiP show/clear (tag "pip"); guarded like the other emitters.
+    fun sendLog(tag: String, level: String, message: String) {
+        if (socket?.connected() != true) return
+        try {
+            socket?.emit("device:log", JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("tag", tag)
+                put("level", level)
+                put("message", message)
+            })
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendLog: ${e.message}") }
+    }
+
+    // #139 Phase 2 (Option B): announce an OTA status transition to the server so the dashboard
+    // badge updates promptly (not only on reconnect). Reads the just-persisted throttle state —
+    // the emit always reflects the stored truth. Called by UpdateChecker at clear / enter-backoff.
+    fun sendOtaStatus() {
+        if (socket?.connected() != true) return
+        try {
+            val s = OtaThrottle.State(config.otaTargetVersion, config.otaAttempts, config.otaLastAttemptAt, config.otaBackoffReported)
+            socket?.emit("device:ota-status", JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("ota_status", OtaThrottle.statusFor(s, System.currentTimeMillis()))
+                put("ota_target_version", config.otaTargetVersion)
+                put("ota_attempts", config.otaAttempts)
+            })
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendOtaStatus: ${e.message}") }
+    }
+
+    fun sendPlaybackState(contentId: String, positionSec: Float) {
+        if (socket?.connected() != true) return
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("current_content_id", contentId)
+                put("position_sec", positionSec)
+            }
+            socket?.emit("device:playback-state", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendPlaybackState: ${e.message}") }
+    }
+
+    // Proof-of-play — parity with the web player's device:play-event (server/player/index.html).
+    // Without these, Android devices never populate the play_logs table, so Reports show
+    // Total Plays / Hours / proof-of-play as all zero for them. play_start INSERTs a row on show;
+    // play_end fills its duration on advance. Matches the server handler in ws/deviceSocket.js.
+    /*
+     * #299: the offline half of proof-of-play. Live plays are still reported exactly as before —
+     * the server stamps them and nothing here changes. What is new is that a play happening with
+     * the socket DOWN is remembered instead of being dropped on the floor.
+     */
+    private val playQueue = OfflinePlayQueue()
+    private var queueLoaded = false
+    /** The play we are inside, when offline: completed and queued when the item is left. */
+    private var offlineStart: Triple<String, String, Long>? = null   // contentId, name, startedAtSec
+    private var flushInFlight = false
+    /*
+     * The server acks a flush with counts, not ids, so the entries just sent are cleared after a
+     * short grace rather than on a per-id reply. Long enough for a round trip on a slow link;
+     * short enough that a large backlog still drains promptly.
+     */
+    private val FLUSH_ACK_GRACE_MS = 4000L
+
+    private fun loadQueueOnce() {
+        if (queueLoaded) return
+        queueLoaded = true
+        try { playQueue.restore(config.offlinePlayQueue) } catch (e: Throwable) {
+            Log.w("WebSocketService", "play queue restore: ${e.message}")
+        }
+        if (playQueue.size > 0) Log.i("WebSocketService", "offline play backlog restored: ${playQueue.size}")
+    }
+
+    private fun persistQueue() {
+        try { config.offlinePlayQueue = playQueue.serialize() } catch (e: Throwable) {
+            Log.w("WebSocketService", "play queue persist: ${e.message}")
+        }
+    }
+
+    /**
+     * Send the queued backlog, oldest first, one batch at a time.
+     *
+     * ⚠️ ENTRIES ARE DROPPED ONLY ON THE SERVER'S ACK. Clearing at send time would turn a flush
+     * into a dead socket back into exactly the silent loss this whole change exists to stop.
+     */
+    fun flushOfflinePlays() {
+        loadQueueOnce()
+        if (flushInFlight || playQueue.size == 0 || socket?.connected() != true) return
+        val batch = playQueue.peekBatch()
+        if (batch.isEmpty()) return
+        flushInFlight = true
+        try {
+            val payload = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("event", "play_offline")
+                put("plays", playQueue.batchJson(batch))
+            }
+            socket?.emit("device:play-event", payload)
+            /*
+             * The ack carries only counts, so the ids acked are the ones just sent. A batch the
+             * server partially rejected (an unusable timestamp) is still removed — retrying it
+             * forever would wedge the queue behind one bad entry and block everything after it.
+             */
+            handler.postDelayed({
+                playQueue.ack(batch.map { it.clientEventId })
+                persistQueue()
+                flushInFlight = false
+                if (playQueue.size > 0) flushOfflinePlays()   // drain the rest
+            }, FLUSH_ACK_GRACE_MS)
+            Log.i("WebSocketService", "flushed ${batch.size} offline plays (${playQueue.size} queued)")
+        } catch (e: Throwable) {
+            flushInFlight = false
+            Log.w("WebSocketService", "flushOfflinePlays: ${e.message}")
+        }
+    }
+
+    fun sendPlayStart(contentId: String, contentName: String, durationSec: Int) {
+        if (socket?.connected() != true) {
+            // Offline: remember when this item started so the play can be completed on leaving it.
+            loadQueueOnce()
+            offlineStart = Triple(contentId, contentName, System.currentTimeMillis() / 1000)
+            return
+        }
+        offlineStart = null
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("event", "play_start")
+                put("content_id", if (contentId.isEmpty()) JSONObject.NULL else contentId)
+                put("content_name", contentName)
+                put("duration_sec", if (durationSec > 0) durationSec else JSONObject.NULL)
+            }
+            socket?.emit("device:play-event", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendPlayStart: ${e.message}") }
+    }
+
+    /** 3.0 campaigns: a whole layout went on screen (server: play-event layout_start). Live only. */
+    fun sendLayoutStart(layoutId: String, layoutName: String, durationSec: Int) {
+        if (socket?.connected() != true || layoutId.isEmpty()) return
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("event", "layout_start")
+                put("layout_id", layoutId)
+                put("content_name", layoutName)
+                put("duration_sec", if (durationSec > 0) durationSec else JSONObject.NULL)
+            }
+            socket?.emit("device:play-event", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendLayoutStart: ${e.message}") }
+    }
+
+    fun sendPlayEnd(contentId: String, contentName: String, completed: Boolean) {
+        if (socket?.connected() != true) {
+            /*
+             * Offline: close the play we opened and queue it whole. Without a matching start we
+             * have no idea when it began, and inventing one would put a fabricated time into a
+             * report — so an unmatched end is discarded rather than guessed at.
+             */
+            val open = offlineStart
+            offlineStart = null
+            if (open != null && open.first == contentId) {
+                loadQueueOnce()
+                val now = System.currentTimeMillis() / 1000
+                /*
+                 * The caller collapses content and widget into one id (MainActivity: `contentId
+                 * ifEmpty widgetId`), so this layer genuinely cannot tell them apart — and must not
+                 * guess. It is sent as content_id and the SERVER resolves which table owns it,
+                 * exactly as it already does for live plays.
+                 */
+                playQueue.add(
+                    OfflinePlayQueue.Play(
+                        clientEventId = java.util.UUID.randomUUID().toString(),
+                        contentId = contentId.ifEmpty { null },
+                        widgetId = null,
+                        contentName = contentName,
+                        startedAtSec = open.third,
+                        endedAtSec = now,
+                        completed = completed,
+                    )
+                )
+                persistQueue()
+            }
+            return
+        }
+        try {
+            val data = JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("event", "play_end")
+                put("content_id", if (contentId.isEmpty()) JSONObject.NULL else contentId)
+                put("content_name", contentName)
+                put("completed", completed)
+            }
+            socket?.emit("device:play-event", data)
+        } catch (e: Throwable) { Log.w("WebSocketService", "sendPlayEnd: ${e.message}") }
+    }
+
+    // Video-wall senders. Guarded on socket.connected() like sendPlaybackState, so a
+    // pre-register tick is a no-op (the server would reject it as unauthenticated).
+    fun emitWallSync(wallId: String, currentIndex: Int, contentId: String?, positionSec: Float) {
+        if (socket?.connected() != true) return
+        try {
+            socket?.emit("wall:sync", JSONObject().apply {
+                put("wall_id", wallId)
+                put("device_id", config.deviceId)
+                put("current_index", currentIndex)
+                put("content_id", contentId ?: JSONObject.NULL)
+                put("position_sec", positionSec.toDouble())
+                put("sent_at", System.currentTimeMillis())
+            })
+        } catch (e: Throwable) { Log.w("WebSocketService", "emitWallSync: ${e.message}") }
+    }
+
+    fun emitWallSyncRequest(wallId: String) {
+        if (socket?.connected() != true) return
+        try {
+            socket?.emit("wall:sync-request", JSONObject().apply { put("wall_id", wallId) })
+        } catch (e: Throwable) { Log.w("WebSocketService", "emitWallSyncRequest: ${e.message}") }
+    }
+
+    // #group-sync: same payload as wall sync, keyed by group_id (server relays to group members).
+    fun emitGroupSync(groupId: String, currentIndex: Int, contentId: String?, positionSec: Float) {
+        if (socket?.connected() != true) return
+        try {
+            socket?.emit("group:sync", JSONObject().apply {
+                put("group_id", groupId)
+                put("device_id", config.deviceId)
+                put("current_index", currentIndex)
+                put("content_id", contentId ?: JSONObject.NULL)
+                put("position_sec", positionSec.toDouble())
+                put("sent_at", System.currentTimeMillis())
+            })
+        } catch (e: Throwable) { Log.w("WebSocketService", "emitGroupSync: ${e.message}") }
+    }
+
+    fun emitGroupSyncRequest(groupId: String) {
+        if (socket?.connected() != true) return
+        try {
+            socket?.emit("group:sync-request", JSONObject().apply { put("group_id", groupId) })
+        } catch (e: Throwable) { Log.w("WebSocketService", "emitGroupSyncRequest: ${e.message}") }
+    }
+
+    // ── feat/offline-cause-log: connectivity-report + device:event emitters ──────────────────────
+    // All guarded, all no-ops when unpaired/disconnected. See the field block near markAlive() for
+    // the state model. The server (deviceSocket.js) turns a report into a human offline reason.
+
+    /**
+     * Called from EVENT_CONNECT. Decides whether this connect warrants a connectivity-report and, if
+     * so, snapshots the gap into the pending* fields for flushConnectivityReport() to emit once we're
+     * authenticated. Two cases:
+     *   - a prior in-process disconnect (disconnectedAtMs != 0) → the app survived the gap, so this is
+     *     NOT a reboot: report offline_ms + link_lost (network vs router/upstream).
+     *   - the process's very first connect with NO prior disconnect, on a freshly-booted device
+     *     (elapsedRealtime within the cold-start window) → one-shot cold_start report (power/reboot).
+     * Never emits directly (auth isn't established yet); only arms the pending report.
+     */
+    private fun armConnectivityReport() {
+        try {
+            val now = SystemClock.elapsedRealtime()
+            if (disconnectedAtMs != 0L) {
+                pendingOfflineMs = now - disconnectedAtMs
+                pendingLinkLost = linkLostDuringGap
+                pendingInternetOk = internetOkDuringGap   // may be null if the probe didn't finish
+                pendingColdStart = false
+                pendingReport = true
+                // Reset the gap trackers now that it's been captured for report.
+                disconnectedAtMs = 0L
+                linkLostDuringGap = false
+                internetOkDuringGap = null
+            } else if (!sawFirstConnect && now < COLD_START_WINDOW_MS) {
+                pendingOfflineMs = now           // best-effort "time since boot" as the offline span
+                pendingLinkLost = false
+                pendingInternetOk = null
+                pendingColdStart = true
+                pendingReport = true
+            }
+            sawFirstConnect = true
+        } catch (e: Throwable) { Log.w("WebSocketService", "armConnectivityReport: ${e.message}") }
+    }
+
+    /** Emit the armed connectivity-report (from device:registered, i.e. post-auth). One-shot. */
+    private fun flushConnectivityReport() {
+        if (!pendingReport) return
+        pendingReport = false
+        emitConnectivityReport(pendingOfflineMs, pendingLinkLost, pendingColdStart, pendingInternetOk)
+    }
+
+    // Fire a short public-host reachability check on a background thread (never on the socket thread).
+    // Success on EITHER 1.1.1.1 or 8.8.8.8 :443 = the wider internet is reachable. Result lands in
+    // internetOkDuringGap; if the gap ends before it finishes, the report simply omits internet_ok.
+    private fun probeInternetAsync() {
+        Thread {
+            val ok = probeHost("1.1.1.1") || probeHost("8.8.8.8")
+            // Only record if we're still in the SAME gap (not reset by a reconnect meanwhile).
+            if (disconnectedAtMs != 0L) internetOkDuringGap = ok
+        }.apply { isDaemon = true }.start()
+    }
+    private fun probeHost(host: String): Boolean = try {
+        java.net.Socket().use { s -> s.connect(java.net.InetSocketAddress(host, 443), 3000); true }
+    } catch (_: Throwable) { false }
+
+    private fun emitConnectivityReport(offlineMs: Long, linkLost: Boolean, coldStart: Boolean, internetOk: Boolean?) {
+        try {
+            val id = config.deviceId
+            if (id.isEmpty() || socket?.connected() != true) return
+            val ssid = readWifiSsid()
+            val rssi = readWifiRssi()
+            val ip = readCurrentIp()
+            val ipChanged = lastIpSnapshot != null && ip != null && ip != lastIpSnapshot
+            if (ip != null) lastIpSnapshot = ip
+            val data = JSONObject().apply {
+                put("device_id", id)
+                put("offline_ms", offlineMs)
+                put("link_lost", linkLost)
+                if (!ssid.isNullOrEmpty() && ssid != "Unknown") put("ssid", ssid)
+                if (rssi != 0) put("rssi", rssi)
+                put("ip_changed", ipChanged)
+                put("cold_start", coldStart)
+                if (internetOk != null) put("internet_ok", internetOk)   // omitted when the probe didn't finish
+            }
+            socket?.emit("device:connectivity-report", data)
+            Log.i("WebSocketService", "connectivity-report offline_ms=$offlineMs link_lost=$linkLost internet_ok=$internetOk cold_start=$coldStart ip_changed=$ipChanged")
+        } catch (e: Throwable) { Log.w("WebSocketService", "emitConnectivityReport: ${e.message}") }
+    }
+
+    // ── Audience counting: per-minute counts, queued until acked (audience/AudienceController.kt) ──
+    @Volatile private var audienceFlushInFlight = false
+
+    fun flushAudience() {
+        if (audienceFlushInFlight || socket?.connected() != true || config.deviceId.isEmpty()) return
+        val batch = com.remotedisplay.player.audience.AudienceLog.peek(applicationContext)
+        if (batch.isEmpty()) return
+        audienceFlushInFlight = true
+        try {
+            socket?.emit("device:audience", JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("buckets", JSONArray().apply { batch.forEach { put(it.toJson()) } })
+            })
+            // An older server never acks: stop waiting after a while so a later flush can retry.
+            handler.postDelayed({ audienceFlushInFlight = false }, 30_000)
+        } catch (e: Throwable) {
+            audienceFlushInFlight = false
+            Log.w("WebSocketService", "flushAudience: ${e.message}")
+        }
+    }
+
+    // ── #473 v2: interactive web pages ──────────────────────────────────────────────────────────
+    @Volatile private var kioskFlushInFlight = false
+
+    /**
+     * Send queued interactive-page sessions, one batch at a time. Records leave the queue only on
+     * device:kiosk-sessions-ack; a lost ack just means the batch is resent and the server ignores the
+     * duplicates (it keys on the record id).
+     */
+    fun flushKioskSessions() {
+        if (kioskFlushInFlight || socket?.connected() != true || config.deviceId.isEmpty()) return
+        val batch = com.remotedisplay.player.kiosk.KioskSessionLog.peek(applicationContext)
+        if (batch.isEmpty()) return
+        kioskFlushInFlight = true
+        try {
+            socket?.emit("device:kiosk-sessions", JSONObject().apply {
+                put("device_id", config.deviceId)
+                put("sessions", JSONArray().apply { batch.forEach { put(it.toJson()) } })
+            })
+            // An older server never acks: stop waiting after a while so a later flush can retry.
+            handler.postDelayed({ kioskFlushInFlight = false }, 30_000)
+        } catch (e: Throwable) {
+            kioskFlushInFlight = false
+            Log.w("WebSocketService", "flushKioskSessions: ${e.message}")
+        }
+    }
+
+    /**
+     * A failed interactive page, as a dashboard incident. Already rate-limited by the caller.
+     * ⚠️ The commonest failure is "no network", which is exactly when it cannot be sent, so the
+     * last few are held (in memory) and sent on the next registration.
+     */
+    private val pendingKioskErrors = ArrayDeque<Pair<String, String>>()
+    fun sendKioskError(reason: String, detail: String) {
+        val d = detail.take(400)
+        if (socket?.connected() == true && config.deviceId.isNotEmpty()) { emitEvent("web_error", reason, d); return }
+        synchronized(pendingKioskErrors) {
+            pendingKioskErrors.addLast(reason to "$d (while offline)")
+            while (pendingKioskErrors.size > 10) pendingKioskErrors.removeFirst()
+        }
+    }
+    private fun flushKioskErrors() {
+        val list = synchronized(pendingKioskErrors) { pendingKioskErrors.toList().also { pendingKioskErrors.clear() } }
+        for ((r, d) in list) emitEvent("web_error", r, d)
+    }
+
+    /** Emit a typed incident (device_events). Guarded + no-op when unpaired/disconnected. */
+    private fun emitEvent(type: String, reason: String? = null, detail: String? = null) {
+        try {
+            val id = config.deviceId
+            if (id.isEmpty() || socket?.connected() != true) return
+            socket?.emit("device:event", JSONObject().apply {
+                put("device_id", id)
+                put("type", type)
+                if (reason != null) put("reason", reason)
+                if (detail != null) put("detail", detail)
+            })
+            Log.i("WebSocketService", "device:event $type${reason?.let { " ($it)" } ?: ""}")
+        } catch (e: Throwable) { Log.w("WebSocketService", "emitEvent: ${e.message}") }
+    }
+
+    // Wi‑Fi/IP snapshot helpers — mirror telemetry's DeviceInfo.getWifiSSID/RSSI (those are private
+    // there). @Suppress DEPRECATION: WifiManager.connectionInfo is deprecated on API 31+ but is the
+    // only path that works down to minSdk 24 and still returns for a foreground/system app.
+    @Suppress("DEPRECATION")
+    private fun readWifiSsid(): String? = try {
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        wm?.connectionInfo?.ssid?.replace("\"", "")
+    } catch (e: Throwable) { null }
+
+    @Suppress("DEPRECATION")
+    private fun readWifiRssi(): Int = try {
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        wm?.connectionInfo?.rssi ?: 0
+    } catch (e: Throwable) { 0 }
+
+    /** First non-loopback IPv4 on any up interface (Wi‑Fi or Ethernet) — no extra permission needed. */
+    private fun readCurrentIp(): String? = try {
+        var found: String? = null
+        val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
+        while (ifaces != null && ifaces.hasMoreElements() && found == null) {
+            val iface = ifaces.nextElement()
+            if (!iface.isUp || iface.isLoopback) continue
+            val addrs = iface.inetAddresses
+            while (addrs.hasMoreElements()) {
+                val addr = addrs.nextElement()
+                if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) { found = addr.hostAddress; break }
+            }
+        }
+        found
+    } catch (e: Throwable) { null }
+
+    // #312 follow-up: operator-visible result for set_server_url, on the dashboard log stream (same
+    // channel set_debug/shell use). Logged locally too, since on a successful switch the socket this
+    // went out on is about to be torn down.
+    private fun emitCommandLog(msg: String) {
+        Log.i("WebSocketService", msg)
+        try { socket?.emit("device:log", JSONObject().apply { put("tag", "set_server_url"); put("level", "info"); put("message", msg) }) } catch (_: Throwable) {}
+    }
+
+    /*
+     * #312 follow-up: is `url` a reachable ScreenTinker server? The verify half of verify-then-commit.
+     * A GET of /api/status returns JSON carrying version/features on our server; we accept a 2xx that
+     * looks like that. Deliberately conservative — a redirect, a 401/404, a captive portal or a
+     * timeout all read as "not reachable", so the caller keeps the old URL. Blocking; call off the
+     * main thread. Two short attempts, because the first packet after a network change is often lost.
+     */
+    private fun probeServerReachable(url: String): Boolean {
+        repeat(2) { attempt ->
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL("$url/api/status").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 6000
+                    readTimeout = 6000
+                    instanceFollowRedirects = false
+                    setRequestProperty("Accept", "application/json")
+                }
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }.take(4000)
+                    if (body.contains("\"version\"") || body.contains("\"features\"") || body.contains("\"status\"")) return true
+                    Log.w("WebSocketService", "probe: $url answered $code but not a ScreenTinker /api/status")
+                } else {
+                    Log.w("WebSocketService", "probe: $url returned HTTP $code")
+                }
+            } catch (e: Throwable) {
+                Log.w("WebSocketService", "probe attempt ${attempt + 1} to $url failed: ${e.message}")
+            } finally {
+                try { conn?.disconnect() } catch (_: Throwable) {}
+            }
+            if (attempt == 0) try { Thread.sleep(1200) } catch (_: InterruptedException) {}
+        }
+        return false
+    }
+
+    fun disconnect() {
+        stopHeartbeat()
+        cancelReopen()
+        socketActive = false
+        try { socket?.disconnect() } catch (e: Throwable) { Log.w("WebSocketService", "disconnect: ${e.message}") }
+        try { socket?.off() } catch (e: Throwable) { Log.w("WebSocketService", "off: ${e.message}") }
+        socket = null
+    }
+
+    // #148 reconnect discipline: bring up exactly ONE new connection after an eviction, with a
+    // backoff, and only one pending at a time — so a server eviction can't trigger a blind
+    // re-open loop. connect() itself is idempotent, so this is safe even if an activity rebind
+    // races it.
+    private fun scheduleReopen(delayMs: Long) {
+        if (reopenRunnable != null) return
+        val r = Runnable { reopenRunnable = null; connect() }
+        reopenRunnable = r
+        handler.postDelayed(r, delayMs)
+    }
+    private fun cancelReopen() {
+        reopenRunnable?.let { handler.removeCallbacks(it) }
+        reopenRunnable = null
+    }
+
+    fun isConnected(): Boolean = socket?.connected() == true
+
+    // Consecutive connection failures (reset on any successful connect).
+    // Used by MainActivity to surface a "Stuck connecting?" prompt.
+    @Volatile var consecutiveFailures: Int = 0
+        private set
+
+    override fun onDestroy() {
+        // Exit-signal contract v1 — 'clean_exit' (BEST-EFFORT). onDestroy runs ONLY on cooperative
+        // teardown (stopService/unbind/memory-reclaim-with-grace); a force-stop / MDM-uninstall / SIGKILL
+        // skips it entirely -> the server infers 'silent' (correct — not misclassified). Try the still-
+        // live socket first, then a bounded blocking beacon (the reliable path); the server dedups.
+        try {
+            if (socket?.connected() == true && config.deviceId.isNotEmpty()) {
+                socket?.emit("device:exit", JSONObject().apply {
+                    put("device_id", config.deviceId); put("reason", "clean_exit"); put("detail", "onDestroy")
+                })
+            }
+        } catch (e: Throwable) { /* never let the last gasp block teardown */ }
+        val ctx = applicationContext
+        Thread { ExitSignal.send(ctx, "clean_exit", "onDestroy") }.apply { start(); try { join(1500) } catch (e: InterruptedException) { /* proceed with teardown */ } }
+        try { powerSchedule?.stop() } catch (e: Throwable) { /* teardown is best-effort */ }
+        powerSchedule = null
+        try { endpointPoller?.stop() } catch (e: Throwable) { /* teardown is best-effort */ }
+        endpointPoller = null
+        reconnectWatchdog?.let { handler.removeCallbacks(it) }; reconnectWatchdog = null
+        // feat/offline-cause-log: tear down the diagnostics plumbing (guarded — a never-registered
+        // receiver/callback would otherwise throw IllegalArgumentException here).
+        try { netCallback?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(it) } } catch (e: Throwable) { Log.w("WebSocketService", "unregister netCallback: ${e.message}") }
+        netCallback = null
+        try { screenReceiver?.let { unregisterReceiver(it) } } catch (e: Throwable) { Log.w("WebSocketService", "unregister screenReceiver: ${e.message}") }
+        screenReceiver = null
+        wakeLock?.let { if (it.isHeld) it.release() }
+        try { screenShare.shutdown("screen_left") } catch (e: Throwable) { }   // 3.0 screen share
+        disconnect()
+        super.onDestroy()
+    }
+
+    private fun createNotification(): Notification {
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, RemoteDisplayApp.CHANNEL_ID)
+            .setContentTitle("ScreenTinker")
+            .setContentText("Display service is running")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+    }
+
+    /**
+     * ⚠️ THE ONE COMMAND DISPATCH. Extracted from the `device:command` handler when the local REST
+     * door landed, because that door needed to run a command and the alternative was a second
+     * `when (type)` somewhere else. Two of those drift — silently, and in the direction that
+     * matters: one door accepting something the other refuses, or handling it differently. The
+     * trigger stack already carries this warning for its two transports (TriggerListeners: "BOTH
+     * CONVERGE ON ONE HANDLER"); this is the same rule for commands.
+     *
+     * Every caller reaches a command through here: the socket, and LocalApi. The gating differs
+     * (LocalApi has its own, much smaller allowlist — the LAN is not the dashboard), but what a
+     * command DOES is decided in exactly one place.
+     */
+    /**
+     * The LOCAL REST door's way in (Goal B part 3).
+     *
+     * ⚠️ It is a one-line pass-through to [dispatchCommand] ON PURPOSE. The entitlement question —
+     * may a LAN caller ask for this at all — is answered in LocalApi.COMMANDS, before this is
+     * reached. What the command DOES is answered here, in the same place a dashboard command is
+     * answered. Anything else and a screen would behave differently depending on which door the
+     * command came through, which is exactly the kind of difference nobody tests for.
+     */
+    fun runLocalApiCommand(type: String, payload: org.json.JSONObject?) {
+        Log.i("WebSocketService", "[local-api] $type")
+        dispatchCommand(type, payload)
+    }
+
+    /**
+     * The /api/status body: what a room control system asks about a screen.
+     *
+     * ⚠️ NOTHING SECRET GOES IN HERE, and the list of what that excludes is longer than it looks:
+     * the device token, the trigger secret, the local API secret itself, the settings PIN, and the
+     * server URL — the last one because it names the tenant's server, and a screen in a lobby should
+     * not tell the lobby's network who runs it. What is left is the answer to "is the sign alive,
+     * is it lit, and is it in touch with its server", which is the whole question being asked.
+     */
+    fun localApiStatus(): org.json.JSONObject = org.json.JSONObject().apply {
+        try {
+            put("ok", true)
+            put("device_id", config.deviceId)
+            put("name", config.deviceName)
+            // The same source the heartbeat reports from (DeviceInfo.getAppVersion), not BuildConfig:
+            // an OTA-updated panel and its BuildConfig can disagree, and a control system comparing
+            // this against the dashboard must not be shown two different versions of one screen.
+            put("app_version", packageManager.getPackageInfo(packageName, 0).versionName ?: "")
+            put("connected", isConnected())
+            // ⚠️ The SCHEDULED state, not a guess from the last command: a panel woken manually
+            // inside an off-window is on, and a control system asking "is the screen lit" needs the
+            // answer to be about the screen and not about the schedule on paper.
+            put("screen", powerSchedule?.state ?: "on")
+            put("uptime_ms", android.os.SystemClock.elapsedRealtime())
+        } catch (e: Throwable) {
+            Log.w("WebSocketService", "localApiStatus: ${e.message}")
+        }
+    }
+
+    private fun dispatchCommand(type: String, payload: org.json.JSONObject?) {
+        when (type) {
+            "launch" -> {
+                handler.post {
+                    try {
+                        val intent = Intent(this@WebSocketService, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        }
+                        startActivity(intent)
+                        Log.i("WebSocketService", "Launched MainActivity from service")
+                    } catch (e: Throwable) { Log.e("WebSocketService", "launch cmd: ${e.message}") }
+                }
+            }
+            "settings" -> {
+                handler.post {
+                    // Resolve first: a stripped TV/AOSP build may have no ACTION_SETTINGS
+                    // handler, and the app's own App Info page is the next best door. Either
+                    // way say what happened in the log — a silent no-op on a box with no
+                    // touch input is indistinguishable from "the command never arrived".
+                    val candidates = listOf(
+                        Intent(android.provider.Settings.ACTION_SETTINGS),
+                        Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            setData(android.net.Uri.parse("package:$packageName"))
+                        },
+                    )
+                    val opened = candidates.firstOrNull { intent ->
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        val ok = try { packageManager.resolveActivity(intent, 0) != null } catch (_: Throwable) { false }
+                        ok && try { startActivity(intent); true } catch (e: Throwable) { Log.w("WebSocketService", "settings cmd: ${intent.action}: ${e.message}"); false }
+                    }
+                    if (opened == null) Log.e("WebSocketService", "settings cmd: no Settings activity on this build")
+                    else Log.i("WebSocketService", "settings cmd: opened ${opened.action}")
+                }
+            }
+            "enable_system_capture" -> {
+                handler.post {
+                    try {
+                        com.remotedisplay.player.ScreenCapturePermissionActivity.requestPermission(this@WebSocketService)
+                    } catch (e: Throwable) { Log.e("WebSocketService", "enable_system_capture: ${e.message}") }
+                }
+            }
+            // #161: real lock on owner/admin (FORCE_LOCK), else accessibility lock. The
+            // `input keyevent 26` exec (denied for an unprivileged UID) is retired.
+            "screen_off" -> handler.post {
+                // An operator screen_off is just a screen_off — it creates no schedule
+                // and clears any exemption they had from the running one.
+                powerSchedule?.noteManualScreenOff()
+                blankPanel()
+            }
+            /*
+             * The weekly backlight schedule: a DEFINITION, not "go dark now". Handled in
+             * the SERVICE so it survives the Activity being stopped or destroyed — which
+             * is the normal state during a scheduled-off window. null CLEARS.
+             */
+            "set_power_schedule" -> handler.post {
+                powerSchedule?.update(payload?.optJSONObject("schedule"))
+            }
+            /*
+             * Device-side REST. Runs on a worker thread, NOT the handler: a request to
+             * an unreachable PLC blocks for the full timeout, and doing that on the main
+             * looper would freeze playback, the heartbeat and the power tick with it.
+             *
+             * The answer always comes back — a refusal, a timeout and a 500 are all
+             * results. Silence would be indistinguishable from a command that never
+             * arrived, which is the failure this whole surface exists to avoid.
+             */
+            "http_request" -> Thread {
+                try {
+                    val result = com.remotedisplay.player.net.DeviceHttp.perform(payload)
+                    val out = result.toJson().apply { put("device_id", config.deviceId) }
+                    handler.post {
+                        try { socket?.emit("device:http-result", out) }
+                        catch (e: Throwable) { Log.w("WebSocketService", "http-result emit: ${e.message}") }
+                    }
+                    Log.i("WebSocketService", "http_request ${result.status} ok=${result.ok} in ${result.durationMs}ms")
+                } catch (e: Throwable) {
+                    Log.e("WebSocketService", "http_request: ${e.message}")
+                }
+            }.apply { isDaemon = true }.start()
+            // Was a no-op because `input keyevent 224` is denied to an app UID — but a
+            // wake LOCK is a different mechanism needing only WAKE_LOCK, which we hold.
+            // Handled here as well as in MainActivity so a panel whose Activity is not
+            // foregrounded can still be woken; the service is the only thing guaranteed
+            // to be alive, and "screen won't come back on" means a site visit.
+            "screen_on" -> {
+                // An operator waking a screen inside a scheduled-off window is exempt
+                // from that window until it ENDS. Noted before the wake so the tick
+                // cannot race in and re-blank the panel they just asked for.
+                powerSchedule?.noteManualScreenOn()
+                wakePanel(bringToFront = true, payload = payload)
+            }
+            "set_debug" -> {
+                val on = payload?.optBoolean("enabled", false) ?: false
+                // Point the sink at this socket, then flip the flag. When on,
+                // DebugLog.* mirrors player/zone lines to the dashboard.
+                com.remotedisplay.player.util.DebugLog.sink = { tag, level, msg ->
+                    try {
+                        socket?.emit("device:log", JSONObject().apply {
+                            put("tag", tag); put("level", level); put("message", msg)
+                        })
+                    } catch (_: Throwable) {}
+                }
+                com.remotedisplay.player.util.DebugLog.enabled = on
+                Log.i("WebSocketService", "Remote debug logging ${if (on) "ENABLED" else "disabled"}")
+                com.remotedisplay.player.util.DebugLog.i("Debug", "Remote debug logging ${if (on) "ON" else "OFF"}")
+            }
+            // #161 device-owner tooling: a remote shell. NOTE it runs as the APP's UID (not
+            // root/shell) — device owner does not grant a privileged shell — so it's for
+            // diagnostics (getprop, ls, dumpsys reads, am/pm where allowed). Output streamed
+            // back to the dashboard. Gated server-side (admin/full scope in ALLOWED_COMMANDS).
+            "shell" -> {
+                val cmd = payload?.optString("cmd", "") ?: ""
+                if (cmd.isNotBlank()) Thread {
+                    var out = ""; var exit = -1
+                    try {
+                        val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+                        val so = p.inputStream.bufferedReader().readText()
+                        val se = p.errorStream.bufferedReader().readText()
+                        exit = p.waitFor()
+                        out = (so + (if (se.isNotEmpty()) "\n[stderr]\n$se" else "")).take(8000)
+                        if (out.isBlank()) out = "(no output, exit=$exit)"
+                    } catch (e: Throwable) { out = "error: ${e.message}" }
+                    try {
+                        socket?.emit("device:shell-result", JSONObject().apply {
+                            put("device_id", config.deviceId); put("cmd", cmd); put("output", out); put("exit", exit)
+                        })
+                    } catch (_: Throwable) {}
+                }.start()
+            }
+            // #312 follow-up: rewrite the stored server URL, e.g. after a server move,
+            // pushed from the dashboard to one device / a group / a whole workspace.
+            // VERIFY-THEN-COMMIT: keep the old URL, confirm the new one is a reachable
+            // ScreenTinker server, and only then persist it (mirrored to both stores by
+            // ServerConfig, #312) and reconnect. A bad address rolls back, so a
+            // fat-fingered URL cannot strand the panel — the failure this whole issue is
+            // about. Runs off the socket thread because it does blocking network I/O.
+            "set_server_url" -> {
+                val newUrl = (payload?.optString("url", "") ?: "").trim().trimEnd('/')
+                val old = config.serverUrl
+                when {
+                    newUrl.isEmpty() ->
+                        emitCommandLog("set_server_url refused: no url in payload")
+                    !(newUrl.startsWith("http://") || newUrl.startsWith("https://")) ->
+                        emitCommandLog("set_server_url refused: not http(s): $newUrl")
+                    newUrl == old ->
+                        emitCommandLog("set_server_url: already $newUrl, no change")
+                    else -> Thread {
+                        if (probeServerReachable(newUrl)) {
+                            // Confirm success on the CURRENT socket before we tear it down,
+                            // so the operator who issued the change sees it land.
+                            emitCommandLog("set_server_url: verified $newUrl, switching (was $old)")
+                            config.serverUrl = newUrl
+                            handler.post { try { connect(newUrl) } catch (e: Throwable) { Log.e("WebSocketService", "set_server_url reconnect: ${e.message}") } }
+                        } else {
+                            emitCommandLog("set_server_url: $newUrl unreachable, kept $old")
+                        }
+                    }.start()
+                }
+            }
+            else -> handler.post { try { onCommand?.invoke(type, payload) } catch (e: Throwable) { Log.e("WebSocketService", "onCommand cb: ${e.message}") } }
+        }
+    }
+
+}

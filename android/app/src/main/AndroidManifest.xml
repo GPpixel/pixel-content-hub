@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      ⚠️ EVERY HARDWARE FEATURE IS OPTIONAL. A permission below implies its hardware is REQUIRED
+      unless it is declared otherwise here, and app stores filter on that: the Amazon Appstore
+      refused Fire TV Cube (3rd Gen) because RECORD_AUDIO implied a microphone and the location
+      permissions implied GPS. Neither is needed to play signage — the microphone is only the
+      talk-back intercom, and location only reveals the Wi-Fi network name — and an Ethernet-only
+      box has no Wi-Fi. Touchscreen and leanback are the standard pair for an app that runs on both
+      TVs and tablets. Check with `aapt2 dump badging <apk> | grep feature`: nothing may be listed
+      without required='false'.
+    -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Audience counting (opt-in). required=false, or CAMERA would hide the app from every box without one. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.location.network" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.faketouch" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Audience counting only, and only when an org admin switches it on for this screen. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Provisioning-only: lets a device-owner panel enable its OWN accessibility service (the
+         durable whole-screen-capture + D-pad path) without a human toggling Settings. Protected /
+         signature-level, so it is inert unless granted once at setup:
+         adb shell pm grant com.remotedisplay.player android.permission.WRITE_SECURE_SETTINGS -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- #talk: two-way voice intercom mic capture + microphone FGS -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- OPTIONAL, and never requested at startup. Android 8.1+ hides the connected Wi-Fi network
+         name from apps without location permission, so the device page can only show "unavailable"
+         without it. A signage player should not demand location to display a network name, so this
+         is opt-in from the setup screen and nothing else depends on it: not granting it changes
+         only that one field. Coarse is enough below Android 10; fine is required from 10 onwards. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- #160 Track-A: system brightness + screen-off timeout (Tier 1). Requires a one-time
+         ACTION_MANAGE_WRITE_SETTINGS grant; the app degrades gracefully without it. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+
+    <application
+        android:name=".RemoteDisplayApp"
+        android:allowBackup="false"
+        android:icon="@android:drawable/ic_media_play"
+        android:label="RemoteDisplay"
+        android:largeHeap="true"
+        android:theme="@style/Theme.RemoteDisplay"
+        android:usesCleartextTraffic="true"
+        android:supportsRtl="true">
+
+        <!-- Main fullscreen media player activity -->
+        <!-- orientation=nosensor: run in the PANEL'S NATURAL orientation (never sensor-driven), and let
+             the per-device orientation setting rotate content in software (TransitionGeometry
+             .orientationRotSwap + rootView.rotation). Forcing "landscape" here made a natively-PORTRAIT
+             panel (e.g. an 800x1280 room-sign tablet) run at a rotated logical resolution, so the OS/ROM
+             display compositor had to hardware-rotate the framebuffer onto the physical glass — a step
+             some ROMs botch (black bar + edge-clamp smear on the physical panel while the app framebuffer
+             stayed clean). It also made the #344 native-portrait handling dead code, because a locked
+             landscape window can never report windowPortrait=true. nosensor keeps every landscape-natural
+             panel byte-identical (natural == landscape) and lets portrait panels render native, no
+             hardware rotate. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="nosensor"
+            android:theme="@style/Theme.RemoteDisplay.Fullscreen"
+            android:keepScreenOn="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Screen capture permission request (transparent) -->
+        <!-- nosensor: match MainActivity so this transient activity never forces a rotate on a
+             portrait-natural panel (see MainActivity note). -->
+        <activity
+            android:name=".ScreenCapturePermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:screenOrientation="nosensor" />
+
+        <!-- Initial setup wizard (permissions) -->
+        <activity
+            android:name=".SetupActivity"
+            android:exported="false"
+            android:screenOrientation="nosensor"
+            android:theme="@style/Theme.RemoteDisplay.Fullscreen" />
+
+        <!-- #device-owner: MDM-deploy-only guided screen to enable the accessibility service
+             (remote control). Self-guards to owner; a normal install never routes here. -->
+        <activity
+            android:name=".OwnerAccessibilityActivity"
+            android:exported="false"
+            android:screenOrientation="nosensor"
+            android:theme="@style/Theme.RemoteDisplay.Fullscreen" />
+
+        <!-- Provisioning/setup activity -->
+        <activity
+            android:name=".ProvisioningActivity"
+            android:exported="false"
+            android:screenOrientation="nosensor"
+            android:theme="@style/Theme.RemoteDisplay.Fullscreen" />
+
+        <!-- WebSocket foreground service. #5: declares ONLY mediaPlayback - the
+             always-on service must not claim the mediaProjection FGS type, which
+             Android 14+ rejects unless a projection consent token is held. -->
+        <service
+            android:name=".service.WebSocketService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- #5: dedicated MediaProjection foreground service for system screen
+             capture. Started only after the user grants consent, so claiming the
+             mediaProjection FGS type is valid on Android 14+. -->
+        <service
+            android:name=".service.MediaProjectionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- #go2rtc: live-video MediaProjection sender FGS. Same mediaProjection FGS type as the
+             screenshot service above, kept separate so live video and screenshots never share a
+             single-use projection consent token. Started only after consent is granted. -->
+        <service
+            android:name=".service.LiveVideoService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- #talk: two-way voice intercom sender/receiver FGS. Captures the mic (uplink) and plays
+             operator audio (downlink) over WebRTC. microphone FGS type because it records audio in
+             the background on Android 14+; no MediaProjection is involved. -->
+        <service
+            android:name=".service.TalkService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Accessibility service for power controls -->
+        <service
+            android:name=".service.PowerAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Boot receiver for auto-start -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- #96: relaunch the player after a self-update (OTA). MY_PACKAGE_REPLACED is
+             delivered to the freshly-installed app; the receiver relaunches via the same
+             cascade as boot so the screen doesn't drop to the launcher after an update. -->
+        <receiver
+            android:name=".service.PackageReplacedReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- #161 device-owner foundation. Enrolled via `adb dpm set-device-owner` or QR provisioning.
+             Optional power-up: absent it the app runs fully at Tier 0/1 (STPolicy degrades safely). -->
+        <receiver
+            android:name=".admin.STDeviceAdminReceiver"
+            android:description="@string/device_admin_description"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- #device-owner: Android 10+ fully-managed provisioning handshake. REQUIRED for QR/NFC
+             enrollment on Android 12+ — without a GET_PROVISIONING_MODE / ADMIN_POLICY_COMPLIANCE
+             handler the platform aborts provisioning after install ("something went wrong").
+             System-only (BIND_DEVICE_ADMIN); translucent + finishes immediately (no visible UI). -->
+        <activity
+            android:name=".admin.ProvisioningActivity"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.app.action.GET_PROVISIONING_MODE" />
+                <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- FileProvider for APK updates -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+</manifest>

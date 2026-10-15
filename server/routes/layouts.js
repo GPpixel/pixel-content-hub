@@ -1,0 +1,540 @@
+const express = require('express');
+const router = express.Router();
+// Abuse backstop (lib/backstop-limiter.js): already counted app-wide; here so this router is never unguarded.
+router.use(require('../lib/backstop-limiter'));
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../db/database');
+const { PLATFORM_ROLES, ELEVATED_ROLES } = require('../middleware/auth');
+// Phase 2.2h: workspace-aware access. Templates (is_template=1) are the
+// platform-shared pair (NULL user_id, NULL workspace_id) and are visible
+// everywhere, writable only by platform_admin.
+const { denyReadOnly, resourceAccess } = require('../lib/tenancy');
+const { SCREENS_ON_LAYOUT_SQL } = require('../lib/wall-layout');
+
+// List layouts in the caller's current workspace plus all templates.
+// Phase 2.2h: workspace-scoped. Templates (is_template=1) remain visible to
+// everyone; cross-workspace owned-layout visibility comes from switch-workspace.
+router.get('/', (req, res) => {
+  const showTemplates = req.query.templates === 'true';
+
+  let layouts;
+  if (showTemplates) {
+    layouts = db.prepare('SELECT * FROM layouts WHERE is_template = 1 ORDER BY template_category, name').all();
+  } else if (!req.workspaceId) {
+    // No workspace context -> only templates are visible.
+    layouts = db.prepare('SELECT * FROM layouts WHERE is_template = 1 ORDER BY template_category, name').all();
+  } else {
+    layouts = db.prepare(
+      'SELECT * FROM layouts WHERE (workspace_id = ? OR is_template = 1) ORDER BY is_template DESC, created_at DESC'
+    ).all(req.workspaceId);
+  }
+
+  // Attach zones to each layout
+  const zonesStmt = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order');
+  const lv = require('../lib/layout-variants');
+  layouts.forEach(l => {
+    l.zones = zonesStmt.all(l.id);
+    // 3.0: which orientation versions it has, so pickers can say "has a portrait version".
+    l.variants = lv.variantNames(db, l.id);
+  });
+
+  res.json(layouts);
+});
+
+// Phase 2.2h: workspace-aware access. Mirrors content/widget/kiosk helpers.
+// Templates (is_template=1) are readable by anyone authenticated; writable
+// only by platform_admin (kept layered with the existing L78/L94 guards).
+function checkLayoutRead(req, res) {
+  const layout = db.prepare('SELECT * FROM layouts WHERE id = ?').get(req.params.id);
+  if (!layout) { res.status(404).json({ error: 'Layout not found' }); return null; }
+  if (layout.is_template) return layout;
+  if (!layout.workspace_id) {
+    // Owned row with no workspace - treat as inaccessible (shouldn't exist post-migration).
+    res.status(403).json({ error: 'Layout not assigned to a workspace' }); return null;
+  }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(layout.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  return layout;
+}
+
+function checkLayoutWrite(req, res) {
+  const layout = db.prepare('SELECT * FROM layouts WHERE id = ?').get(req.params.id);
+  if (!layout) { res.status(404).json({ error: 'Layout not found' }); return null; }
+  if (layout.is_template) {
+    // Templates: only platform_admin may write. Existing L78/L94 also check
+    // is_template explicitly with the same intent; this is the layered gate.
+    if (!PLATFORM_ROLES.includes(req.user.role)) {
+      res.status(403).json({ error: 'Platform admin required to modify templates' }); return null;
+    }
+    return layout;
+  }
+  if (!layout.workspace_id) {
+    res.status(403).json({ error: 'Layout not assigned to a workspace' }); return null;
+  }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(layout.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  if (!ctx.actingAs && ctx.workspaceRole === 'workspace_viewer') {
+    res.status(403).json({ error: 'Read-only access' }); return null;
+  }
+  // CORPORATE: a layout head office's mandate uses may be changed only by a corporate author. Every
+  // caller of this helper mutates (PUT, DELETE, zone add/edit/delete).
+  try { require('../lib/corporate/guard').assertMediaWritable(req, 'layout', layout.id); } catch (e) {
+    if (require('../lib/corporate/guard').send(res, e, req)) return null;
+    throw e;
+  }
+  return layout;
+}
+
+// Get layout with zones
+router.get('/:id', (req, res) => {
+  const layout = checkLayoutRead(req, res);
+  if (!layout) return;
+
+  layout.zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(layout.id);
+  // 3.0: each zone's portrait / 4:3 geometry, for the editor's Landscape | Portrait | 4:3 toggle.
+  {
+    const vs = require('../lib/layout-variants').variantsOf(db, layout.id);
+    for (const z of layout.zones) if (vs[z.id]) z.variants = vs[z.id];
+  }
+  // `zones` stays the LIVE set - renderers and assignments read this route too. A pending draft is
+  // offered alongside it so the editor can open on the author's unpublished work instead of
+  // showing them the live layout and quietly discarding the draft on their next save.
+  const pending = require('../lib/revisions').parseJson(layout.draft_zones, null);
+  if (pending) layout.draft = pending;
+  res.json(layout);
+});
+
+const VALID_FIT_MODES = new Set(['cover', 'contain', 'fill']);
+function safeFitMode(m) {
+  return (typeof m === 'string' && VALID_FIT_MODES.has(m.toLowerCase())) ? m.toLowerCase() : 'contain';
+}
+function safeHexColor(c, fallback = '#000000') {
+  if (!c || typeof c !== 'string') return fallback;
+  const s = c.trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(s) ? s : fallback;
+}
+
+// Create layout
+router.post('/', (req, res) => {
+  const { name, width, height, zones, is_template, template_category } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+
+  // Templates are platform-wide; only platform_admin can create them.
+  if (is_template && !PLATFORM_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only platform admins can create templates' });
+  }
+  // Owned layouts require an active workspace.
+  if (!is_template && !req.workspaceId) {
+    return res.status(400).json({ error: 'Workspace ID is required' });
+  }
+  // A read-only member cannot create an owned layout (a template already needs platform_admin above).
+  if (!is_template && denyReadOnly(req, res)) return;
+
+  const id = uuidv4();
+  const w = width || 1920;
+  const h = height || 1080;
+  const tpl = is_template ? 1 : 0;
+  const cat = is_template ? (template_category || 'general') : null;
+  const wsId = is_template ? null : req.workspaceId;
+  const userId = is_template ? null : req.user.id;
+
+  db.prepare(`
+    INSERT INTO layouts (id, name, width, height, is_template, template_category, user_id, workspace_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, name, w, h, tpl, cat, userId, wsId);
+
+  if (Array.isArray(zones) && zones.length > 0) {
+    const stmt = db.prepare(`
+      INSERT INTO layout_zones (id, layout_id, name, x_percent, y_percent, width_percent, height_percent, z_index, zone_type, fit_mode, background_color, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    zones.forEach((z, i) => {
+      stmt.run(uuidv4(), id, z.name || `Zone ${i + 1}`, z.x_percent || 0, z.y_percent || 0,
+        z.width_percent || 100, z.height_percent || 100, z.z_index || 0,
+        z.zone_type || 'content', safeFitMode(z.fit_mode), safeHexColor(z.background_color, '#000000'), i);
+    });
+  }
+
+  const layout = db.prepare('SELECT * FROM layouts WHERE id = ?').get(id);
+  layout.zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(id);
+  require('../lib/revisions').recordCurrent(db, 'layout', layout.id, { actor: require('../lib/releases').actorOf(req), summary: 'Created' });
+  res.status(201).json(layout);
+});
+
+// Update layout
+router.put('/:id', (req, res) => {
+  const layout = checkLayoutWrite(req, res);
+  if (!layout) return;
+  if (layout.is_template && !PLATFORM_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Cannot edit templates' });
+
+  const { name, width, height, zones } = req.body;
+
+  // Approval on: the whole layout is saved as a DRAFT (draft_zones) and screens keep the zones
+  // they have until a reviewed submission publishes it (lib/releases.js releaseLayoutDraft).
+  const policy = require('../lib/release-policy');
+  const revisions = require('../lib/revisions');
+  const actor = require('../lib/releases').actorOf(req);
+  if (layout.workspace_id && policy.approvalRequired(db, layout.workspace_id)) {
+    const base = revisions.parseJson(layout.draft_zones, null)
+      || { name: layout.name, width: layout.width, height: layout.height, zones: db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(layout.id) };
+    const draft = {
+      name: name || base.name, width: width || base.width, height: height || base.height,
+      zones: Array.isArray(zones) ? zones.map((z, i) => ({ ...z, id: z.id || uuidv4(), sort_order: i })) : base.zones,
+    };
+    db.prepare('UPDATE layouts SET draft_zones = ? WHERE id = ?').run(JSON.stringify(draft), req.params.id);
+    revisions.recordCurrent(db, 'layout', req.params.id, { actor, summary: 'Saved draft' });
+    /*
+     * ⚠️ ECHO THE DRAFT BACK, NOT THE LIVE ZONES.
+     *
+     * The editor assigns the response straight onto its canvas. Returning the live rows made the
+     * zones visibly snap back to their pre-edit positions the instant the "saved as draft" toast
+     * appeared, and a second Save then serialised those reverted positions over the draft.
+     */
+    const current = db.prepare('SELECT * FROM layouts WHERE id = ?').get(req.params.id);
+    current.zones = draft.zones;
+    return res.json({ ...current, name: draft.name, width: draft.width, height: draft.height, draft: true, pending_review: true });
+  }
+
+  const txn = db.transaction(() => {
+    if (name) db.prepare('UPDATE layouts SET name = ?, updated_at = strftime(\'%s\',\'now\') WHERE id = ?').run(name, req.params.id);
+    if (width) db.prepare('UPDATE layouts SET width = ? WHERE id = ?').run(width, req.params.id);
+    if (height) db.prepare('UPDATE layouts SET height = ? WHERE id = ?').run(height, req.params.id);
+
+    // Atomic zone replace: the editor sends the FULL desired set, so the layout
+    // ends up with EXACTLY those zones - no accumulation from a per-zone
+    // delete/add loop. Reuse each zone's id when supplied so device->zone
+    // assignments survive an edit (a fresh uuid per save would orphan them).
+    if (Array.isArray(zones)) {
+      // DIFF, never delete-and-replace.
+      //
+      // The previous version deleted every zone and re-inserted the same ids, on the stated
+      // assumption that reusing an id preserved whatever pointed at it. It does not: SQLite runs
+      // the referential actions on the DELETE, and re-inserting the same primary key afterwards
+      // does not resurrect what they destroyed. Two things point at these rows:
+      //
+      //   playlist_items.zone_id  ON DELETE SET NULL  -> every multi-zone playlist in the
+      //                                                  workspace silently fell back to fullscreen
+      //   schedules.zone_id       ON DELETE CASCADE   -> every zone-bound schedule was DELETED,
+      //                                                  permanently, no warning and no undo
+      //
+      // So nudging one zone by a pixel and pressing Save destroyed unrelated tenant data and
+      // returned 200 OK. Updating in place touches no foreign key at all; only genuinely removed
+      // zones are deleted, which is the one case where those cascades are the intended behaviour.
+      const existingIds = db.prepare('SELECT id FROM layout_zones WHERE layout_id = ?')
+        .all(req.params.id).map(r => r.id);
+      const existingSet = new Set(existingIds);
+      const zoneIdTaken = db.prepare('SELECT 1 FROM layout_zones WHERE id = ?');
+      const keptIds = new Set();
+
+      const insertZone = db.prepare(`
+        INSERT INTO layout_zones (id, layout_id, name, x_percent, y_percent, width_percent, height_percent, z_index, zone_type, fit_mode, background_color, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const updateZone = db.prepare(`
+        UPDATE layout_zones SET name = ?, x_percent = ?, y_percent = ?, width_percent = ?,
+          height_percent = ?, z_index = ?, zone_type = ?, fit_mode = ?, background_color = ?, sort_order = ?
+        WHERE id = ? AND layout_id = ?
+      `);
+      // 3.0: the zone a playlist's zone-less items play in (lib/playlist-layout.js mainZone). Only
+      // written when the editor sends the flag, so an older editor's save leaves it as it was; at
+      // most one zone keeps it.
+      const sendsMain = zones.some((z) => z && z.is_main !== undefined);
+      let mainId = null;
+      const savedIds = [];
+
+      zones.forEach((z, i) => {
+        // An id that belongs to ANOTHER layout's zone is not this layout's to reuse (it would collide
+        // on insert — a 500 — or, worse, be read as a claim on that zone): mint a fresh one.
+        const zid = (z.id && (existingSet.has(z.id) || !zoneIdTaken.get(z.id))) ? z.id : uuidv4();
+        const vals = [
+          z.name || `Zone ${i + 1}`,
+          z.x_percent || 0, z.y_percent || 0, z.width_percent || 100, z.height_percent || 100,
+          z.z_index || 0, z.zone_type || 'content', safeFitMode(z.fit_mode),
+          safeHexColor(z.background_color, '#000000'), i,
+        ];
+        if (existingSet.has(zid)) updateZone.run(...vals, zid, req.params.id);
+        else insertZone.run(zid, req.params.id, ...vals);
+        keptIds.add(zid);
+        if (!mainId && (z.is_main === true || Number(z.is_main) === 1)) mainId = zid;
+        savedIds[i] = zid;
+      });
+      if (sendsMain) {
+        try {
+          db.prepare('UPDATE layout_zones SET is_main = CASE WHEN id = ? THEN 1 ELSE 0 END WHERE layout_id = ?').run(mainId, req.params.id);
+        } catch (_) { /* pre-migration schema */ }
+      }
+      // 3.0 orientation versions, keyed by the ids the zones now have (a new zone's id is minted
+      // above, so the editor's copy is matched by position).
+      require('../lib/layout-variants').writeZoneVariants(db, req.params.id,
+        zones.map((z, i) => (z && z.variants !== undefined ? { id: z.id || savedIds[i], variants: z.variants } : null)).filter(Boolean));
+
+      // Only the zones the editor actually removed.
+      for (const zid of existingIds) {
+        if (!keptIds.has(zid)) {
+          db.prepare('DELETE FROM layout_zones WHERE id = ? AND layout_id = ?').run(zid, req.params.id);
+        }
+      }
+      db.prepare('UPDATE layouts SET updated_at = strftime(\'%s\',\'now\') WHERE id = ?').run(req.params.id);
+    }
+  });
+  txn();
+  revisions.recordCurrent(db, 'layout', req.params.id, { actor, summary: 'Saved' });
+
+  const updated = db.prepare('SELECT * FROM layouts WHERE id = ?').get(req.params.id);
+  updated.zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(req.params.id);
+  {
+    const vs = require('../lib/layout-variants').variantsOf(db, req.params.id);
+    for (const z of updated.zones) if (vs[z.id]) z.variants = vs[z.id];
+  }
+  // Push to the displays using this layout. Editing a layout used to notify nothing at all, so a
+  // zone change waited for the next heartbeat refresh at best — and on Android it did not apply
+  // even then, because the rebuild was keyed on the layout ID, which does not change when you edit
+  // a layout in place. Reported on #234 as "I added 4 zones and they dont appear on the screen".
+  // The player-side fix makes the rebuild happen; this makes it happen promptly.
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      const commandQueue = require('../lib/command-queue');
+      for (const d of db.prepare(SCREENS_ON_LAYOUT_SQL).all(req.params.id, req.params.id, req.params.id)) {
+        commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), d.id, buildPlaylistPayload);
+      }
+    }
+  } catch (e) { /* best-effort; the heartbeat refresh still picks it up */ }
+
+  res.json(updated);
+});
+
+/*
+ * 3.0: a starting arrangement for a layout's portrait or 4:3 version (lib/layout-variants.js
+ * autoArrange), computed from the zones the editor is showing — saved or not, which is why this takes
+ * the zones rather than a layout id. Pure arithmetic over the caller's own numbers: nothing is read
+ * or written, so it needs no layout access check beyond being signed in.
+ */
+router.post('/auto-variant', (req, res) => {
+  const variant = req.body && req.body.variant;
+  const lv = require('../lib/layout-variants');
+  if (!lv.VARIANTS.includes(variant)) return res.status(400).json({ error: 'variant must be portrait or square' });
+  const zones = Array.isArray(req.body.zones) ? req.body.zones.slice(0, 100) : [];
+  const clean = zones.map((z, i) => ({
+    id: typeof (z && z.key) === 'string' ? z.key.slice(0, 80) : String(i),
+    x_percent: Number(z && z.x_percent) || 0, y_percent: Number(z && z.y_percent) || 0,
+    width_percent: Number(z && z.width_percent) || 0, height_percent: Number(z && z.height_percent) || 0,
+  }));
+  res.json({ variant, zones: lv.autoArrange(clean, variant, { width: Number(req.body.width) || 1920, height: Number(req.body.height) || 1080 }) });
+});
+
+// Delete layout
+router.delete('/:id', (req, res) => {
+  const layout = checkLayoutWrite(req, res);
+  if (!layout) return;
+  if (layout.is_template && !PLATFORM_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Cannot delete templates' });
+
+  // Screens drawing it right now (their own, a wall's, a schedule's or their playlist's layout):
+  // read BEFORE the delete, they are pushed the full-screen fallback after it.
+  let affected = [];
+  try { affected = db.prepare(SCREENS_ON_LAYOUT_SQL).all(req.params.id, req.params.id, req.params.id).map((d) => d.id); } catch (_) { affected = []; }
+  // 3.0 campaigns: playlists that show this layout as an item. The items go with the layout (a layout
+  // item with no layout is skipped anyway); published campaigns are republished so screens drop the
+  // step now rather than at their next unrelated publish.
+  let campaigns = [];
+  try { campaigns = db.prepare('SELECT DISTINCT playlist_id FROM playlist_items WHERE layout_ref_id = ?').all(req.params.id).map((r) => r.playlist_id); } catch (_) { campaigns = []; }
+  db.prepare('DELETE FROM layouts WHERE id = ?').run(req.params.id);
+  try { db.prepare('DELETE FROM layout_zone_variants WHERE layout_id = ?').run(req.params.id); } catch (_) { /* pre-migration schema */ }
+  if (campaigns.length) {
+    try { db.prepare('DELETE FROM playlist_items WHERE layout_ref_id = ?').run(req.params.id); } catch (_) { /* gone with the FK */ }
+    for (const pid of campaigns) {
+      try {
+        const p = db.prepare('SELECT status FROM playlists WHERE id = ?').get(pid);
+        if (p && p.status === 'published') require('../lib/corporate/actor').runAsSystem(() => require('./playlists').publishPlaylist(pid, req));
+      } catch (e) { console.warn(`[campaign] republish of ${pid} after layout delete failed: ${e && e.message}`); }
+    }
+  }
+  // foreign_keys is OFF here, so ON DELETE SET NULL never fires: clear walls that used it by hand.
+  db.prepare('UPDATE video_walls SET layout_id = NULL WHERE layout_id = ?').run(req.params.id);
+  // Same for playlists that chose it (3.0 playlist layouts): they go back to "the screen's own".
+  try {
+    db.prepare('UPDATE playlists SET layout_id = NULL WHERE layout_id = ?').run(req.params.id);
+    db.prepare('UPDATE playlists SET published_layout_id = NULL WHERE published_layout_id = ?').run(req.params.id);
+  } catch (_) { /* pre-migration schema */ }
+  try {
+    const io = req.app.get('io');
+    if (io && affected.length) {
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      const commandQueue = require('../lib/command-queue');
+      for (const id of affected) commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), id, buildPlaylistPayload);
+    }
+  } catch (_) { /* best-effort; the heartbeat refresh still picks it up */ }
+  res.json({ success: true });
+});
+
+// Add zone to layout. Phase 2.2h: tightened to write-access; workspace_viewer
+// can read the layout via GET but cannot add zones.
+// Zone-level writes change what screens show in place. With approval on they are refused with
+// the way forward: save the whole layout (PUT /:id), which becomes a draft for review.
+function refuseZoneWriteUnderApproval(req, res, layout) {
+  if (layout.workspace_id && require('../lib/release-policy').approvalRequired(db, layout.workspace_id)) {
+    res.status(409).json({ error: 'This workspace requires review before layout changes go live. Save the layout as a whole to create a draft, then submit it for review.', code: 'approval_required' });
+    return true;
+  }
+  return false;
+}
+
+router.post('/:id/zones', (req, res) => {
+  const layout = checkLayoutWrite(req, res);
+  if (!layout) return;
+  if (refuseZoneWriteUnderApproval(req, res, layout)) return;
+
+  const { name, x_percent, y_percent, width_percent, height_percent, z_index, zone_type, fit_mode, background_color } = req.body;
+  const maxOrder = db.prepare('SELECT MAX(sort_order) as m FROM layout_zones WHERE layout_id = ?').get(req.params.id).m || 0;
+
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO layout_zones (id, layout_id, name, x_percent, y_percent, width_percent, height_percent, z_index, zone_type, fit_mode, background_color, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, req.params.id, name || 'New Zone', x_percent || 0, y_percent || 0,
+    width_percent || 50, height_percent || 50, z_index || 0,
+    zone_type || 'content', safeFitMode(fit_mode), safeHexColor(background_color, '#000000'), maxOrder + 1);
+
+  db.prepare("UPDATE layouts SET updated_at = strftime('%s','now') WHERE id = ?").run(req.params.id);
+
+  const zone = db.prepare('SELECT * FROM layout_zones WHERE id = ?').get(id);
+  res.status(201).json(zone);
+});
+
+// Update zone
+router.put('/:id/zones/:zoneId', (req, res) => {
+  const layout = checkLayoutWrite(req, res);
+  if (!layout) return;
+  if (refuseZoneWriteUnderApproval(req, res, layout)) return;
+  const zone = db.prepare('SELECT * FROM layout_zones WHERE id = ? AND layout_id = ?').get(req.params.zoneId, req.params.id);
+  if (!zone) return res.status(404).json({ error: 'Zone not found' });
+
+  const fields = ['name', 'x_percent', 'y_percent', 'width_percent', 'height_percent', 'z_index', 'zone_type', 'fit_mode', 'background_color', 'sort_order'];
+  const updates = [];
+  const values = [];
+  fields.forEach(f => {
+    if (req.body[f] !== undefined) {
+      let val = req.body[f];
+      if (f === 'fit_mode') val = safeFitMode(val);
+      if (f === 'background_color') val = safeHexColor(val, '#000000');
+      updates.push(`${f} = ?`);
+      values.push(val);
+    }
+  });
+
+  if (updates.length > 0) {
+    values.push(req.params.zoneId);
+    db.prepare(`UPDATE layout_zones SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    db.prepare("UPDATE layouts SET updated_at = strftime('%s','now') WHERE id = ?").run(req.params.id);
+  }
+
+  const updated = db.prepare('SELECT * FROM layout_zones WHERE id = ?').get(req.params.zoneId);
+  res.json(updated);
+});
+
+// Delete zone
+router.delete('/:id/zones/:zoneId', (req, res) => {
+  const layout = checkLayoutWrite(req, res);
+  if (!layout) return;
+  if (refuseZoneWriteUnderApproval(req, res, layout)) return;
+  db.prepare('DELETE FROM layout_zones WHERE id = ? AND layout_id = ?').run(req.params.zoneId, req.params.id);
+  db.prepare("UPDATE layouts SET updated_at = strftime('%s','now') WHERE id = ?").run(req.params.id);
+  res.json({ success: true });
+});
+
+// Duplicate layout (for using templates). Source needs read-access only;
+// destination lands in the caller's current workspace.
+router.post('/:id/duplicate', (req, res) => {
+  if (!req.workspaceId) return res.status(403).json({ error: 'No workspace context. Switch to a workspace before duplicating a layout.' });
+  if (denyReadOnly(req, res)) return;
+  const source = checkLayoutRead(req, res);
+  if (!source) return;
+
+  const newId = uuidv4();
+  const name = req.body.name || `${source.name} (Copy)`;
+
+  db.prepare('INSERT INTO layouts (id, user_id, workspace_id, name, width, height) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(newId, req.user.id, req.workspaceId, name, source.width, source.height);
+
+  // Copy zones, keeping an old->new zone-id map. The copy gets fresh zone ids, so any
+  // playlist_items still pointing at the SOURCE zones would be orphaned if a device is
+  // moved onto this copy. We return the map (zone_id_map) so a follow-up remap can run.
+  // NOTE for review: we intentionally do NOT auto-rewrite playlist_items.zone_id here —
+  // the source layout's own assignments must keep pointing at the source. A safe remap is
+  // a scoped op ("migrate playlist P from layout A to its copy B"), best done explicitly;
+  // see find-orphan-zone-items.js + the player fallback, which already de-risk the runtime.
+  const zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ?').all(req.params.id);
+  const stmt = db.prepare(`
+    INSERT INTO layout_zones (id, layout_id, name, x_percent, y_percent, width_percent, height_percent, z_index, zone_type, fit_mode, background_color, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const zone_id_map = {};
+  zones.forEach(z => {
+    const nz = uuidv4();
+    zone_id_map[z.id] = nz;
+    stmt.run(nz, newId, z.name, z.x_percent, z.y_percent, z.width_percent, z.height_percent,
+      z.z_index, z.zone_type, z.fit_mode, z.background_color, z.sort_order);
+    if (Number(z.is_main) === 1) db.prepare('UPDATE layout_zones SET is_main = 1 WHERE id = ?').run(nz);
+  });
+  // The copy keeps the source's portrait / 4:3 versions, on its own zone ids.
+  try {
+    const vs = require('../lib/layout-variants').variantsOf(db, req.params.id);
+    require('../lib/layout-variants').writeZoneVariants(db, newId,
+      Object.entries(vs).filter(([zid]) => zone_id_map[zid]).map(([zid, v]) => ({ id: zone_id_map[zid], variants: v })));
+  } catch (_) { /* pre-migration schema */ }
+
+  const layout = db.prepare('SELECT * FROM layouts WHERE id = ?').get(newId);
+  layout.zones = db.prepare('SELECT * FROM layout_zones WHERE layout_id = ? ORDER BY sort_order').all(newId);
+  res.status(201).json({ ...layout, zone_id_map });
+});
+
+// Assign layout to device.
+// Phase 2.2h: closes a pre-existing cross-tenant leak. Today the route only
+// gated by device-ownership and didn't verify the layout_id at all, so any
+// caller with write access to a device could assign another workspace's
+// layout to it - the player would then render foreign zones/dimensions.
+//
+// New rules:
+//   1. Caller must have write access to the DEVICE's workspace.
+//   2. The layout must be either a template (is_template=1) or live in the
+//      same workspace as the device.
+router.put('/device/:deviceId', (req, res) => {
+  const device = db.prepare('SELECT user_id, workspace_id FROM devices WHERE id = ?').get(req.params.deviceId);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device.workspace_id) return res.status(403).json({ error: 'Device not assigned to a workspace' });
+
+  const deviceWs = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = deviceWs && resourceAccess(req, deviceWs);
+  if (!ctx) return res.status(403).json({ error: 'Access denied' });
+  if (!ctx.actingAs && ctx.workspaceRole === 'workspace_viewer') {
+    return res.status(403).json({ error: 'Read-only access' });
+  }
+
+  // CORPORATE: head office's mandate decides this screen's layout; a store layout would never show.
+  {
+    const corpGuard = require('../lib/corporate/guard');
+    try { corpGuard.assertNotMandated(req, req.params.deviceId); } catch (e) {
+      if (corpGuard.send(res, e, req)) return;
+      throw e;
+    }
+  }
+
+  const { layout_id } = req.body;
+  if (layout_id) {
+    const layout = db.prepare('SELECT is_template, workspace_id FROM layouts WHERE id = ?').get(layout_id);
+    if (!layout) return res.status(400).json({ error: 'Invalid layout_id' });
+    // Layout must be a template, or live in the device's workspace.
+    if (!layout.is_template && layout.workspace_id !== device.workspace_id) {
+      return res.status(403).json({ error: 'Layout is not in this device\'s workspace and is not a template' });
+    }
+  }
+
+  db.prepare("UPDATE devices SET layout_id = ?, updated_at = strftime('%s','now') WHERE id = ?")
+    .run(layout_id || null, req.params.deviceId);
+  res.json({ success: true });
+});
+
+module.exports = router;

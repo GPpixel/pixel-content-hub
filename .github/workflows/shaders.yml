@@ -1,0 +1,41 @@
+name: Shaders
+
+on:
+  push:
+    branches: [main]
+    paths: ['shared/Transitions/**', 'package.json', '.github/workflows/shaders.yml']
+  pull_request:
+    branches: [main]
+    paths: ['shared/Transitions/**', 'package.json', '.github/workflows/shaders.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shaders-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Compile transition shaders (real WebGL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      # Install Chrome and resolve its path explicitly — don't assume /usr/bin/google-chrome-stable
+      # exists on the runner image (it silently won't fail until a push, at the worst possible time).
+      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        id: chrome
+        with:
+          chrome-version: stable
+      # puppeteer-core only (Apache-2.0) — drives the Chrome above, downloads no browser binary.
+      # `npm ci` from the root lockfile, not `npm install`: the same tree every run, verified against
+      # the lockfile's integrity hashes (OpenSSF Scorecard: Pinned-Dependencies).
+      - run: npm ci --no-audit --no-fund
+      - name: Compile + link all transition shaders in headless Chrome (SwiftShader)
+        env:
+          PUPPETEER_EXECUTABLE_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run test:shaders

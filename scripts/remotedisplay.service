@@ -1,0 +1,23 @@
+[Unit]
+Description=ScreenTinker Digital Signage Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# install-service.sh fills these in from the checkout and the Node on PATH (which must be 22.14+).
+User=@USER@
+WorkingDirectory=@WORKDIR@
+ExecStart=@NODE@ server.js
+Restart=always
+RestartSec=5
+# 78 = the server refused to start because Node is below engines.node (lib/node-guard.js).
+# Restarting cannot fix that, so stop instead of looping.
+RestartPreventExitStatus=78
+Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=remotedisplay
+
+[Install]
+WantedBy=multi-user.target

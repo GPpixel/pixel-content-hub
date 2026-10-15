@@ -1,0 +1,1695 @@
+const express = require('express');
+const router = express.Router();
+// Abuse backstop (lib/backstop-limiter.js): already counted app-wide; here so this router is never unguarded.
+router.use(require('../lib/backstop-limiter'));
+const { db } = require('../db/database');
+const config = require('../config');
+const enrolKey = require('../lib/enrol-key');   // #313
+const viewAccess = require('../lib/view-access');   // view-only display access
+const secretbox = require('../lib/secretbox');
+const { canAdminWorkspace } = require('../lib/permissions');
+const { logActivity, getClientIp } = require('../services/activity');
+const { resolveDevicePlaylist, resolvedLayoutId } = require('../lib/resolve-device-playlist');
+const { PLATFORM_ROLES, ELEVATED_ROLES, isPlatformStaff } = require('../middleware/auth');
+// Phase 2.2a: workspace-aware access. accessContext returns { workspaceRole, actingAs }
+// or null based on the caller's reach into a specific workspace.
+const { resourceAccess } = require('../lib/tenancy');
+// requireScope gates by API-token scope; the workspace WRITE gate is checkDeviceOwnership, which
+// already rejects workspace_viewer — the same check requireFleetWrite performs in routes/triggers.js.
+const { requireScope } = require('../middleware/apiToken');
+const { ALLOWED_COMMANDS, LOCAL_API_COMMANDS, deliverCommand, validateCommand, requireCommandScope } = require('../lib/device-command');
+const { stripDeviceSecrets, stripDeviceSecretsForList, stripSecretsForTokens } = require('../lib/device-sanitize');
+const { layoutZones, orphanCountsByDevice } = require('../lib/zone-validate');
+const deviceSettings = require('../lib/device-settings'); // #150 delete+re-pair settings preservation
+const { normalizeTags, parseTags } = require('../lib/content-tags');
+const groupRules = require('../lib/device-group-rules');
+const playerCapabilities = require('../lib/player-capabilities');
+
+// List devices in the caller's current workspace.
+// Phase 2.2a: filter by workspace_id instead of user_id. The caller's current
+// workspace is resolved by resolveTenancy middleware from JWT or query/header
+// override. Platform_admin and org_owner/admin see whichever workspace they
+// are currently switched into (cross-workspace visibility comes from
+// switch-workspace, not from a special list filter).
+router.get('/', (req, res) => {
+  if (!req.workspaceId) return res.json([]);
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+  const offset = parseInt(req.query.offset) || 0;
+  // ?tag=lobby narrows the list to screens carrying that tag (normalised like the stored ones).
+  const tagFilter = req.query.tag ? ((normalizeTags([String(req.query.tag)]) || [])[0] || '\u0000') : null;
+  const devices = db.prepare(`
+    SELECT d.*,
+      t.battery_level, t.battery_charging, t.storage_free_mb, t.storage_total_mb,
+      t.ram_free_mb, t.ram_total_mb, t.wifi_rssi, t.uptime_seconds, t.local_ip, t.local_ip6, t.attached_display, t.video_mode,
+      t.cpu_usage,
+      s.filepath as screenshot_path, s.captured_at as screenshot_at,
+      u.email as owner_email, u.name as owner_name
+    FROM devices d
+    LEFT JOIN users u ON d.user_id = u.id
+    LEFT JOIN (
+      SELECT dt.* FROM device_telemetry dt
+      INNER JOIN (SELECT device_id, MAX(reported_at) as max_at FROM device_telemetry GROUP BY device_id) latest
+      ON dt.device_id = latest.device_id AND dt.reported_at = latest.max_at
+    ) t ON d.id = t.device_id
+    LEFT JOIN (
+      SELECT sc.* FROM screenshots sc
+      INNER JOIN (SELECT device_id, MAX(captured_at) as max_at FROM screenshots GROUP BY device_id) latest
+      ON sc.device_id = latest.device_id AND sc.captured_at = latest.max_at
+    ) s ON d.id = s.device_id
+    WHERE d.workspace_id = ?
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(d.tags) THEN d.tags ELSE '[]' END) WHERE value = ?))
+    ORDER BY d.sort_order ASC, d.created_at ASC
+    LIMIT ? OFFSET ?
+  `).all(req.workspaceId, tagFilter, tagFilter, limit, offset);
+  // #zone-orphan: lightweight per-device count of playlist items whose zone_id isn't in
+  // the device's active layout, so the dashboard can flag screens that need attention.
+  const orphanCounts = orphanCountsByDevice(devices.map(d => d.id));
+  const groupIds = groupIdsByDevice(devices.map(d => d.id));
+  const paused = pausedByPlan(devices);
+  // The RESOLVED capability set, the same shape GET /:id returns. The raw column shipped here
+  // before: a JSON *string* ('[]') or null, which every consumer would have had to parse — and
+  // `Array.isArray("[]")` is false, so the dashboard's `can()` helper reads a device that declared
+  // "I can do nothing" as "pre-capability server, show everything". Resolving it here means the
+  // fleet views (device cards, the wall panel list) can hide a control the panel cannot honour
+  // instead of offering it and having the socket drop it.
+  res.json(devices.map(d => ({
+    ...stripDeviceSecretsForList(d),
+    capabilities: playerCapabilities.capabilitiesFor(d),
+    // #467: which player family this is (android | web | tizen | brightsign | vega | linux | windows | roku …),
+    // so the Displays page can tell an APK player — the only kind the served APK applies to —
+    // from the rest without re-deriving the precedence rules client-side.
+    platform_family: playerCapabilities.platformFamily(d),
+    orphan_count: orphanCounts[d.id] || 0,
+    tags: parseTags(d.tags),
+    group_ids: groupIds[d.id] || [],
+    // 3.0: { reason: 'trial_expired' | 'device_limit' } when the player is showing a paused card
+    // because of the plan, else null. The owner used to learn this only from the screen itself.
+    plan_paused: paused[d.id] || null,
+  })));
+});
+
+/*
+ * 3.0: which listed screens the plan is holding back, using the PLAYER'S OWN check
+ * (ws/deviceSocket.js checkDeviceAccess) so the dashboard can never disagree with the screen.
+ * That check costs a few queries per device, so it only runs for owners who have more screens than
+ * their plan allows - for everyone else (nearly every account) this is one plan read per owner.
+ */
+function pausedByPlan(devices) {
+  const out = {};
+  let check;
+  try { check = require('../ws/deviceSocket').checkDeviceAccess; } catch { return out; }
+  if (typeof check !== 'function') return out; // socket layer not set up (tests, CLI)
+  const { getUserPlan, getUserDeviceCount } = require('../middleware/subscription');
+  const owners = new Map();
+  for (const d of devices) {
+    if (!d.user_id) continue;
+    if (!owners.has(d.user_id)) {
+      let over = false;
+      try {
+        const plan = getUserPlan(d.user_id);
+        over = !!plan && plan.max_devices !== -1 && getUserDeviceCount(d.user_id) > plan.max_devices;
+      } catch { /* unknown: do not mark */ }
+      owners.set(d.user_id, over);
+    }
+    if (!owners.get(d.user_id)) continue;
+    try {
+      const a = check(d.id);
+      if (a && a.allowed === false) out[d.id] = { reason: a.reason || 'device_limit' };
+    } catch { /* never fail the list over a badge */ }
+  }
+  return out;
+}
+
+/*
+ * The device groups each screen belongs to, as { deviceId: [groupId, ...] }, ordered by group name.
+ *
+ * ⚠️ NOT devices.team_id. That column is a TEAM (the old sharing unit), and the MCP tools reported it
+ * as `group_id` — so an agent asked "which group is the lobby screen in" answered with a team id that
+ * no group endpoint recognises. Membership lives in device_group_members, and a screen can be in
+ * several groups, so it is a list.
+ */
+function groupIdsByDevice(deviceIds) {
+  const out = {};
+  if (!deviceIds.length) return out;
+  const rows = db.prepare(`
+    SELECT m.device_id, m.group_id FROM device_group_members m
+    JOIN device_groups g ON g.id = m.group_id
+    WHERE m.device_id IN (${deviceIds.map(() => '?').join(',')})
+    ORDER BY g.name ASC, g.id ASC
+  `).all(...deviceIds);
+  for (const r of rows) (out[r.device_id] = out[r.device_id] || []).push(r.group_id);
+  return out;
+}
+
+// #106: reorder display tiles (cosmetic, within-section). Writes devices.sort_order
+// = position in the given id array. Workspace-scoped: the UPDATE matches WHERE
+// workspace_id = the caller's current workspace, so a forged id from another
+// workspace is silently a no-op (can't reorder or probe devices you can't see).
+// Write-gated: workspace_viewer (non-acting) is read-only. Ordering affects ONLY the
+// dashboard listing — nothing the device/player reads (grouping/pairing/playback
+// are independent). Mirrors the playlist items reorder.
+router.post('/reorder', (req, res) => {
+  if (!req.workspaceId) return res.status(403).json({ error: 'No workspace' });
+  if (!req.actingAs && req.workspaceRole === 'workspace_viewer') {
+    return res.status(403).json({ error: 'Read-only access' });
+  }
+  const { order } = req.body;
+  if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of device IDs' });
+  const stmt = db.prepare("UPDATE devices SET sort_order = ?, updated_at = strftime('%s','now') WHERE id = ? AND workspace_id = ?");
+  const tx = db.transaction(() => {
+    order.forEach((id, index) => stmt.run(index, id, req.workspaceId));
+  });
+  tx();
+  res.json({ success: true });
+});
+
+// Move screens to another workspace of the same organization (lib/device-move.js says what goes
+// with them and what stays). Admin of every source workspace AND the target (an org admin is);
+// JWT only. Runs inside the corporate membership guard: a head office mandate gained, lost or
+// swapped needs an org admin, and store triggers newly hidden under head office need
+// acknowledge_impact (409 CORPORATE_STORE_TRIGGERS_IMPACT, nothing moved).
+function moveRequest(req, res, body) {
+  const moveLib = require('../lib/device-move');
+  const v = moveLib.validate(db, req, body || {});
+  if (v.error) { res.status(v.status).json({ error: v.error, ...(v.code ? { code: v.code } : {}) }); return null; }
+  return v;
+}
+
+function moveOpts(v) { return { bring: v.bring, crossOrg: v.crossOrg, ownerId: v.ownerId, actorId: v.actorId }; }
+
+// The impact list both the preview and a refused move return: what head office would hide in the
+// new workspace first, then the old store's triggers the screens leave behind.
+function moveImpact(sim) { return [...(sim.hidden || []), ...(sim.leaving || [])]; }
+
+router.get('/move-workspace/preview', (req, res) => {
+  const v = moveRequest(req, res, { device_ids: String(req.query.device_ids || '').split(',').filter(Boolean), workspace_id: req.query.workspace_id,
+    bring_playlist: req.query.bring_playlist });
+  if (!v) return;
+  const moveLib = require('../lib/device-move');
+  const corpGuard = require('../lib/corporate/guard');
+  const budget = moveLib.bringBudget(db, v);
+  const sim = corpGuard.guarded(req, res, () => moveLib.simulate(db, req, v.devices, v.target, moveOpts(v)));
+  if (!sim) return;
+  res.json({
+    workspace_id: v.target.id, workspace_name: v.target.name, ...sim, impact: moveImpact(sim),
+    bring_playlist: v.bring,
+    other_organization: v.crossOrg ? { id: v.targetOrg.id, name: v.targetOrg.name } : null,
+    plan_warning: moveLib.planWarning(db, v),
+    storage_refusal: budget ? { code: budget.code, error: budget.error } : null,
+  });
+});
+
+router.post('/move-workspace', (req, res) => {
+  const v = moveRequest(req, res, req.body);
+  if (!v) return;
+  const { devices, target } = v;
+  if (!devices.length) return res.json({ success: true, moved: [], workspace_id: target.id });
+  const moveLib = require('../lib/device-move');
+  const corpGuard = require('../lib/corporate/guard');
+  const impactLib = require('../lib/corporate/impact');
+  // ⚠️ Never take a screen off a store's triggers silently: the triggers it leaves behind, and those
+  // head office would hide in the new workspace, are listed and need acknowledge_impact.
+  // ⚠️ Another organization is said out loud and confirmed on its own, before anything else: the
+  // screen (and whatever is copied with it) changes tenant.
+  if (v.crossOrg && !(req.body && (req.body.acknowledge_other_org === true || req.body.acknowledge_other_org === 1))) {
+    return res.status(409).json({
+      code: 'MOVE_OTHER_ORG_CONFIRM', organization: { id: v.targetOrg.id, name: v.targetOrg.name },
+      error: `This moves ${devices.length === 1 ? 'the screen' : 'these screens'} to another organization ("${v.targetOrg.name}"). Confirm to go ahead.`,
+    });
+  }
+  const budget = moveLib.bringBudget(db, v);
+  if (budget) return res.status(budget.status).json({ error: budget.error, code: budget.code });
+  const sim = corpGuard.guarded(req, res, () => moveLib.simulate(db, req, devices, target, moveOpts(v)));
+  if (!sim) return;
+  const impact = moveImpact(sim);
+  if (impact.length && !impactLib.acknowledged(req)) {
+    const n = impact.length;
+    const code = sim.hidden.length ? 'CORPORATE_STORE_TRIGGERS_IMPACT' : 'DEVICE_MOVE_TRIGGERS_IMPACT';
+    const error = sim.hidden.length
+      ? corpGuard.MESSAGES.CORPORATE_STORE_TRIGGERS_IMPACT({ n })
+      : `After the move, ${n} store trigger${n === 1 ? '' : 's'} will no longer reach ${devices.length === 1 ? 'this screen' : 'these screens'}. Check the list, then confirm.`;
+    return res.status(409).json({ error, code, impact });
+  }
+  const fileOps = [];
+  const moved = corpGuard.guarded(req, res, () => corpGuard.assertNoMandateLoss(req, devices.map((d) => d.id),
+    () => moveLib.moveDevices(db, devices, target.id, { ...moveOpts(v), fileOps }),
+    ({ name }) => `Moving this screen to "${target.name}" would change what it plays (head office's "${name || ''}"). Ask your organization admin to do it.`,
+    { cause: 'move' }));
+  if (!moved) return;
+  // Committed: now the files that are copied rather than shared (fonts).
+  if (fileOps.length) require('../lib/device-bring').runFileOps(fileOps);
+  const after = req.corpMembershipImpact || { store_triggers_hidden: [], store_triggers_showing_again: 0 };
+  if (sim.leaving.length) {
+    // The old store hears which of its triggers no longer reach the screens it gave away.
+    const byWs = new Map();
+    for (const t of sim.leaving) { if (!byWs.has(t.workspace_id)) byWs.set(t.workspace_id, []); byWs.get(t.workspace_id).push({ id: t.trigger_id, name: t.name }); }
+    for (const [wsId, triggers] of byWs) {
+      require('../lib/audit').audit('device.move_workspace.triggers_left', { userId: req.user.id, workspaceId: wsId, ip: req.ip || null,
+        details: { to_workspace_id: target.id, device_ids: moved.map((m) => m.device_id), triggers } });
+    }
+  }
+
+  const { audit } = require('../lib/audit');
+  const io = req.app.get('io');
+  const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
+  for (const m of moved) {
+    const details = { device_id: m.device_id, from_workspace_id: m.from_workspace_id, to_workspace_id: target.id, dropped: m.dropped,
+      ...(m.brought ? { brought: { playlist_name: m.brought.playlist_name, copied: m.brought.copied, playlist_id: m.brought.playlist_id } } : {}),
+      ...(v.crossOrg ? { other_organization: { from: v.fromOrgIds, to: target.organization_id }, new_owner_id: v.ownerId } : {}) };
+    // Both stores' activity feeds say where the screen went, so neither wonders where it is.
+    audit('device.move_workspace', { userId: req.user.id, workspaceId: m.from_workspace_id, deviceId: m.device_id, ip: req.ip || null, details });
+    audit('device.move_workspace', { userId: req.user.id, workspaceId: target.id, deviceId: m.device_id, ip: req.ip || null, details });
+    if (io) {
+      try {
+        emitToWorkspace(io.of('/dashboard'), workspaceRoom(m.from_workspace_id), 'dashboard:device-removed', { device_id: m.device_id });
+        const row = db.prepare('SELECT * FROM devices WHERE id = ?').get(m.device_id);
+        if (row) emitToWorkspace(io.of('/dashboard'), workspaceRoom(target.id), 'dashboard:device-added', stripDeviceSecrets(row));
+        const { buildPlaylistPayload } = require('../ws/deviceSocket');
+        require('../lib/command-queue').queueOrEmitPlaylistUpdate(io.of('/device'), m.device_id, buildPlaylistPayload);
+      } catch (e) { console.warn(`[move-workspace] notify failed for ${m.device_id}: ${e && e.message}`); }
+    }
+  }
+  // In its new workspace the screen joins whichever dynamic groups its tags and name match there.
+  for (const m of moved) groupRules.reconcileDeviceAsSystem(db, io, m.device_id);
+  res.json({
+    success: true, workspace_id: target.id, moved,
+    store_triggers_hidden: after.store_triggers_hidden || [],
+    store_triggers_left_behind: sim.leaving,
+    store_triggers_showing_again: after.store_triggers_showing_again || 0,
+  });
+});
+
+// List unclaimed provisioning devices (admin only).
+// #13: read-only, so platform_operator may view the pool too (cross-org staff
+// troubleshooting). Claiming a device is a separate workspace-scoped mutation.
+router.get('/unassigned', (req, res) => {
+  if (!ELEVATED_ROLES.includes(req.user.role) && !isPlatformStaff(req.user.role)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  const devices = db.prepare(`
+    SELECT id, pairing_code, status, ip_address, android_version, app_version,
+      screen_width, screen_height, render_width, render_height, created_at, last_heartbeat
+    FROM devices WHERE user_id IS NULL
+    ORDER BY created_at DESC
+  `).all();
+  res.json(devices);
+});
+
+// #150: "previously removed devices" — fingerprint-keyed settings snapshots for the caller's
+// current workspace, for the operator re-adopt flow (changed-fingerprint case). MUST be
+// declared before GET '/:id' or Express matches 'removed' as an :id. Read-scoped to workspace.
+router.get('/removed', (req, res) => {
+  if (!req.workspaceId) return res.json([]);
+  res.json(deviceSettings.listRemoved(req.workspaceId));
+});
+
+/*
+ * Place search for a screen's location (Open-Meteo geocoding, keyless, through the weather source's
+ * allowlisted and SSRF-guarded fetch). Workspace members only; returns names and coordinates.
+ */
+router.get('/geocode', async (req, res) => {
+  if (!req.workspaceId) return res.status(403).json({ error: 'No workspace context' });
+  try {
+    res.json(await require('../lib/local-conditions').searchPlaces(req.query.q, req.query.lang || 'en'));
+  } catch (e) {
+    res.status(502).json({ error: 'Place search is unavailable right now.' });
+  }
+});
+
+// Get single device with telemetry history
+router.get('/:id', (req, res) => {
+  const device = db.prepare('SELECT d.*, u.email as owner_email, u.name as owner_name FROM devices d LEFT JOIN users u ON d.user_id = u.id WHERE d.id = ?').get(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  // Phase 2.2a: workspace-aware read check. accessContext returns null when
+  // the caller has no path (direct member, org-level acting-as, or platform_admin)
+  // to the device's workspace.
+  if (!device.workspace_id) return res.status(403).json({ error: 'Device not assigned to a workspace' });
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) return res.status(403).json({ error: 'Access denied' });
+  if (ctx.workspaceRole) device._workspaceRole = ctx.workspaceRole; // Pass to frontend
+  if (ctx.actingAs) device._actingAs = true;
+  // SELECT d.* now carries trigger_secret. A read-scoped token must not be able to turn "list my
+  // screens" into "inject content on any of them" — see lib/device-sanitize.js.
+  stripSecretsForTokens(device, req.viaToken);
+
+  const telemetry = db.prepare(
+    'SELECT * FROM device_telemetry WHERE device_id = ? ORDER BY reported_at DESC LIMIT 20'
+  ).all(req.params.id);
+
+  const screenshot = db.prepare(
+    'SELECT * FROM screenshots WHERE device_id = ? ORDER BY captured_at DESC LIMIT 1'
+  ).get(req.params.id);
+
+  /*
+   * ⚠️ Show what the screen ACTUALLY plays, which is the resolved playlist, not devices.playlist_id.
+   *
+   * The two differ the moment a device inherits: clearing an override now sets both the id and the
+   * source to NULL and lets the group's playlist take over, so reading the raw column would leave
+   * this page reporting "no playlist" while the screen plays the group's. A dashboard that
+   * disagrees with the wall is worse than one that says nothing.
+   *
+   * playlist_source is echoed so the UI can distinguish "chosen here" from "inherited" and offer
+   * the revert — the distinction the old copy-on-assign erased.
+   */
+  const resolved = resolveDevicePlaylist(req.params.id);
+  device.playlist_id = resolved.playlist_id;
+  device.playlist_source = resolved.source;
+  // The NAME of whatever it inherits from. "Inherited" alone sends the operator hunting for which
+  // group or wall did it; naming it is the difference between an explanation and a shrug.
+  device.playlist_source_name = resolved.source === 'wall'
+    ? db.prepare('SELECT name FROM video_walls WHERE id = ?').get(device.wall_id)?.name || null
+    : resolved.source === 'group'
+      ? db.prepare(`SELECT g.name FROM device_groups g
+                      JOIN device_group_members m ON m.group_id = g.id
+                     WHERE m.device_id = ? AND g.playlist_id = ?
+                     ORDER BY g.priority DESC, g.created_at ASC, g.id ASC LIMIT 1`)
+          .get(req.params.id, resolved.playlist_id)?.name || null
+      : null;
+
+  /*
+   * CORPORATE: head office's playlist plays here (or head office turned the screen off). The UI
+   * shows a locked badge and the playlist NAME — not a link, for users who cannot open head
+   * office's workspace (it would 404).
+   *
+   * The slot sections (spec §7.9): every local slot of head office's playlist with the content this
+   * screen gets for it — the nearest level, published or still a draft — so the device page knows
+   * BEFORE adding where "Add content" will land (no 409 round trip), and `items`, this screen's loop
+   * tagged by origin (corporate items are locked; slot items say which level they came from).
+   */
+  if (resolved.source === 'corporate') {
+    const m = require('../lib/corporate/resolve').mandateFor(db, req.params.id);
+    const corpGuard = require('../lib/corporate/guard');
+    device.corporate = m ? {
+      playlist_id: m.playlist_id || null,
+      playlist_name: m.playlist_name || null,
+      dark: !!m.dark,
+      layout_id: m.layout_id || null,
+      mandate: { id: m.id, target_kind: m.target_kind, target_label: corpGuard.targetLabel(db, m) },
+      can_change: corpGuard.isOrgAdmin(req, m.organization_id) && !req.viaToken,
+      // The device controls only org admins may use here (D13), so the page can show a lock and the
+      // reason on the control itself instead of letting the command bounce. The server still refuses.
+      controls_locked: corpGuard.isControlledFor(req, req.params.id),
+      gated_commands: Object.keys(corpGuard.GATED_COMMANDS),
+      slots: [],
+      items: [],
+    } : null;
+    if (m && m.playlist_id) {
+      try {
+        const fillsLib = require('../lib/corporate/fills');
+        const corpResolve = require('../lib/corporate/resolve');
+        const markers = corpResolve.publishedMarkers(db, m.playlist_id);
+        const playing = corpResolve.fillsForDevice(db, req.params.id, m.playlist_id);
+        for (const slot of fillsLib.liveSlots(db, m.playlist_id)) {
+          const near = fillsLib.nearestFill(db, req.params.id, slot);
+          const marker = markers.get(slot.id);
+          device.corporate.slots.push({
+            id: slot.id, name: slot.name, help_text: slot.help_text || null,
+            limits: (marker && marker.limits) || fillsLib.limitsOfRow(slot),
+            has_fallback: !!(marker && marker.fallback),
+            fill: near ? { ...fillsLib.describeFill(db, near, slot), fill_state: near.fill_state, playing: !!(playing.get(slot.id) && playing.get(slot.id).fillId === near.id) } : null,
+            own: !!(near && (near.scope_kind === 'device' || near.scope_kind === 'wall')),
+          });
+        }
+        const ex = require('../lib/corporate/composition').explain(db, m.playlist_id, playing);
+        device.corporate.items = ex.items.map((a) => ({
+          content_id: a.content_id || null, widget_id: a.widget_id || null, filename: a.filename || a.widget_name || null,
+          mime_type: a.mime_type || null, duration_sec: a.duration_sec || null,
+          origin: a.__tag ? a.__tag.kind : 'corporate', slot_id: a.__tag ? a.__tag.slot_id : null,
+          locked: !a.__tag || a.__tag.kind !== 'slot',
+        }));
+      } catch (e) { console.warn(`[corporate] device slot block failed for ${req.params.id}: ${e && e.message}`); }
+    }
+  }
+
+  /*
+   * Head office's emergency alerts that reach this screen (org switch on, screen in scope). While any
+   * does, the trigger listener, ports, secret and clear-all token are org-admin-only (§5.2), and a
+   * screen whose listeners are off cannot be reached at all — the trigger panel says both.
+   */
+  try {
+    const em = require('../lib/corporate/emergency');
+    const locking = em.lockingTriggers(db, req.params.id);
+    if (locking.length) {
+      const corpGuard = require('../lib/corporate/guard');
+      device.head_office_triggers = {
+        alerts: locking.map((t) => ({ id: t.id, name: t.name })),
+        settings_locked: !corpGuard.isOrgAdmin(req, corpGuard.orgOfDevice(db, req.params.id)) || !!req.viaToken,
+        listeners_off: !device.triggers_accept_http && !device.triggers_accept_udp,
+      };
+    }
+  } catch (_) { /* no emergency tables: nothing to say */ }
+
+  let assignments = [];
+  let playlist_status = null;
+  let playlist_has_published = false;
+  if (device.playlist_id) {
+    assignments = db.prepare(`
+      SELECT pi.id, pi.content_id, pi.widget_id, pi.child_playlist_id, pi.zone_id, pi.sort_order, pi.duration_sec, pi.muted,
+             pi.created_at, pi.updated_at,
+             COALESCE(c.filename, w.name, cp.name) as filename, c.mime_type, c.filepath, c.thumbnail_path,
+             c.duration_sec as content_duration, c.remote_url,
+             w.name as widget_name, w.widget_type, w.config as widget_config,
+             cp.name as child_playlist_name,
+             (SELECT COUNT(*) FROM playlist_items ci WHERE ci.playlist_id = pi.child_playlist_id) as child_item_count
+      FROM playlist_items pi
+      LEFT JOIN content c ON pi.content_id = c.id
+      LEFT JOIN widgets w ON pi.widget_id = w.id
+      LEFT JOIN playlists cp ON pi.child_playlist_id = cp.id
+      WHERE pi.playlist_id = ?
+      ORDER BY pi.sort_order ASC
+    `).all(device.playlist_id);
+    const pl = db.prepare('SELECT status, published_snapshot FROM playlists WHERE id = ?').get(device.playlist_id);
+    if (pl) {
+      playlist_status = pl.status;
+      playlist_has_published = pl.published_snapshot !== null;
+    }
+  }
+
+  // #zone-orphan: flag any item whose zone_id isn't a zone in the device's ACTIVE layout
+  // (same rule as lib/zone-validate). The dashboard shows a per-item "reassign" warning;
+  // active_layout_zones ships the zone list here too so the inline reassign dropdown needs
+  // no separate /api/layouts round-trip. Informational only — playback uses the fallback.
+  // Resolved layout, so the zone-orphan check is run against the layout the screen is ACTUALLY
+  // using — which, while a schedule is active, is the schedule's rather than the device's own.
+  const active_layout_zones = layoutZones(resolvedLayoutId(req.params.id) ?? device.layout_id);
+  const activeZoneIdSet = new Set(active_layout_zones.map(z => z.id));
+  for (const a of assignments) a.orphan = !!a.zone_id && !activeZoneIdSet.has(a.zone_id);
+
+  // Uptime timeline: get status change events for last 24 hours
+  const dayAgo = Math.floor(Date.now() / 1000) - 86400;
+  let statusLog = [];
+  try {
+    statusLog = db.prepare(
+      'SELECT status, reason, detail, timestamp FROM device_status_log WHERE device_id = ? AND timestamp > ? ORDER BY timestamp ASC'
+    ).all(req.params.id, dayAgo);
+  } catch (_) {}
+
+  // Offline-cause log: the unified incident feed (offline-cause + display/sleep + crash +
+  // reboot), most-recent first. Best-effort — an old DB without the table just yields [].
+  let deviceEvents = [];
+  try {
+    deviceEvents = db.prepare(
+      'SELECT id, type, reason, detail, timestamp FROM device_events WHERE device_id = ? ORDER BY timestamp DESC, id DESC LIMIT 50'
+    ).all(req.params.id);
+  } catch (_) {}
+
+  // Also get telemetry timestamps as heartbeat proof (fills gaps between status events)
+  const uptimeData = db.prepare(
+    'SELECT reported_at FROM device_telemetry WHERE device_id = ? AND reported_at > ? ORDER BY reported_at ASC'
+  ).all(req.params.id, dayAgo).map(r => r.reported_at);
+
+  // The RESOLVED capability set, not the raw column. The dashboard hides controls a panel cannot
+  // honour, and it must not have to know about the baseline fallback — a legacy device declaring
+  // nothing has to arrive at the dashboard looking exactly like one that declared its baseline,
+  // or ~440 existing displays lose their controls the moment this ships.
+  const capabilities = playerCapabilities.capabilitiesFor(device);
+
+  // Parsed on READ, not on receipt. The raw block stays the stored truth, so adding a field later
+  // is a server deploy rather than re-collecting from every panel in the field. Null for a device
+  // that never reported one, or whose block is unreadable — the card simply does not render.
+  const edid = require('../lib/edid').parseEdid(device.hardware_edid);
+
+  // 3.0: which layout is on screen and who chose it (docs/layouts-and-campaigns.md).
+  let resolved_layout = null;
+  try { resolved_layout = require('../lib/resolve-device-playlist').resolvedLayoutInfo(req.params.id); } catch (_) { resolved_layout = null; }
+
+  res.json({ ...stripDeviceSecrets(device), tags: parseTags(device.tags), group_ids: groupIdsByDevice([device.id])[device.id] || [], local_weather: require('../lib/local-conditions').readingFor(device), capabilities, edid, telemetry, screenshot, assignments, active_layout_zones, resolved_layout, playlist_status, playlist_has_published, uptimeData, statusLog, deviceEvents, ...mirrorFields(device) });
+});
+
+/*
+ * CORPORATE (D13): a gated device control on a screen head office's playlist plays on — answered
+ * 403 CORPORATE_DEVICE_CONTROL for anyone but the organization's admins. Returns true when refused.
+ */
+function corpDeviceRouteRefused(req, res, actionLabel) {
+  const corpGuard = require('../lib/corporate/guard');
+  try { corpGuard.assertDeviceRouteControl(req, req.params.id, actionLabel); return false; } catch (e) {
+    if (corpGuard.send(res, e, req)) return true;
+    throw e;
+  }
+}
+
+// Helper: check device write access via the workspace the device belongs to.
+// Phase 2.2a: replaces user_id + team_members check. Allows: platform_admin,
+// org_owner/admin of the device's org (acting-as), workspace_admin/editor of
+// the device's workspace. Denies workspace_viewer and non-members.
+/*
+ * 3.0 display-link mirrors (lib/mirrors.js) on the device detail: an original lists its mirrors, a
+ * mirror names the original it plays. Same workspace by construction (a mirror is created in its
+ * original's workspace), so the caller's read access to this device covers both.
+ */
+function mirrorFields(device) {
+  const mirrorsLib = require('../lib/mirrors');
+  if (device.mirror_of) {
+    const src = db.prepare('SELECT id, name, status FROM devices WHERE id = ? AND workspace_id IS ?').get(device.mirror_of, device.workspace_id);
+    return { mirror_source: src || null, mirrors: [], mirror_playing: src ? mirrorPlaying(device, src) : null };
+  }
+  const list = mirrorsLib.mirrorsOf(device.id).map((m) => ({
+    id: m.id, name: m.name, status: m.status, last_heartbeat: m.last_heartbeat, location: m.mirror_location || null, created_at: m.created_at,
+  }));
+  return { mirror_source: null, mirrors: list };
+}
+
+/*
+ * What a mirror is playing. Its own row has no playlist (it follows its original at payload time,
+ * ws/deviceSocket.js buildPlaylistPayload), so "Now playing" read "No content assigned" on a screen
+ * that was plainly playing. Resolved from the ORIGINAL exactly as the payload is (the resolved
+ * playlist: schedule, wall, group, own), and the item from the mirror's OWN play_start reports
+ * (lib/now-playing.js, attributed to the mirror's id by its socket), else the original's.
+ * { playlist_id, playlist_name, items, now: { content_id, widget_id, name } | null }
+ */
+function mirrorPlaying(mirror, src) {
+  try {
+    const playlistId = require('../lib/resolve-device-playlist').resolveDevicePlaylistId(src.id);
+    const pl = playlistId ? db.prepare('SELECT id, name FROM playlists WHERE id = ?').get(playlistId) : null;
+    const items = pl ? db.prepare('SELECT COUNT(*) AS n FROM playlist_items WHERE playlist_id = ?').get(pl.id).n : 0;
+    const np = require('../lib/now-playing');
+    const cur = np.forDevice(mirror.id)[0] || np.forDevice(src.id)[0] || null;
+    let now = null;
+    if (cur && (cur.content_id || cur.widget_id)) {
+      const row = cur.content_id
+        ? db.prepare('SELECT filename AS name FROM content WHERE id = ? AND workspace_id IS ?').get(cur.content_id, mirror.workspace_id)
+        : db.prepare('SELECT name FROM widgets WHERE id = ? AND workspace_id IS ?').get(cur.widget_id, mirror.workspace_id);
+      now = { content_id: cur.content_id || null, widget_id: cur.widget_id || null, name: row ? row.name : null };
+    }
+    return { playlist_id: pl ? pl.id : null, playlist_name: pl ? pl.name : null, items, now };
+  } catch (e) { return null; }
+}
+
+function checkDeviceOwnership(req, res) {
+  const device = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return null; }
+  if (!device.workspace_id) { res.status(403).json({ error: 'Device not assigned to a workspace' }); return null; }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  // ctx.actingAs covers platform_admin and org_owner/admin paths (always writable).
+  // Direct workspace members: workspace_viewer is read-only.
+  if (!ctx.actingAs && ctx.workspaceRole === 'workspace_viewer') {
+    res.status(403).json({ error: 'Read-only access' }); return null;
+  }
+  return device;
+}
+
+// #104: device-manager preview payload. Returns the device's CURRENT payload exactly
+// as the device renders it — its OWN layout/orientation/wall from the device row and
+// its published items — built by the same buildPlaylistPayload the device socket uses.
+// Device-bound layout (the correct side of the layout seam); derivePreviewLayout is
+// playlist-only and never touches this path. wall_config is forced null in v1: a wall
+// FOLLOWER would otherwise freeze waiting for leader wall:sync that a socket-free
+// preview can't deliver, so wall members preview full-frame. Device-READ gated
+// (mirrors GET /:id — viewers allowed); NOT requirePlaylistRead, NOT the write gate.
+router.get('/:id/preview-payload', (req, res) => {
+  const device = db.prepare('SELECT id, workspace_id FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  if (!device.workspace_id) return res.status(403).json({ error: 'Device not assigned to a workspace' });
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) return res.status(403).json({ error: 'Access denied' });
+  // Unchecked on purpose: this is the dashboard's "what would it play" preview, not a delivery
+  // channel. The gated buildPlaylistPayload would render a suspended card for a blocked screen.
+  const { buildPlaylistPayloadUnchecked } = require('../ws/deviceSocket');
+  const payload = buildPlaylistPayloadUnchecked(req.params.id);
+  payload.wall_config = null; // v1: wall members preview full-frame (no socket-free follower freeze)
+  /*
+   * ⚠️ Secrets out of a PREVIEW (spec §5.2). This is a read route a workspace viewer and an API
+   * token can call, and the payload carries what lets a LAN host change the screen:
+   *   - head office emergency alert codes go only to the organization's admins — a store that knows
+   *     the clear code and its screen's secret could clear the alert during an emergency;
+   *   - the trigger and local-API secrets go to no viewer and no token (an editor still sees the
+   *     trigger secret where it is set, the device's own trigger panel).
+   */
+  try {
+    const corpGuard = require('../lib/corporate/guard');
+    if (Array.isArray(payload.triggers) && payload.triggers.some((t) => t && t.kind === 'emergency')
+        && (req.viaToken || !corpGuard.isOrgAdmin(req, corpGuard.orgOfWorkspace(db, device.workspace_id)))) {
+      payload.triggers = payload.triggers.map((t) => (t && t.kind === 'emergency' ? { ...t, match_token: null, clear_token: null } : t));
+    }
+  } catch (_) { /* never fail a preview over this */ }
+  if (req.viaToken || (!ctx.actingAs && ctx.workspaceRole === 'workspace_viewer')) {
+    if (payload.trigger_config) payload.trigger_config = { ...payload.trigger_config, secret: null };
+    if (payload.local_api) payload.local_api = { ...payload.local_api, secret: null };
+  }
+  res.json(payload);
+});
+
+/*
+ * "What will this screen show at…?" (docs/preview-at-time.md, lib/device-simulate.js).
+ *
+ * READ routes, gated exactly like the preview payload above: the device's workspace must be one the
+ * caller can see (viewers allowed, as for GET /:id). They change nothing — no schedule column is
+ * written, no payload is pushed — they ask the live rules a question about another instant.
+ */
+function deviceReadable(req, res) {
+  const device = db.prepare('SELECT id, workspace_id FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return null; }
+  if (!device.workspace_id) { res.status(403).json({ error: 'Device not assigned to a workspace' }); return null; }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  return device;
+}
+
+function simulateParams(req, res) {
+  const sim = require('../lib/device-simulate');
+  const at = sim.parseInstant(req.query.at);
+  if (at === null) { res.status(400).json({ error: 'at must be an ISO 8601 date-time within a year back and five years ahead' }); return null; }
+  const weather = sim.parseWeather(req.query);
+  if (weather === false) { res.status(400).json({ error: 'weather must be one of clear, cloudy, fog, rain, snow, storm; temp_c a number of degrees' }); return null; }
+  return { sim, at, weather };
+}
+
+router.get('/:id/simulate', (req, res) => {
+  if (!deviceReadable(req, res)) return;
+  const p = simulateParams(req, res);
+  if (!p) return;
+  const out = p.sim.simulate(req.params.id, p.at, { weather: p.weather });
+  if (!out) return res.status(404).json({ error: 'Device not found' });
+  res.json(out);
+});
+
+// The payload the dashboard's preview frame renders for that instant (the player's ?preview=1&at=).
+router.get('/:id/simulate/payload', (req, res) => {
+  if (!deviceReadable(req, res)) return;
+  const p = simulateParams(req, res);
+  if (!p) return;
+  const out = p.sim.previewPayload(req.params.id, p.at, { weather: p.weather });
+  if (!out) return res.status(404).json({ error: 'Device not found' });
+  res.json(out);
+});
+
+router.get('/:id/timeline', (req, res) => {
+  if (!deviceReadable(req, res)) return;
+  const sim = require('../lib/device-simulate');
+  let from = sim.parseInstant(req.query.from);
+  if (from === null) return res.status(400).json({ error: 'from must be an ISO 8601 date-time' });
+  from = Math.floor(from / 60000) * 60000;   // every rule is minute-resolution; so are segments
+  const to = req.query.to ? sim.parseInstant(req.query.to, null) : from + 24 * 3600 * 1000;
+  if (to === null || to <= from) return res.status(400).json({ error: 'to must be an ISO 8601 date-time after from' });
+  if (to - from > sim.MAX_RANGE_MS) return res.status(400).json({ error: 'The range can be at most 14 days' });
+  const weather = sim.parseWeather(req.query);
+  if (weather === false) return res.status(400).json({ error: 'weather must be one of clear, cloudy, fog, rain, snow, storm; temp_c a number of degrees' });
+  const out = sim.timeline(req.params.id, from, to, { weather });
+  if (!out) return res.status(404).json({ error: 'Device not found' });
+  res.json(out);
+});
+
+// Update device
+// Clear a device's playlist — the "No playlist" option in the dashboard picker.
+//
+// There was no way to do this. PUT /devices/:id ignores playlist_id (it always has), and
+// POST /playlists/:id/assign can only ever SET one, so the picker carried a guard that
+// silently discarded the selection: `if (!newPlaylistId) return; // Don't allow deselecting`.
+// The option was offered, selecting it did nothing, and no error said so — reported on #234
+// as "I selected No playlist and it still showed the same video". It did.
+//
+// Device-scoped rather than playlist-scoped because there is no playlist to authorize
+// against when clearing; ownership is checked the same way every other device mutation
+// checks it. Clearing an already-clear device is a no-op success, so the button is safe to
+// press twice.
+router.delete('/:id/playlist', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+
+  /*
+   * ⚠️ Clearing an override means "stop being special", not "go dark".
+   *
+   * playlist_source is cleared alongside the id, so the resolver falls back to the device's wall or
+   * group. Writing playlist_id = NULL alone used to strand the screen on nothing — a destructive
+   * action wearing the costume of an undo, and the reason "revert to group" could not be offered.
+   */
+  db.prepare('UPDATE devices SET playlist_id = NULL, playlist_source = NULL, updated_at = ? WHERE id = ?')
+    .run(Math.floor(Date.now() / 1000), req.params.id);
+
+  // Push whatever the device now resolves to — its group's or wall's playlist if it has one, an
+  // empty payload if it does not — rather than leaving the old content up until something else
+  // happens to update it. (This used to say "the now-empty playlist"; since clearing falls back to
+  // inherited, empty is no longer the only outcome.)
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      const commandQueue = require('../lib/command-queue');
+      commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), req.params.id, buildPlaylistPayload);
+    }
+  } catch (e) { /* silent — the DB is the source of truth, the push is best-effort */ }
+
+  // Clearing a shadowed override is harmless; say that head office's playlist still plays here.
+  const stillMandated = !!require('../lib/corporate/guard').activeMandateFor(db, req.params.id);
+  res.json({ success: true, ...(stillMandated ? { still_mandated: true } : {}) });
+});
+
+router.put('/:id', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+
+  const { name, notes, timezone, orientation, background_color, default_content_id, layout_id, ota_enabled, ota_beta, reboot_schedule, live_video_enabled, tags, screen_profile } = req.body;
+  // Where the screen is (lib/local-conditions.js). Both coordinates or neither; both null clears.
+  let locUpdate = null;
+  if (req.body.latitude !== undefined || req.body.longitude !== undefined || req.body.location_label !== undefined) {
+    const clear = req.body.latitude === null && req.body.longitude === null;
+    const lat = Number(req.body.latitude), lon = Number(req.body.longitude);
+    if (!clear && (req.body.latitude !== undefined || req.body.longitude !== undefined)
+        && !(Number.isFinite(lat) && Number.isFinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180)) {
+      return res.status(400).json({ error: 'latitude and longitude must both be given, as -90..90 and -180..180 (or both null to clear)' });
+    }
+    locUpdate = {
+      ...(req.body.latitude !== undefined || req.body.longitude !== undefined ? { latitude: clear ? null : lat, longitude: clear ? null : lon } : {}),
+      ...(req.body.location_label !== undefined ? { location_label: req.body.location_label ? String(req.body.location_label).replace(/[\u0000-\u001f<>]/g, '').slice(0, 120) : null } : {}),
+    };
+  }
+  const normTags = normalizeTags(tags);
+  if (normTags === false) return res.status(400).json({ error: 'tags must be an array of labels or a comma-separated string' });
+  // #150: validate orientation against the known enum (previously accepted any string, which
+  // let a bad value reach the player -> unknown rotation falls back to landscape silently).
+  // #325: a CSS colour that reaches the player's inline style, so it is constrained to a hex
+  // literal rather than trusted. Empty string clears it back to the player default.
+  if (background_color !== undefined && background_color !== null && background_color !== ''
+      && !/^#[0-9a-fA-F]{3,8}$/.test(String(background_color))) {
+    return res.status(400).json({ error: 'background_color must be a hex colour such as #202020' });
+  }
+  if (orientation !== undefined && !deviceSettings.ORIENTATIONS.has(orientation)) {
+    return res.status(400).json({ error: `Invalid orientation. Allowed: ${[...deviceSettings.ORIENTATIONS].join(', ')}` });
+  }
+  // ⚠️ default_content_id is served to the player, so it must be content this device's workspace
+  // may show — its own, or a platform template (NULL workspace) — the same rule lib/device-move
+  // applies on a move and layout_id applies below. Unchecked, any editor could point a screen at
+  // another tenant's content id and have the player fetch it. null / '' still clear it.
+  if (default_content_id !== undefined && default_content_id !== null && default_content_id !== '') {
+    const c = db.prepare('SELECT workspace_id FROM content WHERE id = ?').get(String(default_content_id));
+    if (!c || (c.workspace_id && c.workspace_id !== device.workspace_id)) {
+      return res.status(400).json({ error: 'default_content_id not found in this workspace' });
+    }
+  }
+  // Whitelist allowed fields to prevent SQL injection via field names
+  const ALLOWED_FIELDS = ['name', 'notes', 'timezone', 'orientation', 'background_color', 'default_content_id'];
+  const updates = [];
+  const values = [];
+  // #325: an empty colour means "back to the player default", which is NULL in the column rather
+  // than an empty string the player would try to apply as a CSS value.
+  const bg = background_color === '' ? null : background_color;
+  Object.entries({ name, notes, timezone, orientation, background_color: bg, default_content_id }).forEach(([key, val]) => {
+    if (val !== undefined && ALLOWED_FIELDS.includes(key)) {
+      updates.push(`${key} = ?`);
+      values.push(val);
+    }
+  });
+  // #public-api: allow setting the device's layout here too (symmetry with
+  // PUT /api/layouts/device/:id). Validate it's a template or in the device's
+  // workspace; null clears it (fullscreen).
+  if (layout_id !== undefined) {
+    // CORPORATE: head office's mandate decides a mandated screen's layout (refused, not a silent no-op).
+    try { require('../lib/corporate/guard').assertNotMandated(req, req.params.id); } catch (e) {
+      if (require('../lib/corporate/guard').send(res, e, req)) return;
+      throw e;
+    }
+    if (layout_id !== null) {
+      const layout = db.prepare('SELECT id FROM layouts WHERE id = ? AND (is_template = 1 OR workspace_id = ?)').get(layout_id, device.workspace_id);
+      if (!layout) return res.status(400).json({ error: 'layout_id not found in this workspace' });
+    }
+    updates.push('layout_id = ?'); values.push(layout_id || null);
+  }
+  // #155/#161: per-device self-update (OTA) toggle. Coerce to 0/1.
+  if (ota_enabled !== undefined) {
+    updates.push('ota_enabled = ?'); values.push(ota_enabled ? 1 : 0);
+  }
+  if (ota_beta !== undefined) {
+    // Per-display pre-release opt-in (#234 follow-up). Stops a test build being reverted by the
+    // next OTA check, which is what a prerelease version sorting below its own release causes.
+    updates.push('ota_beta = ?'); values.push(ota_beta ? 1 : 0);
+  }
+  // #go2rtc: per-device live-video opt-in. Only meaningful when the workspace flag and the server
+  // master switch are also on (see liveVideoOn); off by default. Write-gated by checkDeviceOwnership.
+  if (live_video_enabled !== undefined) {
+    updates.push('live_video_enabled = ?'); values.push(live_video_enabled ? 1 : 0);
+  }
+  // #12 scheduled reboot: device-local "HH:MM" (null/'' clears -> off). Reset the
+  // once-per-day guard on any change so a newly-set time can still fire later today.
+  if (reboot_schedule !== undefined) {
+    let val = null;
+    if (reboot_schedule !== null && reboot_schedule !== '') {
+      if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(String(reboot_schedule))) {
+        return res.status(400).json({ error: 'reboot_schedule must be "HH:MM" (24h) or null' });
+      }
+      val = String(reboot_schedule);
+    }
+    updates.push('reboot_schedule = ?'); values.push(val);
+    updates.push('reboot_last_date = ?'); values.push(null);
+  }
+  if (normTags !== undefined) { updates.push('tags = ?'); values.push(JSON.stringify(normTags)); }
+  if (locUpdate) for (const [k, v] of Object.entries(locUpdate)) { updates.push(`${k} = ?`); values.push(v); }
+  if (screen_profile !== undefined) {
+    // Only an embedded (server-rendered) panel has a render profile. Anything else would silently
+    // keep it and ignore it, so refuse rather than store a setting nothing reads.
+    if (device.client_type !== 'embedded') {
+      return res.status(400).json({ error: 'screen_profile applies to embedded displays only' });
+    }
+    let profileVal = null;
+    if (screen_profile !== null && screen_profile !== '') {
+      const { parseProfile } = require('../lib/embedded-profiles');
+      const parsed = parseProfile(screen_profile);
+      if (!parsed) {
+        return res.status(400).json({ error: 'Invalid screen_profile' });
+      }
+      profileVal = typeof screen_profile === 'object' ? JSON.stringify(screen_profile) : String(screen_profile);
+    }
+    updates.push('screen_profile = ?'); values.push(profileVal);
+  }
+  /*
+   * Tags, name and timezone are what dynamic groups match on, so this edit can move the screen into
+   * or out of groups. Planned against the NEW values, then written together with the membership
+   * under the corporate guard, as this operator: a change that would alter which head office
+   * playlist the screen plays is refused exactly like dragging it out of the group by hand, and
+   * nothing is written.
+   */
+  const dynOverrides = {};
+  if (normTags !== undefined) dynOverrides.tags = JSON.stringify(normTags);
+  if (name !== undefined) dynOverrides.name = name;
+  if (timezone !== undefined) dynOverrides.timezone = timezone;
+  const dynOps = Object.keys(dynOverrides).length ? groupRules.planDevice(db, req.params.id, dynOverrides) : [];
+  if (updates.length > 0) {
+    values.push(req.params.id);
+    const write = () => {
+      db.prepare(`UPDATE devices SET ${updates.join(', ')}, updated_at = strftime('%s','now') WHERE id = ?`).run(...values);
+      if (dynOps.length) groupRules.applyOps(db, dynOps);
+      return true;
+    };
+    if (dynOps.length) {
+      const corpGuard = require('../lib/corporate/guard');
+      const ok = corpGuard.guarded(req, res, () => corpGuard.assertNoMandateLoss(req, [req.params.id], write,
+        (c) => `This change would move the screen ${dynOps[0].op === 'add' ? 'into' : 'out of'} the group "${dynOps[0].group.name}", which changes what it plays (head office's "${c.name}"). Ask your organization admin to do it.`));
+      if (!ok) return;
+      groupRules.pushTo(req.app.get('io'), groupRules.devicesToPush(db, dynOps));
+    } else {
+      write();
+    }
+    // Allowed on a head office screen, and recorded so head office can see who changed it.
+    if (orientation !== undefined || timezone !== undefined) {
+      require('../lib/corporate/guard').auditMandatedAction(req, device, orientation !== undefined ? 'orientation' : 'timezone');
+    }
+  }
+
+  const updated = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  updated.tags = parseTags(updated.tags);
+  if (dynOps.length) updated.groups_changed = dynOps.map((o) => ({ group_id: o.group.id, name: o.group.name, op: o.op }));
+  // ⚠️ stripDeviceSecrets only removes device_token. GET /:id additionally calls
+  // stripSecretsForTokens; these two echo paths did not, so a token got the trigger secret
+  // back from a rename — the escalation lib/device-sanitize.js exists to prevent.
+  res.json(stripSecretsForTokens(stripDeviceSecrets(updated), req.viaToken));
+});
+
+// #146 Item D: operator BLOCK / UNBLOCK toggle. Writes devices.blocked; the device
+// socket re-reads `blocked` on every register, so the block takes effect on the
+// device's NEXT register with NO server restart (and, via the #146 identity chain, is
+// enforced even if that reconnect arrives without a device_id). Write-gated + workspace-
+// scoped by checkDeviceOwnership. OUTAGE PROCEDURE (dashboard down): set it by hand via
+// direct SQLite — `UPDATE devices SET blocked = 1 WHERE id = '<device_id>';` (0 to
+// unblock) — same column, same next-register effect.
+/*
+ * Set or rotate the on-device settings PIN.
+ *
+ * Body: { pin: "123456" } to set explicitly, or { rotate: true } for a fresh random one.
+ *
+ * Was provisioned once at pairing and never changeable, which made it a shared secret with no
+ * expiry: anyone who watched it typed kept it for the life of the panel, and revoking it meant
+ * unpairing and re-pairing. Now it can be rotated the moment an installer leaves.
+ *
+ * Pushed to the panel immediately over its socket. Without that the new PIN would only take effect
+ * at the next pairing — so the operator would believe they had revoked access while the old PIN
+ * still opened the menu, which is worse than not offering the feature.
+ */
+/*
+ * ⚠️ THE ENABLEMENT HALF OF TRIGGERS. Without this route the feature is INERT: trigger_secret and
+ * the accept flags are read by deviceSocket.js and projected to the player, but nothing wrote them,
+ * so the secret was always NULL, evaluate() answered bad_secret to every payload, and no listener
+ * ever bound. The definitions half shipped and looked complete; a QA pass found the system as a
+ * whole could not be switched on.
+ *
+ * Modelled on POST /:id/settings-pin: rotate-or-set, live push, and the response says whether the
+ * panel actually got it rather than implying it.
+ */
+/*
+ * Send one command to one screen.
+ *
+ * ⚠️ THE GROUP EQUIVALENT HAS EXISTED FOR A LONG TIME and this did not, so commanding a single
+ * device was reachable only over the dashboard socket. That was survivable while the only caller
+ * was a browser tab; it stopped being survivable when another server needed to ask, because the
+ * mesh write channel re-enters this node's own HTTP API precisely so that a remote request passes
+ * the same guards a local one does. Without an HTTP surface there was nothing for it to re-enter.
+ *
+ * Guarded exactly as the group route is: requireCommandScope for API tokens (`full`, except the
+ * five undoable commands a `write` token may send — lib/device-command.js WRITE_SCOPE_COMMANDS),
+ * checkDeviceOwnership for the workspace, the shared command allowlist, and the panel's own
+ * declared capabilities.
+ */
+router.post('/:id/command', requireCommandScope, (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+
+  const { type, payload } = req.body || {};
+  if (!type) return res.status(400).json({ error: 'command type required' });
+  if (!ALLOWED_COMMANDS.includes(type)) return res.status(400).json({ error: 'invalid command type' });
+  const v = validateCommand(type, payload);   // #312 follow-up: reject a malformed set_server_url at the door
+  if (!v.ok) return res.status(400).json({ error: v.error });
+
+  const deviceNs = req.app.get('io')?.of('/device');
+  if (!deviceNs) return res.status(503).json({ error: 'The realtime layer is not available.' });
+
+  const r = deliverCommand(deviceNs, device, type, payload);
+  if (r.status === 'refused') {
+    // A screen head office's playlist plays on: this command is for the organization's admins.
+    return res.status(403).json({ error: r.error, code: r.code, corporate: r.corporate });
+  }
+  if (r.status === 'unsupported') {
+    // Named rather than generic: "this panel cannot do that" is actionable, "failed" is not.
+    return res.status(400).json({ error: 'That screen cannot do that', capability: r.capability });
+  }
+  // `id` is present for http_request: it is how the caller matches the result that follows.
+  res.json({ success: true, status: r.status, device_id: device.id, ...(r.id ? { id: r.id } : {}) });
+});
+
+/*
+ * HEAD OFFICE EMERGENCY ALERTS (spec §5.2, D13): once an organization switches emergency alerts on,
+ * a screen in an enabled alert's scope has its trigger listener, ports, secret and clear-all token
+ * managed by the organization's admins only — a store must not be able to quietly make itself
+ * unreachable. Returns true when refused (403 CORPORATE_DEVICE_CONTROL).
+ */
+function emergencyTriggerSettingsRefused(req, res) {
+  const corpGuard = require('../lib/corporate/guard');
+  try { require('../lib/corporate/emergency').assertTriggerSettingsWritable(req, req.params.id); return false; } catch (e) {
+    if (corpGuard.send(res, e, req)) return true;
+    throw e;
+  }
+}
+
+router.post('/:id/trigger-config', requireScope('full'), (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (emergencyTriggerSettingsRefused(req, res)) return;
+  const b = req.body || {};
+  const sets = [];
+  const vals = {};
+
+  // ⚠️ Same charset as a trigger token (routes/triggers.js TOKEN_RE): printable ASCII, no spaces,
+  // because the wire format is space-separated and a space would shift the fields.
+  const TOKEN_RE = /^[\x21-\x7E]{1,64}$/;
+
+  if (b.accept_http !== undefined) { sets.push('triggers_accept_http = @accept_http'); vals.accept_http = b.accept_http ? 1 : 0; }
+  if (b.accept_udp !== undefined) { sets.push('triggers_accept_udp = @accept_udp'); vals.accept_udp = b.accept_udp ? 1 : 0; }
+
+  for (const [key, col] of [['http_port', 'trigger_http_port'], ['udp_port', 'trigger_udp_port']]) {
+    if (b[key] === undefined) continue;
+    if (b[key] === null || b[key] === '') { sets.push(`${col} = NULL`); continue; }
+    const n = Number(b[key]);
+    // Below 1024 needs root on every platform we run on, and 0/65535 are not bindable.
+    if (!Number.isInteger(n) || n < 1024 || n > 65534) {
+      return res.status(400).json({ error: `${key} must be an integer 1024-65534` });
+    }
+    sets.push(`${col} = @${key}`); vals[key] = n;
+  }
+
+  if (b.multicast_group !== undefined) {
+    if (b.multicast_group === null || b.multicast_group === '') {
+      sets.push('trigger_multicast_group = NULL');
+    } else {
+      const g = String(b.multicast_group);
+      const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(g);
+      const oct = m && m.slice(1).map(Number);
+      // 224.0.0.0/4. Anything else is not a group and would silently never receive: joinGroup on a
+      // unicast address fails, and the failure looks exactly like "the integrator sent nothing".
+      if (!oct || oct.some((o) => o > 255) || oct[0] < 224 || oct[0] > 239) {
+        return res.status(400).json({ error: 'multicast_group must be an IPv4 address in 224.0.0.0/4' });
+      }
+      sets.push('trigger_multicast_group = @multicast_group'); vals.multicast_group = g;
+    }
+  }
+
+  if (b.clear_all_token !== undefined) {
+    if (b.clear_all_token === null || b.clear_all_token === '') {
+      sets.push('trigger_clear_all_token = NULL');
+    } else {
+      const t = String(b.clear_all_token);
+      if (!TOKEN_RE.test(t)) {
+        return res.status(400).json({ error: 'clear_all_token must be 1-64 printable ASCII characters with no spaces' });
+      }
+      /*
+       * ⚠️ THE CLEAR-ALL TOKEN SHARES THE TRIGGER TOKEN NAMESPACE, and it is checked FIRST.
+       * evaluate() tests clearAllToken before it iterates the device's triggers, so a value equal
+       * to some trigger's match_token makes that trigger permanently unfirable on this device —
+       * and nothing logs, because from the resolver's point of view the token matched. An
+       * emergency overlay that silently cannot fire is the worst failure this feature has.
+       */
+      const clash = db.prepare(
+        'SELECT name FROM triggers WHERE workspace_id = ? AND (match_token = ? OR clear_token = ?)'
+      ).get(device.workspace_id, t, t);
+      if (clash) {
+        return res.status(400).json({
+          error: `"${t}" is already used by the trigger "${clash.name}" — the clear-all token is `
+            + 'resolved before per-trigger tokens, so it would silently shadow it',
+        });
+      }
+      // …and head office's emergency alerts, org-wide (they live in the head office workspace, so the
+      // query above never sees them). Both directions are checked: lib/corporate/emergency.js
+      // tokenClash refuses an alert token equal to an in-scope screen's clear-all.
+      const emClash = require('../lib/corporate/emergency').clearAllClash(db, device.id, t);
+      if (emClash) return res.status(400).json({ error: emClash, code: 'CORPORATE_EMERGENCY_TOKEN' });
+      sets.push('trigger_clear_all_token = @clear_all_token'); vals.clear_all_token = t;
+    }
+  }
+
+  if (!sets.length) return res.status(400).json({ error: 'nothing to change' });
+  db.prepare(`UPDATE devices SET ${sets.join(', ')}, updated_at = strftime('%s','now') WHERE id = @id`)
+    .run({ id: req.params.id, ...vals });
+
+  // The listeners only bind at player start, so the config change reaches the device now and takes
+  // effect when it next loads the player. Said plainly in the response rather than implied.
+  let delivered = false;
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const commandQueue = require('../lib/command-queue');
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), req.params.id, buildPlaylistPayload);
+      const room = io.of('/device').adapter.rooms.get(req.params.id);
+      delivered = !!(room && room.size > 0);
+    }
+  } catch (e) { console.warn(`[trigger-config] push failed: ${e.message}`); }
+
+  const updated = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  console.log(`[trigger-config] updated ${req.params.id} by user ${req.user && req.user.id}`);
+  res.json({
+    success: true, delivered,
+    trigger_config: {
+      accept_http: !!updated.triggers_accept_http,
+      accept_udp: !!updated.triggers_accept_udp,
+      http_port: updated.trigger_http_port,
+      udp_port: updated.trigger_udp_port,
+      multicast_group: updated.trigger_multicast_group,
+      clear_all_token: updated.trigger_clear_all_token,
+      // ⚠️ Deliberately NOT the secret. It is written and read back only through the dedicated
+      // rotate route below, and never leaves the server to an API token at all.
+      secret_set: !!updated.trigger_secret,
+    },
+  });
+});
+
+/*
+ * Generate or set the device's trigger secret.
+ *
+ * ⚠️ Separate from the config route on purpose. This is the credential that makes an
+ * unauthenticated LAN datagram change what a screen shows, so it has exactly one write path, it is
+ * never echoed to an API token (lib/device-sanitize.js), and rotating it is a deliberate act rather
+ * than a side effect of editing a port number.
+ */
+router.post('/:id/trigger-secret', requireScope('full'), (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (emergencyTriggerSettingsRefused(req, res)) return;
+  const b = req.body || {};
+  let secret;
+  if (b.rotate || b.secret === undefined) {
+    // 32 hex chars from a CSPRNG. The wire format is space-separated, so hex keeps it parseable
+    // and keeps the value safe to paste into a control-system string field.
+    secret = require('crypto').randomBytes(16).toString('hex');
+  } else {
+    secret = String(b.secret);
+    // 16 is the floor because this is guessable-offline: an attacker on the LAN can try tokens as
+    // fast as the rate limiter allows, forever, with no lockout and no audit trail.
+    if (!/^[\x21-\x7E]{16,128}$/.test(secret)) {
+      return res.status(400).json({ error: 'secret must be 16-128 printable ASCII characters with no spaces' });
+    }
+  }
+  db.prepare("UPDATE devices SET trigger_secret = ?, updated_at = strftime('%s','now') WHERE id = ?")
+    .run(secret, req.params.id);
+
+  let delivered = false;
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const commandQueue = require('../lib/command-queue');
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), req.params.id, buildPlaylistPayload);
+      const room = io.of('/device').adapter.rooms.get(req.params.id);
+      delivered = !!(room && room.size > 0);
+    }
+  } catch (e) { console.warn(`[trigger-secret] push failed: ${e.message}`); }
+
+  console.log(`[trigger-secret] rotated for ${req.params.id} by user ${req.user && req.user.id}`);
+  /*
+   * ⚠️ The secret IS returned here, and only here. A human configuring a Crestron panel has to
+   * type it somewhere, and this response is the only place it exists — but a request carrying an
+   * API token never gets it, because a read-scoped integration could otherwise turn "may list your
+   * screens" into "may put content on any of them".
+   */
+  if (req.viaToken) {
+    return res.json({ success: true, delivered, secret_set: true,
+      note: 'the secret is not returned to API tokens — read it from the dashboard' });
+  }
+  res.json({ success: true, delivered, secret });
+});
+
+/*
+ * ⚠️ THE ENABLEMENT HALF OF THE INBOUND LOCAL API (Goal B part 3), and it exists because the
+ * trigger feature already taught this lesson the expensive way: the definitions half of triggers
+ * shipped complete and INERT, because nothing wrote the secret or the accept flags. A QA pass found
+ * a system that could not be switched on. So this route ships in the same commit as the panel code.
+ *
+ * ⚠️ SEPARATE FROM /trigger-config, even though the panel serves both on one socket and one port.
+ * `accept_http` means a LAN host may put an overlay on this screen; this means a LAN host may change
+ * what this screen is DOING. A single flag would have handed remote control to every site that only
+ * ever wanted an emergency overlay, and the two get enabled months apart by different people.
+ */
+router.post('/:id/local-api', requireScope('full'), (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (corpDeviceRouteRefused(req, res, 'change its local control settings')) return;
+  const b = req.body || {};
+  if (b.enabled === undefined) return res.status(400).json({ error: 'enabled is required' });
+  const enabled = !!b.enabled;
+
+  /*
+   * ⚠️ ENABLING WITHOUT A SECRET IS REFUSED HERE, not silently allowed for the panel to sort out.
+   * The panel does refuse everything in that state (LocalApi returns 503 no_secret_configured), but
+   * an operator who ticks the box and walks away believes the feature is on. Telling them at the
+   * door is the difference between a working configuration and one that is quietly dead.
+   */
+  if (enabled && !device.local_api_secret) {
+    return res.status(400).json({
+      error: 'set a local API secret first — POST /api/devices/:id/local-api-secret',
+    });
+  }
+
+  db.prepare("UPDATE devices SET local_api_enabled = ?, updated_at = strftime('%s','now') WHERE id = ?")
+    .run(enabled ? 1 : 0, req.params.id);
+
+  let delivered = false;
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const commandQueue = require('../lib/command-queue');
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), req.params.id, buildPlaylistPayload);
+      const room = io.of('/device').adapter.rooms.get(req.params.id);
+      delivered = !!(room && room.size > 0);
+    }
+  } catch (e) { console.warn(`[local-api] push failed: ${e.message}`); }
+
+  console.log(`[local-api] ${enabled ? 'enabled' : 'disabled'} for ${req.params.id} by user ${req.user && req.user.id}`);
+  /*
+   * ⚠️ `delivered` is reported rather than implied, and the panel binds the socket when it next
+   * (re)starts its listeners — which this push triggers. An operator who is told "on" and finds a
+   * closed port an hour later blames the feature; one who is told the panel is offline waits.
+   */
+  res.json({
+    success: true, delivered,
+    local_api: {
+      enabled,
+      port: device.trigger_http_port || 8079,
+      commands: LOCAL_API_COMMANDS,
+      secret_set: !!device.local_api_secret,
+    },
+  });
+});
+
+/*
+ * Generate or set the local API secret.
+ *
+ * ⚠️ NOT trigger_secret, and not shared with it. The trigger secret is designed to be pasted into an
+ * AMX program and it travels in a query string in cleartext; what it buys is an overlay on a screen
+ * that is already showing this workspace's content. This one buys "reload that screen, blank it,
+ * change its volume". Sharing the value would mean every installer ever given the trigger secret
+ * could take the fleet dark, and rotating one would silently rotate the other.
+ */
+router.post('/:id/local-api-secret', requireScope('full'), (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (corpDeviceRouteRefused(req, res, 'change its local control settings')) return;
+  const b = req.body || {};
+  let secret;
+  if (b.rotate || b.secret === undefined) {
+    secret = require('crypto').randomBytes(24).toString('hex');
+  } else {
+    secret = String(b.secret);
+    // 16 is the floor for the same reason as the trigger secret: this is guessable offline by
+    // anything on the LAN, as fast as the panel's rate limiter allows, forever, with no lockout and
+    // no audit trail. 24 bytes rather than 16 on rotation because this one buys more.
+    if (!/^[\x21-\x7E]{16,128}$/.test(secret)) {
+      return res.status(400).json({ error: 'secret must be 16-128 printable ASCII characters with no spaces' });
+    }
+  }
+  db.prepare("UPDATE devices SET local_api_secret = ?, updated_at = strftime('%s','now') WHERE id = ?")
+    .run(secret, req.params.id);
+
+  let delivered = false;
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const commandQueue = require('../lib/command-queue');
+      const { buildPlaylistPayload } = require('../ws/deviceSocket');
+      commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), req.params.id, buildPlaylistPayload);
+      const room = io.of('/device').adapter.rooms.get(req.params.id);
+      delivered = !!(room && room.size > 0);
+    }
+  } catch (e) { console.warn(`[local-api-secret] push failed: ${e.message}`); }
+
+  console.log(`[local-api-secret] rotated for ${req.params.id} by user ${req.user && req.user.id}`);
+  // Same rule as the trigger secret: returned to a human, never to an API token.
+  if (req.viaToken) {
+    return res.json({ success: true, delivered, secret_set: true,
+      note: 'the secret is not returned to API tokens — read it from the dashboard' });
+  }
+  res.json({ success: true, delivered, secret });
+});
+
+router.post('/:id/settings-pin', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+
+  const pinLib = require('../lib/settings-pin');
+  let pin;
+  if (req.body && req.body.rotate) {
+    pin = pinLib.generatePin();
+  } else {
+    const v = pinLib.validatePin(req.body && req.body.pin);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    pin = v.pin;
+  }
+
+  db.prepare("UPDATE devices SET settings_pin = ?, updated_at = strftime('%s','now') WHERE id = ?")
+    .run(pin, req.params.id);
+
+  // Live push. A panel that is offline picks it up on its next pair/reconnect; the response says
+  // which happened so the dashboard can tell the operator whether it is in force yet.
+  let delivered = false;
+  try {
+    const io = req.app.get('io');
+    if (io) {
+      const ns = io.of('/device');
+      const room = ns.adapter.rooms.get(req.params.id);
+      if (room && room.size > 0) {
+        ns.to(req.params.id).emit('device:settings-pin', { settings_pin: pin });
+        delivered = true;
+      }
+    }
+  } catch (e) { console.warn(`[settings-pin] push failed: ${e.message}`); }
+
+  // Deliberately NOT logging the PIN itself.
+  console.log(`[settings-pin] device ${req.params.id} pin ${req.body && req.body.rotate ? 'rotated' : 'set'} by user ${req.user.id} (delivered=${delivered})`);
+  res.json({ success: true, settings_pin: pin, delivered });
+});
+
+/*
+ * #313 — the enrolment key for a display, and the player URL that carries it.
+ *
+ * ⚠️ WHY THIS IS A DELIBERATE ACTION AND NOT AUTOMATIC. Nearly every display keeps its own
+ * credentials and needs none of this; minting a key for all of them would put a durable secret on
+ * rows that never use one. An operator asks for it on the screen that needs it.
+ *
+ * POST mints or ROLLS it — the same call, because rolling is the recovery when a URL leaks, and an
+ * operator reaching for it is not in the mood to hunt for a second button. The old URL stops
+ * working at the display's next connect.
+ */
+/*
+ * ⚠️ FULL SCOPE TO MINT, for the same reason the trigger secret needs it — and more so.
+ *
+ * The default gate is method-based: anything that is not a GET needs only `write`. 2.0.3 stopped an
+ * API token from READING an enrolment key off a device, on the grounds that the key lets its holder
+ * BE that screen — register as it, take its playlist and its commands, report as it. Leaving the
+ * MINT ungated handed the same power back through a different door: a write-scoped integration
+ * could roll a key for any display in reach and then adopt that display's identity with it. Revoke
+ * is gated for the mirror reason — it is the vMix display's only way back, and taking it away is a
+ * denial of service on a screen the token was never given control of.
+ */
+router.post('/:id/enrol-key', requireScope('full'), (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  // 3.0 mirrors: a link always names the ORIGINAL; a mirror is what a second opening of it becomes.
+  if (device.mirror_of) return res.status(409).json({ error: 'This screen is a mirror. Its display link is the original display’s link: open the original to see or replace it.', code: 'MIRROR' });
+  const key = enrolKey.setEnrolKey(db, req.params.id);
+  const rolled = !!device.enrol_key;
+  console.warn(`[enrol] ${rolled ? 'rolled' : 'minted'} enrolment key for device ${req.params.id} (user ${req.user.id})`);
+  res.json({
+    success: true,
+    id: req.params.id,
+    enrol_key: key,
+    rolled,
+    // Built from the request's own origin so it is right on a LAN address, a tunnel or a domain,
+    // without the operator having to know which one this instance answers on.
+    player_url: enrolKey.playerUrl(`${req.protocol}://${req.get('host')}`, key),
+  });
+});
+
+/* Withdraw it. The display keeps working — it still holds its own token — but the URL stops
+ * enrolling anything, which is what you want when a link has gone somewhere it should not. */
+router.delete('/:id/enrol-key', requireScope('full'), (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  enrolKey.clearEnrolKey(db, req.params.id);
+  console.warn(`[enrol] revoked enrolment key for device ${req.params.id} (user ${req.user.id})`);
+  res.json({ success: true, id: req.params.id, enrol_key: null });
+});
+
+/*
+ * View-only access (lib/view-access.js): let people WATCH this display from a browser without pairing
+ * anything. Off by default. Only the display's workspace admins (and org owners/admins, platform
+ * admins) may see or change it — editors may not: a share link reaches people outside the workspace,
+ * and that is an admin's decision. Never through an API token: the link is a credential for a person
+ * to hold, not an integration's.
+ *
+ * Every change is written to the activity log with what changed (never the token itself).
+ */
+function viewAdminDevice(req, res) {
+  if (req.viaToken) { res.status(403).json({ error: 'View-only access is managed from the dashboard, not with an API token' }); return null; }
+  const device = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return null; }
+  const ws = device.workspace_id && db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  if (!ws || !resourceAccess(req, ws)) { res.status(403).json({ error: 'Access denied' }); return null; }
+  if (!canAdminWorkspace(db, req.user, ws)) { res.status(403).json({ error: 'Only workspace admins can change view-only access' }); return null; }
+  return device;
+}
+
+function viewState(req, device) {
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const token = device.view_token_enc ? secretbox.decrypt(device.view_token_enc) : null;
+  const cidrs = viewAccess.parseStoredCidrs(device.view_cidrs);
+  return {
+    available: !!config.viewOnlyEnabled,
+    enabled: !!device.view_enabled,
+    share_url: token ? `${origin}/view/${token}` : null,
+    cidrs,
+    network_url: cidrs.length ? `${origin}/view/screen/${device.id}` : null,
+    trusted_proxies_configured: (config.viewTrustedProxies || []).length > 0,
+  };
+}
+
+function logView(req, device, action, detail) {
+  try { logActivity(req.user.id, action, detail, device.id, getClientIp(req), device.workspace_id); } catch (_) { /* never fail the change over its log line */ }
+}
+
+// Anyone who can read the display learns whether it is on (so the page can say so); only an admin
+// gets the link and the networks.
+router.get('/:id/view', (req, res) => {
+  const device = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+  const ws = device.workspace_id && db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  if (!ws || !resourceAccess(req, ws)) return res.status(403).json({ error: 'Access denied' });
+  const admin = !req.viaToken && canAdminWorkspace(db, req.user, ws);
+  if (!admin) return res.json({ available: !!config.viewOnlyEnabled, enabled: !!device.view_enabled, can_admin: false });
+  res.json({ ...viewState(req, device), can_admin: true });
+});
+
+// { enabled?: boolean, cidrs?: string[] | string }. Turning it on the first time mints the link.
+router.put('/:id/view', (req, res) => {
+  const device = viewAdminDevice(req, res);
+  if (!device) return;
+  if (!config.viewOnlyEnabled) return res.status(409).json({ error: 'View-only access is turned off on this server' });
+  const body = req.body || {};
+  const sets = [];
+  const args = [];
+  const changes = [];
+  if (body.enabled !== undefined) {
+    const on = body.enabled === true || body.enabled === 1 || body.enabled === '1' || body.enabled === 'true';
+    if (on !== !!device.view_enabled) {
+      sets.push('view_enabled = ?'); args.push(on ? 1 : 0);
+      changes.push(on ? 'view:enabled' : 'view:disabled');
+    }
+    if (on && !device.view_token_hash) {
+      const t = viewAccess.mintToken();
+      sets.push('view_token_hash = ?', 'view_token_enc = ?'); args.push(t.hash, t.enc);
+      changes.push('view:link_created');
+    }
+  }
+  if (body.cidrs !== undefined) {
+    const n = viewAccess.normaliseCidrs(body.cidrs);
+    if (n.error) return res.status(400).json({ error: n.error, invalid: n.invalid || [] });
+    const before = viewAccess.parseStoredCidrs(device.view_cidrs);
+    if (JSON.stringify(before) !== JSON.stringify(n.cidrs)) {
+      sets.push('view_cidrs = ?'); args.push(n.cidrs.length ? JSON.stringify(n.cidrs) : null);
+      changes.push(`view:networks ${n.cidrs.length ? n.cidrs.join(', ') : '(none)'}`);
+    }
+  }
+  if (sets.length) {
+    db.prepare(`UPDATE devices SET ${sets.join(', ')}, updated_at = strftime('%s','now') WHERE id = ?`).run(...args, device.id);
+    for (const c of changes) {
+      const [action, ...rest] = c.split(' ');
+      logView(req, device, action, `${device.name || device.id}${rest.length ? ': ' + rest.join(' ') : ''}`);
+    }
+  }
+  const fresh = db.prepare('SELECT * FROM devices WHERE id = ?').get(device.id);
+  res.json({ ...viewState(req, fresh), can_admin: true });
+});
+
+// New link; the old one stops working at once (open viewers go dark on their next poll).
+router.post('/:id/view/regenerate', (req, res) => {
+  const device = viewAdminDevice(req, res);
+  if (!device) return;
+  if (!config.viewOnlyEnabled) return res.status(409).json({ error: 'View-only access is turned off on this server' });
+  const t = viewAccess.mintToken();
+  db.prepare("UPDATE devices SET view_token_hash = ?, view_token_enc = ?, updated_at = strftime('%s','now') WHERE id = ?").run(t.hash, t.enc, device.id);
+  logView(req, device, 'view:link_regenerated', `${device.name || device.id}${device.view_token_hash ? ': previous link revoked' : ''}`);
+  const fresh = db.prepare('SELECT * FROM devices WHERE id = ?').get(device.id);
+  res.json({ ...viewState(req, fresh), can_admin: true });
+});
+
+router.post('/:id/block', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (corpDeviceRouteRefused(req, res, 'block it')) return;
+  db.prepare("UPDATE devices SET blocked = 1, updated_at = strftime('%s','now') WHERE id = ?").run(req.params.id);
+  // Mirror onto the saved settings so the block survives a delete + re-pair on purpose rather than
+  // by accident of whatever the saved copy happened to hold.
+  try { deviceSettings.setBlockedByDevice(req.params.id, true); } catch (e) { console.warn(`[blocked] save mirror failed: ${e.message}`); }
+  console.warn(`[blocked] device ${req.params.id} blocked via dashboard (user ${req.user.id})`);
+  res.json({ success: true, id: req.params.id, blocked: true });
+});
+router.post('/:id/unblock', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  db.prepare("UPDATE devices SET blocked = 0, updated_at = strftime('%s','now') WHERE id = ?").run(req.params.id);
+  // MUST clear the saved copy too. applyToDevice() restores `blocked` on re-pair, so leaving the
+  // saved 1 in place made unblock temporary: the next delete + re-pair silently re-blocked the
+  // device, with nothing in the dashboard to explain it and no way for the operator to escape.
+  try { deviceSettings.setBlockedByDevice(req.params.id, false); } catch (e) { console.warn(`[blocked] save mirror failed: ${e.message}`); }
+  console.log(`[blocked] device ${req.params.id} unblocked via dashboard (user ${req.user.id})`);
+  res.json({ success: true, id: req.params.id, blocked: false });
+});
+
+// #150: re-adopt — apply a removed device's saved settings onto device :id. For the case the
+// fingerprint did NOT auto-match (factory reset / new hardware), so the automatic re-pair
+// restore couldn't fire. Auth: caller can write device :id (checkDeviceOwnership) AND the
+// snapshot belongs to the SAME workspace as the device (no cross-tenant apply).
+router.post('/:id/re-adopt', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  const { fingerprint } = req.body || {};
+  if (!fingerprint) return res.status(400).json({ error: 'fingerprint required' });
+  const snap = deviceSettings.getByFingerprint(fingerprint);
+  if (!snap) return res.status(404).json({ error: 'No saved settings for that fingerprint' });
+  if (snap.workspace_id !== device.workspace_id) {
+    return res.status(403).json({ error: 'Saved settings belong to a different workspace' });
+  }
+  deviceSettings.applyToDevice(req.params.id, fingerprint);
+  const updated = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  console.log(`[#150] re-adopted settings (fp ${fingerprint.slice(0, 8)}…) onto device ${req.params.id} by user ${req.user.id}`);
+  // ⚠️ stripDeviceSecrets only removes device_token. GET /:id additionally calls
+  // stripSecretsForTokens; these two echo paths did not, so a token got the trigger secret
+  // back from a rename — the escalation lib/device-sanitize.js exists to prevent.
+  res.json(stripSecretsForTokens(stripDeviceSecrets(updated), req.viaToken));
+});
+
+// Delete device
+router.delete('/:id', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+
+  // #150: snapshot this device's settings (keyed by its fingerprint) BEFORE the row dies,
+  // so a re-pair of the SAME physical device restores orientation/name/playlist/etc instead
+  // of silently resetting to defaults. No-op if the device has no fingerprint link yet.
+  // (Not for a mirror: it has no settings of its own to restore.)
+  if (!device.mirror_of) try { deviceSettings.snapshot(req.params.id); } catch (e) { console.warn(`[#150] settings snapshot failed for ${req.params.id}: ${e.message}`); }
+
+  // Allowed on a head office screen (physical access is out of the threat model), but recorded.
+  require('../lib/corporate/guard').auditMandatedAction(req, device, 'delete');
+
+  /*
+   * 3.0 mirrors: removing an original removes its mirrors (they play nothing without it), and
+   * removing a mirror tells that opening so — a player that understands it shows "This mirror was
+   * removed" and stops, instead of re-registering with the link and becoming a mirror again.
+   */
+  const removed = [req.params.id, ...(device.mirror_of ? [] : require('../lib/mirrors').mirrorsOf(req.params.id).map((m) => m.id))];
+  const io = req.app.get('io');
+  for (const id of removed) {
+    // 3.0 screen share: a removed screen's leg of a share ends now (a removed mirror drops out of
+    // its display's share; the display and its other mirrors carry on), and its code goes.
+    try { require('../lib/screen-share').deviceGone(id); } catch (_) { /* never block a delete */ }
+    // Clean up related data (playlist is NOT deleted — may be shared with other devices)
+    db.prepare('DELETE FROM schedules WHERE device_id = ?').run(id);
+    // Head office mandates / slot content / emergency scopes naming this screen (no FK cascades them).
+    require('../lib/corporate/cleanup').removeTargets(db, 'device', id);
+    db.prepare('DELETE FROM screenshots WHERE device_id = ?').run(id);
+    db.prepare('DELETE FROM device_telemetry WHERE device_id = ?').run(id);
+    db.prepare('DELETE FROM video_wall_devices WHERE device_id = ?').run(id);
+    db.prepare('DELETE FROM devices WHERE id = ?').run(id);
+
+    // Notify dashboard in real-time. Phase 2.3: scope to the device's
+    // (now-deleted but still-known) workspace room. `device.workspace_id`
+    // came from checkDeviceOwnership() above.
+    if (io) {
+      const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
+      emitToWorkspace(io.of('/dashboard'), workspaceRoom(device.workspace_id), 'dashboard:device-removed', { device_id: id });
+      const mirrorGone = id !== req.params.id || !!device.mirror_of;
+      if (mirrorGone) io.of('/device').to(id).emit('device:mirror-removed', { device_id: id });
+      // Tell the screen now. Without this a connected player only learned on its next register (a
+      // reconnect, or an app restart), and sat on its old content until then. `reason: 'deleted'` is
+      // what lets a player wipe its downloads: the not_found a register gets is also what a restored
+      // backup or an unreplicated edge says, so players must never wipe on that.
+      io.of('/device').to(id).emit('device:unpaired', { reason: 'deleted' });
+    }
+  }
+  if (removed.length > 1 || device.mirror_of) {
+    require('../lib/audit').auditFromReq(req, 'device.mirror_removed', { workspace_id: device.workspace_id, device_id: req.params.id, removed: removed.length });
+  }
+
+  res.json({ success: true });
+});
+
+// ── Live video (go2rtc). All READ-gated: watching a screen is a read, exactly like a screenshot.
+// The publish path (the player offering video INTO go2rtc) authenticates as a DEVICE, not a user,
+// and lives with the player-publisher work; it is deliberately not here. See docs/live-video.md.
+const go2rtc = require('../lib/go2rtc');
+const orgWebrtc = require('../lib/org-webrtc');   // #talk: per-org talk flag + ICE (TURN/STUN) override
+
+// Resolve read access to a device via its workspace, the same shape GET /:id uses. Returns the
+// device row (with workspace) or null after sending the response.
+function checkDeviceRead(req, res) {
+  const device = db.prepare('SELECT * FROM devices WHERE id = ?').get(req.params.id);
+  if (!device) { res.status(404).json({ error: 'Device not found' }); return null; }
+  if (!device.workspace_id) { res.status(403).json({ error: 'Device not assigned to a workspace' }); return null; }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  device._workspace = ws;
+  return device;
+}
+
+// Whether live VIDEO is on for this device: the server master gate, the workspace flag, and the
+// device flag must all be set. Independent of whether a publisher is actually connected right now.
+function liveVideoOn(device) {
+  return !!(config.liveVideoEnabled && device._workspace && device._workspace.live_video_enabled && device.live_video_enabled);
+}
+
+/*
+ * What the dashboard should do to watch this screen right now.
+ *
+ * mode 'webrtc' only when live video is enabled at all three levels AND go2rtc is healthy AND a
+ * stream for this device actually exists (a publisher is connected). Anything short of that is
+ * mode 'snapshot' — the existing screenshot path — so the Devices page never breaks when the
+ * sidecar is absent, down, or nobody is publishing. The browser signals through signalPath (a
+ * proxied ScreenTinker route), never straight to go2rtc, so the admin API stays private.
+ */
+router.get('/:id/live', async (req, res) => {
+  const device = checkDeviceRead(req, res);
+  if (!device) return;
+  const snapshot = { mode: 'snapshot', fallback: 'snapshot' };
+  if (!liveVideoOn(device)) return res.json({ ...snapshot, reason: 'disabled' });
+  if (!go2rtc.enabled()) return res.json({ ...snapshot, reason: 'no_sidecar' });
+  const name = go2rtc.streamName(device.workspace_id, device.id);
+  // "present" must mean a publisher is ACTUALLY streaming, not just that ensureStream left an inert
+  // placeholder behind (see go2rtc.hasActiveProducer). Otherwise the dashboard would try webrtc,
+  // ICE-connect to a stream with no media, and sit on a black frame instead of the snapshot.
+  const [healthy, present] = await Promise.all([go2rtc.healthy(), go2rtc.hasActiveProducer(name)]);
+  if (!healthy) return res.json({ ...snapshot, reason: 'sidecar_down' });
+  if (!present) return res.json({ ...snapshot, reason: 'not_publishing' });
+  res.json({
+    mode: 'webrtc',
+    fallback: 'snapshot',
+    // Proxied signaling: the browser POSTs its SDP offer here, the server forwards to go2rtc.
+    signalPath: `/api/devices/${device.id}/live/webrtc`,
+    iceServers: orgWebrtc.iceServersForDevice(device.id),
+    // A viewer URL is not minted; the proxy holds the session. expiresAt bounds how long the
+    // dashboard should trust this descriptor before re-asking (a publisher can drop meanwhile).
+    expiresAt: Date.now() + 30000,
+  });
+});
+
+// Proxy one WebRTC SDP exchange for WATCHING. Read-gated, and the requested stream must belong to
+// this exact workspace+device: streamBelongsTo recomputes the name, so a caller cannot hand us
+// another workspace's stream even with a valid session on their own device.
+router.post('/:id/live/webrtc', express.text({ type: ['application/sdp', 'text/plain'], limit: '256kb' }), async (req, res) => {
+  const device = checkDeviceRead(req, res);
+  if (!device) return;
+  if (!liveVideoOn(device) || !go2rtc.enabled()) return res.status(409).json({ error: 'Live video is not available for this device' });
+  const name = go2rtc.streamName(device.workspace_id, device.id);
+  if (!go2rtc.streamBelongsTo(name, device.workspace_id, device.id)) return res.status(403).json({ error: 'Stream does not belong to this device' });
+  const offer = typeof req.body === 'string' ? req.body : '';
+  if (!offer) return res.status(400).json({ error: 'SDP offer required' });
+  const answer = await go2rtc.webrtcExchange(name, offer, 'sub');
+  if (!answer) return res.status(502).json({ error: 'go2rtc did not answer', fallback: 'snapshot' });
+  res.type('application/sdp').send(answer.sdp);
+});
+
+/*
+ * #talk — two-way voice intercom. Gated exactly like live video (same three flags + a live go2rtc),
+ * because it rides the same sidecar; the dashboard additionally shows the control only for a device
+ * that declares remote.talk. Audio is Opus, which go2rtc registers by default, so no patched sidecar
+ * is needed (unlike VP8 video). Two one-directional streams per device:
+ *   dn (downlink): operator mic -> device speaker  — operator PUBLISHES here (this route), device subscribes
+ *   up (uplink):   device mic   -> operator speaker — operator SUBSCRIBES here (this route), device publishes
+ * The device's own two exchanges (subscribe dn, publish up) go through the device-authenticated WS
+ * proxy (lib/live-publish-ws.js), never these session routes.
+ */
+router.get('/:id/talk', async (req, res) => {
+  const device = checkDeviceRead(req, res);
+  if (!device) return;
+  const off = { mode: 'off' };
+  if (!orgWebrtc.talkEnabledForDevice(device.id)) return res.json({ ...off, reason: 'disabled' });
+  if (!go2rtc.enabled()) return res.json({ ...off, reason: 'no_sidecar' });
+  if (!(await go2rtc.healthy())) return res.json({ ...off, reason: 'sidecar_down' });
+  res.json({
+    mode: 'webrtc',
+    // Operator publishes mic to the downlink, subscribes to the uplink. Proxied like /live/webrtc.
+    publishPath: `/api/devices/${device.id}/talk/publish`,
+    viewPath: `/api/devices/${device.id}/talk/view`,
+    iceServers: orgWebrtc.iceServersForDevice(device.id),
+    expiresAt: Date.now() + 30000,
+  });
+});
+
+// Operator -> device audio: proxy the operator's PUBLISH offer into the downlink stream (dst=).
+router.post('/:id/talk/publish', express.text({ type: ['application/sdp', 'text/plain'], limit: '256kb' }), async (req, res) => {
+  // ⚠️ WRITE, not read. These carry the session's media: publish plays the
+  // caller's microphone out of the device, view hears the device's microphone. checkDeviceRead let a
+  // read-only workspace_viewer attach to a session an editor had started; dashboard:talk-start was
+  // already write-gated, the media routes were not.
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (!orgWebrtc.talkEnabledForDevice(device.id) || !go2rtc.enabled()) return res.status(409).json({ error: 'Talk is not available for this device' });
+  const name = go2rtc.talkStreamName(device.workspace_id, device.id, 'dn');
+  const offer = typeof req.body === 'string' ? req.body : '';
+  if (!offer) return res.status(400).json({ error: 'SDP offer required' });
+  try { await go2rtc.ensureStream(name); } catch (_) { /* go2rtc may auto-create on dst */ }
+  const answer = await go2rtc.webrtcExchange(name, offer, 'pub');
+  if (!answer) return res.status(502).json({ error: 'go2rtc did not answer' });
+  res.type('application/sdp').send(answer.sdp);
+});
+
+// Device -> operator audio: proxy the operator's SUBSCRIBE offer against the uplink stream (src=).
+router.post('/:id/talk/view', express.text({ type: ['application/sdp', 'text/plain'], limit: '256kb' }), async (req, res) => {
+  // ⚠️ WRITE, not read. These carry the session's media: publish plays the
+  // caller's microphone out of the device, view hears the device's microphone. checkDeviceRead let a
+  // read-only workspace_viewer attach to a session an editor had started; dashboard:talk-start was
+  // already write-gated, the media routes were not.
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (!orgWebrtc.talkEnabledForDevice(device.id) || !go2rtc.enabled()) return res.status(409).json({ error: 'Talk is not available for this device' });
+  const name = go2rtc.talkStreamName(device.workspace_id, device.id, 'up');
+  const offer = typeof req.body === 'string' ? req.body : '';
+  if (!offer) return res.status(400).json({ error: 'SDP offer required' });
+  // No ensureStream on a subscribe: a placeholder-only stream cannot be consumed ("unsupported
+  // url"). The device's uplink publish creates the real producer; the operator retries until then.
+  const answer = await go2rtc.webrtcExchange(name, offer, 'sub');
+  if (!answer) return res.status(502).json({ error: 'go2rtc did not answer', reason: 'not_publishing' });
+  res.type('application/sdp').send(answer.sdp);
+});
+
+module.exports = router;

@@ -1,0 +1,1136 @@
+const express = require('express');
+const router = express.Router();
+const { db } = require('../db/database');
+const os = require('os');
+const path = require('path');
+const { copyFileBytes } = require('../lib/fsutil'); // exFAT-safe; see lib/fsutil.js
+const fs = require('fs');
+const { resolveWithin } = require('../lib/safe-path');
+const config = require('../config');
+const replicaProxy = require('../lib/replica-proxy');
+const { sixDigitCode } = require('../lib/numeric-code');
+const VERSION = require('../version');
+const { PLATFORM_ROLES, resolveSessionUser } = require('../middleware/auth');
+const { accessContext, firstAccessibleWorkspace } = require('../lib/tenancy');
+
+/**
+ * Scale-out roles read off the edges, never off a NODE_ROLE. Returns null on a stock install.
+ *   replicas   — up edges carrying workspace-replication (this node is their primary): acked rev.
+ *   replica_of — down edges with serves-dashboard + workspace-replication (this node copies them):
+ *                position, as-of, lag (null while the edge is down), phase.
+ */
+function scaleOutStatus() {
+  const parse = (v) => { try { return JSON.parse(v || '[]'); } catch (_) { return []; } };
+  let edges = [];
+  try { edges = db.prepare("SELECT * FROM mesh_edges WHERE revoked_at IS NULL").all(); } catch (_) { return null; }
+  // The live link per up edge (this node's own uplink), so "the replica ended it" is visible here:
+  // connected false with the refusal the other side gave at the door.
+  let links = [];
+  try { links = global.__meshUplinks && typeof global.__meshUplinks.status === 'function' ? global.__meshUplinks.status() : []; } catch (_) { links = []; }
+  const replicas = edges.filter((e) => e.direction === 'up' && parse(e.grant_categories).includes('workspace-replication'))
+    .map((e) => {
+      const l = links.find((x) => x.edgeId === e.id) || null;
+      return { node_id: e.peer_node_id, acked_rev: e.acked_rev ?? null, last_sync_at: e.last_sync_at ?? null,
+               link: l ? { connected: !!l.connected, last_error: l.lastError || null } : null };
+    });
+  const rep = global.__meshReplica;
+  const replicaOf = rep ? rep.status() : [];
+  if (!replicas.length && !replicaOf.length) return null;
+  const role = [];
+  if (replicas.length) role.push('primary');
+  if (replicaOf.length) role.push('replica');
+  let head = null;
+  if (replicas.length) { try { head = require('../lib/mesh/replication').headRev(db); } catch (_) { /* absent */ } }
+  // Scale-out C2: what this node still owes each primary for the screens attached here.
+  let players = [];
+  try { const ob = require('../lib/mesh/player-termination').getOutbox(); players = ob ? ob.status() : []; } catch (_) { players = []; }
+  let caches = [];
+  try { caches = require('../lib/mesh/content-cache').status(db, config); } catch (_) { caches = []; }
+  for (const r of replicaOf) {
+    const p = players.find((x) => x.node_id === r.node_id);
+    if (p) r.players = { pending: p.pending, oldest_age_s: p.oldest_age_s, last_error: p.last_error, refused_at_cap: p.refused_at_cap, expired: p.expired, sent: p.sent };
+    // Scale-out C3: present only when this node caches media for that primary.
+    const c = caches.find((x) => x.node_id === r.node_id);
+    if (c) r.cache = { files: c.files, bytes: c.bytes, pinned_bytes: c.pinned_bytes, cap_bytes: c.cap_bytes, last_error: c.last_error, prefetch_pending: c.prefetch_pending, stored: c.stored };
+  }
+  return { role, head_rev: head, replicas, replica_of: replicaOf };
+}
+
+// The JWT's current_workspace_id is a stored claim. Import and export resolve the session themselves
+// (they do not run behind resolveTenancy), so they must RE-VALIDATE that claim against current
+// membership: a user removed from a workspace still holds a JWT naming it, and must not be able to
+// import into it or export its branding. Mirrors resolveTenancy's discard-if-stale, then falls back
+// to the user's first accessible workspace.
+function sessionWorkspaceId(userId, role, jwtWorkspaceId) {
+  if (jwtWorkspaceId) {
+    const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(jwtWorkspaceId);
+    if (ws && accessContext(userId, role, ws)) return jwtWorkspaceId;
+  }
+  const first = firstAccessibleWorkspace(userId);
+  return first ? first.id : null;
+}
+const { INLINE_SAFE_EXTS } = require('../lib/upload-sniff');
+const { digestFileSync, isDigestName } = require('../lib/content-digest');
+const loopLag = require('../services/loop-lag');
+// #146 P3.8: soak observability — internal limiter/maintenance states.
+const flapLimiter = require('../lib/flap-limiter');
+const otaBreaker = require('../lib/ota-breaker');
+const otaDownloadGuard = require('../lib/ota-download-guard');
+const logCoalescer = require('../lib/log-coalescer');
+const { getMaintenanceStats } = require('../db/database');
+const { getCheckpointerState } = require('../db/wal-checkpointer');   // #240
+const heartbeat = require('../services/heartbeat');
+const appSettings = require('../lib/app-settings');
+const bootDefer = require('../lib/boot-defer');   // 2.0.1 first-boot player defer
+// Restored throwaways are still generated even when the backup predates the flag.
+const { backfillScheduledPlaylists, createAutoGeneratedPlaylist } = require('../lib/auto-playlist');
+
+// Public status page
+router.get('/', (req, res) => {
+  const uptime = process.uptime();
+  const version = VERSION;
+
+  const body = {
+    status: 'ok',
+    version,
+    uptime_human: formatUptime(uptime),
+    timestamp: new Date().toISOString(),
+    // #142: current event-loop lag snapshot, so site lag is diagnosable from the
+    // health endpoint independent of any throttling. Cheap (in-memory read).
+    loop_lag: loopLag.getLag(),
+    // #146: ALWAYS-ON live-fleet gauge — devices with a live WS socket THIS INSTANT
+    // (from the heartbeat connection map), NOT devices.status='online' (which lags by
+    // the offline-timeout). The single most-glanced operational number; never gated.
+    devices_connected: heartbeat.getConnectedCount(),
+    /*
+     * Can THIS process capture the screen? True only on a BrightSign whose Node context can load
+     * @brightsign/screenshot — i.e. a server-on-a-player, where the player's own widget has no
+     * `require` and therefore cannot capture itself.
+     *
+     * ⚠️ Reported because its ABSENCE is invisible otherwise. A capture request is accepted, does
+     * nothing, and leaves the previous screenshot in place: on a live XT245 that meant a ten-day-old
+     * frame while every request returned success. One boolean on the health endpoint is the
+     * difference between "screenshots are broken here" and an afternoon of guessing.
+     */
+    screen_capture: require('../lib/brightsign-capture').available(),
+    // #go2rtc: whether live video is enabled server-wide (the master switch). The dashboard uses
+    // this to decide whether to OFFER the per-workspace/per-device toggles at all; both of those
+    // flags are inert unless this is on. A boolean, no sidecar detail leaks here.
+    features: { live_video: !!config.liveVideoEnabled, talk: !!config.talkEnabled, view_only: !!config.viewOnlyEnabled,
+      // 3.0: screen share (lib/screen-share.js) — on unless SCREEN_SHARE_ENABLED=false.
+      screen_share: !!config.screenShareEnabled },
+  };
+
+  /*
+   * Scale-out (docs/scale-out-design.md §8). Present ONLY when this node is a primary for some
+   * replica or a replica of some primary — a stock install has no `scale_out` key at all. lag_s is
+   * null when the edge is down: silence is reported as unknown, never as zero.
+   */
+  try {
+    const so = scaleOutStatus();
+    if (so) body.scale_out = so;
+  } catch (e) { /* the health endpoint must never fail over an observer relationship */ }
+
+  /*
+   * 2.0.1 — WHY PLAYERS ARE BEING REFUSED, on the endpoint compose already polls.
+   *
+   * ⚠️ STILL 200, STILL `status: 'ok'`. The healthcheck in docker-compose.example.yml treats a
+   * non-2xx as unhealthy and restarts the container; failing it during scheduled maintenance would
+   * restart the very boot that is trying to finish — the #146 restart loop with a new cause. The
+   * container IS healthy. It is deliberately not taking players yet, and this block says so.
+   *
+   * Omitted entirely once players are accepted normally, so a healthy install's status payload is
+   * byte-identical to 2.0.0's.
+   */
+  const maintenance = bootDefer.statusBlock();
+  if (maintenance) body.maintenance = maintenance;
+
+  // #146: the debug block is admin-toggleable (app_settings.status_debug_enabled),
+  // defaulting to the STATUS_DEBUG_ENABLED env behavior. Cheap cached boolean. When off,
+  // the `debug` key is omitted entirely. Aggregate counts only (no ids/secrets).
+  if (appSettings.getBool('status_debug_enabled', config.statusDebugEnabled)) {
+    body.debug = {
+      flap: flapLimiter.stats(),                  // buckets, quarantined, refused{Total,LastWindow}, quarantineStarts{Total,LastWindow}
+      ota_breaker: otaBreaker.stats(),            // rateBackoff{Total,LastWindow}
+      ota_download: otaDownloadGuard.stats(),     // inFlight, served/shed ThisWindow + Total
+      maintenance: getMaintenanceStats(),         // deleted, ms, at, running, sweepsTotal
+      wal_checkpoint: getCheckpointerState(),     // #240 worker alive?, sticky fallback?, respawns, WAL bytes
+      log_coalescer_buffer: logCoalescer._size(),
+    };
+  }
+
+  res.json(body);
+});
+
+function formatUptime(seconds) {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// These three routes take the session token from the query string / Authorization header
+// and resolve it themselves rather than sitting behind requireAuth. resolveSessionUser is
+// the SAME resolver requireAuth uses, so they inherit every check it makes (pre-TOTP
+// refusal, live user row, forced password change). Each keeps the exact status/body it
+// returned before for the invalid-token case.
+function denySession(res, err) {
+  if (err && err.code === 'mfa_required') return res.status(401).json({ error: 'mfa_required' });
+  if (err && err.code === 'password_change_required') return res.status(403).json({ error: 'password_change_required' });
+  return res.status(401).json({ error: 'Invalid token' });
+}
+
+// Full database backup (superadmin only)
+router.get('/backup', (req, res) => {
+  const token = req.query.token;
+  if (!token) return res.status(401).json({ error: 'Token required' });
+
+  let session;
+  try {
+    session = resolveSessionUser(token);
+  } catch (err) {
+    // An unknown user id stays indistinguishable from "not a platform admin" (as before),
+    // so this endpoint never confirms whether a given id exists.
+    if (err.code === 'user_not_found') return res.status(403).json({ error: 'Platform admin only' });
+    return denySession(res, err);
+  }
+  // A break-glass identity has no users row, so it could never pass the role check here
+  // before; keep it that way rather than letting the synthetic role claim decide.
+  if (session.viaRecovery || !PLATFORM_ROLES.includes(session.user.role)) {
+    return res.status(403).json({ error: 'Platform admin only' });
+  }
+
+  const dbPath = require('../config').dbPath;
+  res.download(dbPath, `remotedisplay-backup-${new Date().toISOString().split('T')[0]}.db`);
+});
+
+/*
+ * The data of one export in the screentinker-export-v2 format: the person's own resources
+ * (byWorkspace false — GET /export), or every resource of one workspace (byWorkspace true — used by
+ * the complete organization export, which writes one re-importable export.json per workspace).
+ * Returns null when the user row is gone.
+ */
+function collectExportData({ userId, workspaceId, byWorkspace = false }) {
+  // Re-read with the export's own column list (it needs created_at, which the session
+  // resolver doesn't select).
+  const user = db.prepare('SELECT id, email, name, role, auth_provider, plan_id, created_at FROM users WHERE id = ?').get(userId);
+  if (!user) return null;
+  // The rows this export covers: the person's own (the original GET /export), or one whole
+  // workspace's (3.0 complete organization export, lib/trust/export.js). Never interpolated from input.
+  const col = byWorkspace ? 'workspace_id' : 'user_id';
+  const key = byWorkspace ? workspaceId : userId;
+
+  const devices = db.prepare(`SELECT id, name, status, ip_address, android_version, app_version, screen_width, screen_height, tags, created_at FROM devices WHERE ${col} = ?`).all(key);
+  const deviceIds = devices.map(d => d.id);
+  const devicePlaceholders = deviceIds.map(() => '?').join(',') || "'__none__'";
+
+  const content = db.prepare(`SELECT id, filename, mime_type, file_size, duration_sec, remote_url, width, height, created_at FROM content WHERE ${col} = ?`).all(key);
+  const widgets = db.prepare(`SELECT id, widget_type, name, config, created_at FROM widgets WHERE ${col} = ?`).all(key);
+  const layouts = db.prepare(`SELECT id, name, width, height, is_template, template_category, created_at FROM layouts WHERE ${col} = ? AND is_template = 0`).all(key);
+  const layoutIds = layouts.map(l => l.id);
+  const layoutPlaceholders = layoutIds.map(() => '?').join(',') || "'__none__'";
+  const layoutZones = layoutIds.length ? db.prepare(`SELECT * FROM layout_zones WHERE layout_id IN (${layoutPlaceholders})`).all(...layoutIds) : [];
+
+  const playlists = db.prepare(`SELECT id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate${require('../lib/corporate/schema-probe').hasColumn(db, 'playlists', 'layout_id') ? ', layout_id' : ''} FROM playlists WHERE ${col} = ?`).all(key)
+    .map(({ corporate, ...p }) => (corporate ? { ...p, corporate: 1 } : p));
+  const playlistIds = playlists.map(p => p.id);
+  const playlistPlaceholders = playlistIds.map(() => '?').join(',') || "'__none__'";
+  const playlistItems = playlistIds.length ? db.prepare(`SELECT id, playlist_id, content_id, widget_id, child_playlist_id, sort_order, duration_sec, slot_id FROM playlist_items WHERE playlist_id IN (${playlistPlaceholders})`).all(...playlistIds)
+    .map(({ slot_id, ...pi }) => (slot_id ? { ...pi, slot_id } : pi)) : [];
+  /*
+   * ⚠️ CORPORATE (spec §6.3). A corporate playlist travels with its local slots, so a re-import into
+   * the same org's head office keeps the slot ids the stores' content is attached to. What does NOT
+   * travel is said in the manifest, explicitly: "Where it plays" (mandates) and stores' slot content
+   * (fills) name other workspaces, and the workspace export has silently dropped things before.
+   */
+  const corporateIds = playlists.filter((p) => p.corporate).map((p) => p.id);
+  let corporateSlots = [];
+  let corporateManifest = null;
+  let fillsNotExported = 0;
+  try {
+    if (corporateIds.length) {
+      corporateSlots = db.prepare(`SELECT id, playlist_id, name, help_text, max_items, max_total_sec, allow_video, allow_widgets,
+                                          fallback_content_id, fallback_widget_id, fallback_duration_sec, retired_at
+                                     FROM corporate_slots WHERE playlist_id IN (${corporateIds.map(() => '?').join(',')})`).all(...corporateIds);
+      const orgRow = db.prepare('SELECT w.organization_id FROM playlists p JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = ?').get(corporateIds[0]);
+      corporateManifest = {
+        organization_id: orgRow ? orgRow.organization_id : null,
+        playlists: corporateIds.length,
+        slots: corporateSlots.length,
+        mandates_not_exported: db.prepare(`SELECT COUNT(*) AS n FROM corporate_mandates WHERE playlist_id IN (${corporateIds.map(() => '?').join(',')})`).get(...corporateIds).n,
+      };
+    }
+    if (playlistIds.length) {
+      fillsNotExported = db.prepare(`SELECT COUNT(*) AS n FROM corporate_slot_fills WHERE fill_playlist_id IN (${playlistPlaceholders})`).get(...playlistIds).n;
+    }
+  } catch (_) { /* no corporate tables */ }
+
+  const schedules = db.prepare(`SELECT id, device_id, group_id, zone_id, content_id, widget_id, layout_id, playlist_id, title, start_time, end_time, timezone, recurrence, recurrence_end, priority, enabled, color, created_at FROM schedules WHERE ${col} = ?`).all(key);
+  const videoWalls = db.prepare(`SELECT * FROM video_walls WHERE ${col} = ?`).all(key);
+  const wallIds = videoWalls.map(w => w.id);
+  const wallPlaceholders = wallIds.map(() => '?').join(',') || "'__none__'";
+  const wallDevices = wallIds.length ? db.prepare(`SELECT * FROM video_wall_devices WHERE wall_id IN (${wallPlaceholders})`).all(...wallIds) : [];
+
+  const kioskPages = db.prepare(`SELECT id, name, config, created_at FROM kiosk_pages WHERE ${col} = ?`).all(key);
+  const deviceGroups = db.prepare(`SELECT id, name, color, rules, created_at FROM device_groups WHERE ${col} = ?`).all(key);
+  const groupIds = deviceGroups.map(g => g.id);
+  const groupPlaceholders = groupIds.map(() => '?').join(',') || "'__none__'";
+  const groupMembers = groupIds.length ? db.prepare(`SELECT * FROM device_group_members WHERE group_id IN (${groupPlaceholders})`).all(...groupIds) : [];
+  const alertConfigs = db.prepare(`SELECT id, alert_type, enabled, config, created_at FROM alert_configs WHERE ${col} = ?`).all(key);
+  const whiteLabel = workspaceId ? db.prepare('SELECT * FROM white_labels WHERE workspace_id = ?').get(workspaceId) : null;
+
+  return {
+    format: 'screentinker-export-v2',
+    exported_at: new Date().toISOString(),
+    user,
+    devices: devices.map(d => {
+      // playlist_source travels with the id: without it a restore cannot tell an operator's
+      // deliberate override from a playlist the device merely inherited, which is the exact
+      // distinction the whole inheritance model exists to record.
+      const dev = db.prepare('SELECT playlist_id, playlist_source FROM devices WHERE id = ?').get(d.id);
+      return { ...d, playlist_id: dev?.playlist_id || null, playlist_source: dev?.playlist_source || null };
+    }),
+    content,
+    widgets: widgets.map(w => ({ ...w, config: JSON.parse(w.config || '{}') })),
+    layouts,
+    layout_zones: layoutZones,
+    playlists,
+    playlist_items: playlistItems,
+    ...(corporateManifest ? { corporate: corporateManifest, corporate_slots: corporateSlots } : {}),
+    // Store content for head office's slots is a playlist like any other (exported above); which slot
+    // and level it fills names head office's workspace, so that link is not exported.
+    ...(fillsNotExported ? { corporate_fills_not_exported: fillsNotExported } : {}),
+    schedules,
+    video_walls: videoWalls,
+    video_wall_devices: wallDevices,
+    kiosk_pages: kioskPages.map(k => ({ ...k, config: JSON.parse(k.config || '{}') })),
+    device_groups: deviceGroups,
+    device_group_members: groupMembers,
+    alert_configs: alertConfigs.map(a => ({ ...a, config: JSON.parse(a.config || '{}') })),
+    white_label: whiteLabel || null,
+  };
+}
+
+// User data export (own data only)
+router.get('/export', async (req, res) => {
+  const token = req.query.token;
+  if (!token) return res.status(401).json({ error: 'Token required' });
+
+  let userId;
+  let workspaceId;
+  try {
+    const session = resolveSessionUser(token);
+    // For a break-glass identity this is the synthetic recovery id, which has no users
+    // row - the lookup below then 404s exactly as the inline verify did before.
+    userId = session.user.id;
+    // Re-validate the JWT's workspace claim against current membership (stale-access), then fall back.
+    workspaceId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+  } catch (err) {
+    if (err.code === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+    return denySession(res, err);
+  }
+
+  const exportData = collectExportData({ userId, workspaceId });
+  if (!exportData) return res.status(404).json({ error: 'User not found' });
+
+  // If include_files requested, bundle as ZIP with content files
+  if (req.query.include_files === 'true') {
+    const { ZipArchive } = require('archiver');
+    const dateStr = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=screentinker-export-${dateStr}.zip`);
+
+    const archive = new ZipArchive({ zlib: { level: 5 } });
+    archive.pipe(res);
+
+    // Collect file info and add files to archive
+    const filesToInclude = [];
+    const storageLoc = require('../lib/storage/locations');
+    for (const c of exportData.content) {
+      if (c.remote_url || !c.filename) continue;
+      const row = db.prepare('SELECT * FROM content WHERE id = ?').get(c.id);
+      /*
+       * A row whose bytes live in a storage backend (lib/storage) is fetched into the storage cache
+       * first, so the archive is complete wherever the media is kept. A copy that cannot be read
+       * is left out, exactly as a missing local file always has been.
+       */
+      if (row && storageLoc.hasExplicitLocations(row.id)) {
+        for (const [kind, col, field] of [['asset', 'filepath', 'original_filepath'], ['thumb', 'thumbnail_path', 'original_thumbnail']]) {
+          if (!row[col] || (kind === 'thumb' && row.thumbnail_path === row.filepath)) continue;
+          try {
+            const abs = await storageLoc.ensureLocalFile(row, kind);
+            if (abs && fs.existsSync(abs)) {
+              c[field] = path.basename(row[col]);
+              archive.file(abs, { name: `files/${c.id}/${c[field]}` });
+            }
+          } catch (_) { /* unreadable everywhere: omitted */ }
+        }
+        continue;
+      }
+      if (row?.filepath) {
+        const filePath = path.join(config.contentDir, path.basename(row.filepath));
+        if (fs.existsSync(filePath)) {
+          c.original_filepath = path.basename(row.filepath);
+          archive.file(filePath, { name: `files/${c.id}/${c.original_filepath}` });
+        }
+      }
+      if (row?.thumbnail_path) {
+        const thumbPath = path.join(config.contentDir, path.basename(row.thumbnail_path));
+        if (fs.existsSync(thumbPath)) {
+          c.original_thumbnail = path.basename(row.thumbnail_path);
+          archive.file(thumbPath, { name: `files/${c.id}/${c.original_thumbnail}` });
+        }
+      }
+    }
+
+    // Add JSON manifest (after filepath fields are populated)
+    archive.append(JSON.stringify(exportData, null, 2), { name: 'export.json' });
+    archive.finalize();
+    return;
+  }
+
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename=screentinker-export-${new Date().toISOString().split('T')[0]}.json`);
+  res.json(exportData);
+});
+
+// User data import (JSON or ZIP with files)
+const multer = require('multer');
+const IMPORT_UPLOAD_DIR = path.join(os.tmpdir(), 'screentinker-import');
+const importUpload = multer({ dest: IMPORT_UPLOAD_DIR, limits: { fileSize: 2 * 1024 * 1024 * 1024 } }); // 2GB max
+// The uploaded zip's path, contained to the directory multer writes it into. Every open and unlink
+// below goes through this, so none of them can be pointed outside that directory.
+function importZipPath(req) {
+  return req.file && req.file.path ? resolveWithin(IMPORT_UPLOAD_DIR, req.file.path) : null;
+}
+function discardImportZip(req) {
+  const p = importZipPath(req);
+  if (p) { try { fs.unlinkSync(p); } catch (_) { /* already gone */ } }
+}
+
+/*
+ * ⚠️ LEFTOVERS FROM A CRASH OR A KILLED REQUEST ARE SWEPT AT LOAD. Uploads land in
+ * IMPORT_UPLOAD_DIR and are extracted into IMPORT_EXTRACT_PREFIX<random>; both are removed per
+ * request now, but a process that dies mid-import leaves up to 2 GB (plus its extraction) in /tmp
+ * forever. Anything older than an hour cannot belong to a live import (the route is rate-limited
+ * to 3/min and an import is one request).
+ */
+const IMPORT_EXTRACT_PREFIX = 'screentinker-import-';
+const IMPORT_STALE_MS = 60 * 60 * 1000;
+function sweepImportTmp(now = Date.now()) {
+  const old = (p) => { try { return now - fs.statSync(p).mtimeMs > IMPORT_STALE_MS; } catch (_) { return false; } };
+  try {
+    for (const f of fs.readdirSync(IMPORT_UPLOAD_DIR)) {
+      const p = resolveWithin(IMPORT_UPLOAD_DIR, f);
+      if (p && old(p)) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+    }
+  } catch (_) { /* no upload dir yet */ }
+  try {
+    for (const f of fs.readdirSync(os.tmpdir())) {
+      if (!f.startsWith(IMPORT_EXTRACT_PREFIX)) continue;
+      const p = resolveWithin(os.tmpdir(), f);
+      if (p && old(p)) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+    }
+  } catch (_) { /* tmpdir unreadable: nothing to sweep */ }
+}
+sweepImportTmp();
+
+/*
+ * ⚠️ EXTRACTION IS CAPPED ON REAL BYTES. unzipper.Extract wrote whatever the archive inflated to,
+ * so a 2 GB upload of zeros (or a few-MB bomb) could fill /tmp. Only the two shapes an export
+ * contains are written — export.json and files/<content id>/<name> — every other entry is ignored,
+ * symlinks are refused, names go through the bundle path normaliser (zip slip) and resolveWithin.
+ * Each entry is capped at its claimed size, and the whole extraction at a total and a ratio.
+ */
+const IMPORT_MAX_ENTRIES = 50000;
+const IMPORT_MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024;   // an export is mostly already-compressed media
+const IMPORT_MAX_RATIO = 50;                             // real bytes out per archive byte, whole archive
+const IMPORT_MIN_BUDGET = 256 * 1024 * 1024;             // so a small, JSON-heavy export is never refused
+async function extractImportZip(zipPath, extractDir) {
+  const unzipper = require('unzipper');
+  const { normalizeEntryPath } = require('../lib/html-bundle');
+  const { inflateToFileCapped } = require('../lib/zip-inflate');
+  const zipBytes = fs.statSync(zipPath).size;
+  const budget = { remaining: Math.min(IMPORT_MAX_TOTAL_BYTES, Math.max(IMPORT_MIN_BUDGET, zipBytes * IMPORT_MAX_RATIO)) };
+  const directory = await unzipper.Open.file(zipPath);
+  const entries = directory.files || [];
+  if (entries.length > IMPORT_MAX_ENTRIES) throw new Error(`archive has more than ${IMPORT_MAX_ENTRIES} entries`);
+  const tooBig = (kind) => new Error(kind === 'too-large' ? 'archive inflates past the import limit' : 'archive entry is corrupt');
+  for (const e of entries) {
+    if (e.type === 'Directory') continue;
+    if ((((Number(e.externalFileAttributes) || 0) >>> 16) & 0xF000) === 0xA000) throw new Error('archive contains a symlink');
+    const name = normalizeEntryPath(e.path);
+    if (!name) throw new Error('archive entry has an unsafe path');
+    const parts = name.split('/');
+    if (!(name === 'export.json' || (parts.length === 3 && parts[0] === 'files'))) continue;
+    const claimed = Number(e.uncompressedSize) || 0;
+    if (claimed > budget.remaining) throw tooBig('too-large');
+    const dest = resolveWithin(extractDir, name);
+    if (!dest) throw new Error('archive entry has an unsafe path');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    await inflateToFileCapped(e, dest, claimed, budget, tooBig);
+  }
+}
+
+/*
+ * ⚠️ AUTHENTICATE BEFORE MULTER. The session check used to run inside the handler, AFTER
+ * importUpload had already streamed up to 2 GB to disk — for anyone, token or not — and the 401 /
+ * denySession returns never removed it. This resolves the same session, with the same statuses and
+ * bodies, before a byte of the upload is accepted, and hands the result to the handler.
+ */
+function authenticateImport(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'Token required' });
+
+  let userId;
+  let workspaceId;
+  let sessionRole = null;
+  try {
+    const session = resolveSessionUser(authHeader.split(' ')[1]);
+    // A break-glass identity has no users row: the lookup this replaced returned nothing
+    // for it, so the route 404'd. Preserve that.
+    if (session.viaRecovery) return res.status(404).json({ error: 'User not found' });
+    userId = session.user.id;
+    sessionRole = session.user.role;
+    // Import WRITES into the workspace and can overwrite its branding, so re-validate the JWT's
+    // workspace claim against current membership (stale-access) rather than trusting it, then fall back.
+    workspaceId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
+    if (!userId) return res.status(401).json({ error: 'Invalid token' });
+  } catch (err) {
+    if (err.code === 'user_not_found') return res.status(404).json({ error: 'User not found' });
+    return denySession(res, err);
+  }
+
+  if (!workspaceId) return res.status(403).json({ error: 'No workspace context for import. Switch to a workspace first.' });
+
+  /*
+   * ⚠️ AN IMPORT IS A WRITE, SO A READ-ONLY MEMBER MAY NOT RUN ONE. This route is outside the
+   * tenancy middleware (it resolves its own session to take a multipart upload), so nothing else
+   * applied denyReadOnly's rule — a workspace_viewer could create devices, playlists and widgets
+   * and overwrite the workspace's branding. Same rule as lib/tenancy.js denyReadOnly.
+   */
+  try {
+    const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(workspaceId);
+    const ctx = ws && accessContext(userId, sessionRole, ws);
+    if (!ctx || (!ctx.actingAs && ctx.workspaceRole === 'workspace_viewer')) {
+      return res.status(403).json({ error: 'Read-only access' });
+    }
+  } catch (err) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  req.importAuth = { userId, workspaceId, sessionRole };
+  next();
+}
+
+/*
+ * Imported content rows: the URL and type get the same gates the content routes apply
+ * (routes/content.js POST /remote, PUT /:id). A live transport is player-opened (LAN allowed);
+ * a hold is hold://blank|freeze; everything else is server-retrievable and SSRF-gated. Returns
+ * null when the row may be imported, else a reason.
+ */
+function importedContentRefusal(c) {
+  const mime = c.mime_type;
+  if (mime != null && (typeof mime !== 'string' || !/^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,99}$/i.test(mime))) {
+    return 'invalid mime_type';
+  }
+  const url = c.remote_url;
+  const { HOLD_MIME } = require('../lib/hold-item');
+  if (mime === HOLD_MIME) return url && !/^hold:\/\/(blank|freeze)$/.test(String(url)) ? 'invalid hold url' : null;
+  if (!url) return null;
+  if (typeof url !== 'string') return 'invalid remote_url';
+  const ru = require('../lib/remote-url');
+  let err;
+  if (mime === ru.RTSP_MIME) err = ru.validateRtspUrl(url);
+  else if (mime === ru.HDMI_IN_MIME) err = ru.validateHdmiInUrl(url);
+  else if (mime === ru.LIVE_MIME) err = ru.validatePlayerOpenedUrl(url);
+  else err = ru.validateRemoteUrl(url);
+  return err ? err.error : null;
+}
+
+/*
+ * ⚠️ A DIGEST NAME IS A CLAIM UNTIL THE BYTES ARE HASHED. The restore keeps <sha256><ext> names
+ * (see below), and contentDir is SHARED across workspaces — so an archive naming a file after
+ * another tenant's digest overwrote that tenant's media with its own bytes. The name is kept only
+ * when the bytes hash to it, and an existing file is never written over: if it is there and its
+ * bytes match, it is reused (refcounted, lib/content-files.js); otherwise a fresh uuid name is used.
+ * Returns the destination basename, or null when the copy failed.
+ */
+function restoreImportedFile(srcPath, srcName, newId, ext) {
+  if (isDigestName(srcName)) {
+    const claimed = path.basename(srcName).split('.')[0];
+    if (digestFileSync(srcPath) === claimed) {
+      const name = path.basename(srcName);
+      const dest = path.join(config.contentDir, name);
+      if (fs.existsSync(dest)) {
+        if (digestFileSync(dest) === claimed) return name;
+      } else if (copyFileExclusive(srcPath, dest)) {
+        return name;
+      }
+    }
+  }
+  // A row's file and its thumbnail can share an extension, so the second one gets its own uuid
+  // instead of truncating the first (which the old 'w' copy did).
+  for (const name of [`${newId}${ext}`, `${require('uuid').v4()}${ext}`]) {
+    if (copyFileExclusive(srcPath, path.join(config.contentDir, name))) return name;
+  }
+  return null;
+}
+// copyFileBytes truncates; refuse to overwrite by claiming the name with O_EXCL first.
+function copyFileExclusive(src, dest) {
+  try { fs.closeSync(fs.openSync(dest, 'wx')); } catch (_) { return false; }
+  try { copyFileBytes(src, dest); return true; } catch (_) {
+    try { fs.unlinkSync(dest); } catch (_2) {}
+    return false;
+  }
+}
+
+/*
+ * Scale-out (docs/scale-out.md): an import WRITES into the session's workspace. When that workspace
+ * is a copy (origin_node_id set) the whole upload is forwarded to the primary — before multer, so
+ * the multipart stream is still intact — and nothing lands here. Session errors are left to
+ * authenticateImport, which reports them exactly as the handler always has.
+ */
+function proxyImportIfCopied(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return next();
+  let ws = null;
+  try {
+    const session = resolveSessionUser(authHeader.split(' ')[1]);
+    if (session.viaRecovery) return next();
+    const wsId = sessionWorkspaceId(session.user.id, session.user.role, session.decoded.current_workspace_id || null);
+    ws = wsId ? db.prepare('SELECT id, origin_node_id FROM workspaces WHERE id = ?').get(wsId) : null;
+  } catch (e) { return next(); }
+  if (ws && replicaProxy.shouldIntercept(req, ws)) return replicaProxy.proxyToPrimary(req, res, config);
+  next();
+}
+
+router.post('/import', proxyImportIfCopied, authenticateImport, importUpload.single('file'), async (req, res) => {
+  // The upload and its extraction are removed however the handler ends (return, throw, or success).
+  try {
+    await handleImport(req, res);
+  } finally {
+    discardImportZip(req);
+    if (req.importExtractDir) { try { fs.rmSync(req.importExtractDir, { recursive: true, force: true }); } catch (_) {} }
+  }
+});
+
+async function handleImport(req, res) {
+  const { userId, workspaceId, sessionRole } = req.importAuth;
+  const importerIsPlatformAdmin = PLATFORM_ROLES.includes(sessionRole);
+
+  let data;
+  let extractedFiles = {}; // Map of old content ID -> { filepath, thumbnail }
+
+  if (req.file) {
+    // ZIP upload — extract export.json and files/
+    const zipPath = importZipPath(req);
+    if (!zipPath) return res.status(400).json({ error: 'Upload not found' });
+    try {
+      const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), IMPORT_EXTRACT_PREFIX));
+      req.importExtractDir = extractDir;   // removed by the route wrapper's finally
+
+      await extractImportZip(zipPath, extractDir);
+
+      // Read the JSON manifest
+      const jsonPath = path.join(extractDir, 'export.json');
+      if (!fs.existsSync(jsonPath)) {
+        discardImportZip(req);
+        return res.status(400).json({ error: 'ZIP does not contain export.json' });
+      }
+      data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+
+      // Map extracted files by content ID, with path traversal validation
+      const filesDir = path.join(extractDir, 'files');
+      if (fs.existsSync(filesDir)) {
+        for (const contentDir of fs.readdirSync(filesDir)) {
+          // Contained to files/ (lib/safe-path). The bare startsWith(extractDir) this replaced
+          // also admitted a sibling sharing the prefix, `screentinker-import-<ts>x/...`.
+          const contentPath = resolveWithin(filesDir, contentDir);
+          if (!contentPath) continue;
+          if (!fs.statSync(contentPath).isDirectory()) continue;
+          const files = fs.readdirSync(contentPath);
+          extractedFiles[contentDir] = files.map(f => {
+            const filePath = resolveWithin(contentPath, f);
+            if (!filePath) return null;
+            return { name: f, path: filePath };
+          }).filter(Boolean);
+        }
+      }
+
+      // Cleanup uploaded zip
+      discardImportZip(req);
+    } catch (err) {
+      discardImportZip(req);
+      return res.status(400).json({ error: 'Failed to extract ZIP: ' + err.message });
+    }
+  } else {
+    data = req.body;
+  }
+  if (!data || !data.format || !data.format.startsWith('screentinker-export')) {
+    return res.status(400).json({ error: 'Invalid export file. Must be a ScreenTinker export JSON.' });
+  }
+
+  const isV2 = data.format === 'screentinker-export-v2';
+  const uuid = require('uuid');
+  const stats = { devices: 0, content: 0, widgets: 0, layouts: 0, playlists: 0, schedules: 0, video_walls: 0, kiosk_pages: 0, device_groups: 0 };
+
+  // Map old IDs to new IDs
+  const idMap = { devices: {}, content: {}, widgets: {}, layouts: {}, zones: {}, playlists: {}, groups: {}, walls: {}, kiosk: {} };
+
+  /*
+   * ⚠️ CORPORATE (spec §6.3). Corporate playlists come back as corporate ONLY when the importer can
+   * author them AND the target is the org's head office workspace; anywhere else they are ordinary
+   * playlists and each local slot becomes its fallback item (or is dropped), reported in the summary.
+   * This route is outside resolveTenancy, so the actor is built here.
+   */
+  let corpImport = false;
+  let corpOrgId = null;
+  const actorLib = require('../lib/corporate/actor');
+  // The importer, as the corporate backstop must judge every write below: this route resolves its own
+  // session (multipart), so it never passes resolveTenancy where the request actor is normally set.
+  const importer = actorLib.fromUser({ id: userId, role: sessionRole });
+  // For the rest of THIS request (the transaction and the v1 conversion after it): fail closed.
+  actorLib.als.enterWith(importer);
+  try {
+    const wsOrg = db.prepare('SELECT w.organization_id, o.hq_workspace_id FROM workspaces w JOIN organizations o ON o.id = w.organization_id WHERE w.id = ?').get(workspaceId);
+    corpOrgId = wsOrg ? wsOrg.organization_id : null;
+    corpImport = !!(wsOrg && wsOrg.hq_workspace_id === workspaceId && actorLib.canAuthorOrg(importer, corpOrgId));
+  } catch (_) { corpImport = false; }
+  const exportedSlots = new Map((Array.isArray(data.corporate_slots) ? data.corporate_slots : []).map((x) => [x.id, x]));
+
+  const importDb = db.transaction(() => {
+    // Import devices (as offline, unlinked - they'll need re-pairing)
+    for (const d of (data.devices || [])) {
+      const newId = uuid.v4();
+      idMap.devices[d.id] = newId;
+      const pairingCode = sixDigitCode(); // CSPRNG (lib/numeric-code): this code claims a device
+      const tags = require('../lib/content-tags').normalizeTags(d.tags == null ? undefined : require('../lib/content-tags').parseTags(d.tags));
+      db.prepare(`INSERT INTO devices (id, user_id, workspace_id, name, pairing_code, status, screen_width, screen_height, tags, created_at) VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?, ?, ?)`).run(newId, userId, workspaceId, d.name, pairingCode, d.screen_width || null, d.screen_height || null, tags && tags.length ? JSON.stringify(tags) : null, d.created_at || Math.floor(Date.now() / 1000));
+      stats.devices++;
+    }
+
+    // Import content metadata + files from ZIP if available
+    for (const c of (data.content || [])) {
+      // Same URL / type gates as the content routes; a refused row is left out (items naming it
+      // are dropped like any other unknown content id) and counted.
+      if (importedContentRefusal(c)) {
+        stats.content_refused = (stats.content_refused || 0) + 1;
+        continue;
+      }
+      const newId = uuid.v4();
+      idMap.content[c.id] = newId;
+
+      let newFilepath = '';
+      let newThumbnail = null;
+
+      // Copy files from ZIP extract if available
+      const files = extractedFiles[c.id];
+      if (files && files.length > 0) {
+        for (const f of files) {
+          // The archive chooses this name, so the extension is caller-controlled — the
+          // same defect the upload path fixes. Constrain it to the media allowlist; an
+          // entry with any other extension is skipped rather than written to the content
+          // dir under a name the browser would treat as an active document.
+          const ext = path.extname(f.name).toLowerCase();
+          if (!INLINE_SAFE_EXTS.has(ext)) continue;
+          /*
+           * ⚠️ A CONTENT-ADDRESSED NAME IS KEPT, and everything else is re-named to the new id.
+           *
+           * Files received over the mesh are stored as <sha256><ext>, and `filepath` sits inside
+           * the player's structural fingerprint. Renaming them on restore therefore changed the
+           * fingerprint of every playlist holding one — restarting playback at item 1 on every web
+           * and BrightSign screen in the estate, for files whose bytes had not changed at all.
+           *
+           * It also broke the far side: a hub re-pushing after a restore found no matching digest,
+           * concluded the assets were absent, re-transferred every one of them and charged the
+           * customer's storage allowance a second time for bytes they already had.
+           *
+           * Keeping the name is safe precisely because it IS the digest: identical name means
+           * identical bytes, so two rows sharing one is correct rather than a collision — and
+           * unlinking is refcounted now (lib/content-files.js), so neither row can take the other's
+           * file with it.
+           */
+          // ...and only once its bytes are hashed and nothing is written over: restoreImportedFile.
+          try {
+            const destName = restoreImportedFile(f.path, f.name, newId, ext);
+            if (!destName) throw new Error('copy failed');
+            // Match original filepath vs thumbnail
+            if (c.original_filepath && f.name === c.original_filepath) {
+              newFilepath = destName;
+            } else if (c.original_thumbnail && f.name === c.original_thumbnail) {
+              newThumbnail = destName;
+            } else if (!newFilepath) {
+              // Fallback: first non-thumbnail file is the content
+              newFilepath = destName;
+            }
+            stats.files_restored = (stats.files_restored || 0) + 1;
+          } catch (err) {
+            // File copy failed, content will need re-upload
+          }
+        }
+      }
+
+      /*
+       * ⚠️ byte_digest IS COMPUTED FROM THE RESTORED BYTES — the fifth writer named in that
+       * column's own migration note, and the one that was missed when the other four were done.
+       *
+       * Without it every restored row carries NULL, so the dedup lookup can never match one: a
+       * hub re-pushing content this server already holds transfers all of it again and spends the
+       * operator's allowance on storage they have already paid for. Hashing here costs one streamed
+       * read of a file written moments ago; failing to hash degrades to "cannot dedup", which is
+       * where the row would have been anyway, so it must never lose the restore.
+       */
+      let restoredDigest = null;
+      if (newFilepath) {
+        // Synchronous because this runs inside the restore's transaction — see digestFileSync.
+        restoredDigest = digestFileSync(path.join(config.contentDir, newFilepath));
+      }
+
+      db.prepare(`INSERT INTO content (id, user_id, workspace_id, filename, filepath, mime_type, file_size, duration_sec, remote_url, thumbnail_path, width, height, created_at, byte_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(newId, userId, workspaceId, c.filename, newFilepath, c.mime_type, c.file_size || 0, c.duration_sec || null, c.remote_url || null, newThumbnail, c.width || null, c.height || null, c.created_at || Math.floor(Date.now() / 1000), restoredDigest);
+      stats.content++;
+      // The restored file is local; if the workspace writes to a bucket it moves there once this
+      // transaction has committed (a rolled-back import leaves no row, and the settle is a no-op).
+      if (newFilepath) require('../lib/storage/locations').settleSoon(newId);
+    }
+
+    // Import widgets
+    for (const w of (data.widgets || [])) {
+      const newId = uuid.v4();
+      idMap.widgets[w.id] = newId;
+      let config = typeof w.config === 'string' ? w.config : JSON.stringify(w.config || {});
+      // A template widget's config is only ever built by lib/templates. From an export it is
+      // re-validated against what THIS server has installed and THIS workspace owns; anything
+      // that does not pass keeps only the template key, and render falls back to defaults.
+      if (w.widget_type === 'template') {
+        let parsed = {};
+        try { parsed = JSON.parse(config); } catch { parsed = {}; }
+        try {
+          config = JSON.stringify(require('../lib/templates/widget').buildConfig(parsed.template, parsed.values, workspaceId));
+        } catch {
+          config = JSON.stringify({ template: typeof parsed.template === 'string' ? parsed.template.slice(0, 100) : '', values: {}, ds_refs: [] });
+        }
+      }
+      // A dashboard widget's config is validated as a whole (lib/bi/widget.js), against a connection
+      // of THIS workspace's organization. One that does not pass — an export from another server
+      // names connections that do not exist here — keeps only its provider, and the screen says to
+      // choose a connection.
+      if (w.widget_type === 'bi-dashboard') {
+        const bi = require('../lib/bi/widget');
+        let parsed = {};
+        try { parsed = JSON.parse(config); } catch { parsed = {}; }
+        try {
+          config = JSON.stringify(bi.normaliseConfig(db, require('../lib/bi/connections').orgOfWorkspace(db, workspaceId), parsed));
+        } catch {
+          config = JSON.stringify(bi.PROVIDERS.includes(parsed && parsed.provider) ? { provider: parsed.provider, mode: 'connection' } : {});
+        }
+      }
+      db.prepare(`INSERT INTO widgets (id, user_id, workspace_id, widget_type, name, config, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(newId, userId, workspaceId, w.widget_type, w.name, config, w.created_at || Math.floor(Date.now() / 1000));
+      stats.widgets++;
+    }
+
+    // Import layouts and zones
+    for (const l of (data.layouts || [])) {
+      const newId = uuid.v4();
+      idMap.layouts[l.id] = newId;
+      db.prepare(`INSERT INTO layouts (id, user_id, workspace_id, name, width, height, is_template, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)`).run(newId, userId, workspaceId, l.name, l.width || 1920, l.height || 1080, l.created_at || Math.floor(Date.now() / 1000));
+      stats.layouts++;
+    }
+    for (const z of (data.layout_zones || [])) {
+      const newLayoutId = idMap.layouts[z.layout_id];
+      if (!newLayoutId) continue;
+      const newId = uuid.v4();
+      idMap.zones[z.id] = newId;
+      db.prepare(`INSERT INTO layout_zones (id, layout_id, name, x_percent, y_percent, width_percent, height_percent, z_index, zone_type, fit_mode, background_color, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(newId, newLayoutId, z.name, z.x_percent, z.y_percent, z.width_percent, z.height_percent, z.z_index || 0, z.zone_type || 'content', z.fit_mode || 'cover', z.background_color || '#000000', z.sort_order || 0);
+    }
+
+    // Import playlists (v2) or convert assignments to playlists (v1)
+    if (isV2) {
+      for (const p of (data.playlists || [])) {
+        const newId = uuid.v4();
+        idMap.playlists[p.id] = newId;
+        // smart_rules is re-validated: an import is untrusted input, and a rule set this build cannot
+        // read must not reach a screen. Folder ids inside rules are the source workspace's and will
+        // not match here until the operator re-points them.
+        const smartRules = p.smart_rules ? require('../lib/smart-playlist').normalizeRules(p.smart_rules) : null;
+        const asCorporate = corpImport && p.corporate && !smartRules ? 1 : 0;
+        if (asCorporate) idMap.corporate = { ...(idMap.corporate || {}), [p.id]: newId };
+        db.prepare('INSERT INTO playlists (id, user_id, workspace_id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(newId, userId, workspaceId, p.name, p.description || '', p.is_auto_generated || 0, smartRules ? JSON.stringify(smartRules) : null, p.created_at || Math.floor(Date.now() / 1000), p.updated_at || Math.floor(Date.now() / 1000), asCorporate);
+        // 3.0 playlist layout: only a layout this same import created (its id is remapped), never a
+        // raw id from the file — that could name another tenant's layout on this server.
+        // A built-in template (shared by every tenant) keeps its id.
+        const importedLayout = p.layout_id && !asCorporate ? (idMap.layouts[p.layout_id]
+          || ((db.prepare('SELECT is_template FROM layouts WHERE id = ?').get(String(p.layout_id)) || {}).is_template ? String(p.layout_id) : null)) : null;
+        if (importedLayout) db.prepare('UPDATE playlists SET layout_id = ? WHERE id = ?').run(importedLayout, newId);
+        stats.playlists++;
+      }
+      /*
+       * Local slots of the playlists imported as corporate. A slot id is KEPT when this export came
+       * from this organization and the id is free — or still names this org's slot with no placement
+       * (then it is updated in place and the stores' content still attached to it comes along:
+       * fills_rebound). Otherwise (another org's export, or the slot is still placed in its original
+       * playlist) it gets a new id: re-pointing stores' content away from a playlist that still plays
+       * would change what those screens show.
+       */
+      const slotMap = {};
+      if (corpImport && idMap.corporate) {
+        const sameOrg = !!(data.corporate && data.corporate.organization_id && data.corporate.organization_id === corpOrgId);
+        for (const sl of exportedSlots.values()) {
+          const newPl = idMap.corporate[sl.playlist_id];
+          if (!newPl) continue;
+          const fbContent = sl.fallback_content_id ? (idMap.content[sl.fallback_content_id] || null) : null;
+          const fbWidget = !fbContent && sl.fallback_widget_id ? (idMap.widgets[sl.fallback_widget_id] || null) : null;
+          const cfg = [sl.name || 'Local slot', sl.help_text || null, sl.max_items ?? null, sl.max_total_sec ?? null, sl.allow_video === 0 ? 0 : 1, sl.allow_widgets === 0 ? 0 : 1, fbContent, fbWidget, sl.fallback_duration_sec ?? null];
+          const existing = db.prepare('SELECT id, organization_id FROM corporate_slots WHERE id = ?').get(sl.id);
+          const placed = existing && db.prepare('SELECT 1 FROM playlist_items WHERE slot_id = ?').get(sl.id);
+          let id;
+          if (sameOrg && !existing) {
+            id = sl.id;
+            db.prepare(`INSERT INTO corporate_slots (id, organization_id, playlist_id, name, help_text, max_items, max_total_sec, allow_video, allow_widgets,
+                          fallback_content_id, fallback_widget_id, fallback_duration_sec, retired_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(id, corpOrgId, newPl, ...cfg, sl.retired_at || null, userId);
+            stats.slots_kept = (stats.slots_kept || 0) + 1;
+          } else if (sameOrg && existing && existing.organization_id === corpOrgId && !placed) {
+            id = sl.id;
+            db.prepare(`UPDATE corporate_slots SET playlist_id = ?, name = ?, help_text = ?, max_items = ?, max_total_sec = ?, allow_video = ?, allow_widgets = ?,
+                          fallback_content_id = ?, fallback_widget_id = ?, fallback_duration_sec = ?, retired_at = ?, updated_at = strftime('%s','now') WHERE id = ?`)
+              .run(newPl, ...cfg, sl.retired_at || null, id);
+            stats.slots_kept = (stats.slots_kept || 0) + 1;
+            stats.fills_rebound = (stats.fills_rebound || 0) + db.prepare('SELECT COUNT(*) AS n FROM corporate_slot_fills WHERE slot_id = ?').get(id).n;
+          } else {
+            id = uuid.v4();
+            db.prepare(`INSERT INTO corporate_slots (id, organization_id, playlist_id, name, help_text, max_items, max_total_sec, allow_video, allow_widgets,
+                          fallback_content_id, fallback_widget_id, fallback_duration_sec, retired_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+              .run(id, corpOrgId, newPl, ...cfg, sl.retired_at || null, userId);
+            stats.slots_remapped = (stats.slots_remapped || 0) + 1;
+          }
+          slotMap[sl.id] = id;
+        }
+      }
+      for (const pi of (data.playlist_items || [])) {
+        const playlistId = idMap.playlists[pi.playlist_id];
+        if (!playlistId) continue;
+        if (pi.slot_id) {
+          // A slot placement: kept in a corporate import, else its fallback item (or nothing).
+          if (slotMap[pi.slot_id]) {
+            db.prepare('INSERT INTO playlist_items (playlist_id, slot_id, sort_order, duration_sec) VALUES (?, ?, ?, 10)').run(playlistId, slotMap[pi.slot_id], pi.sort_order || 0);
+            continue;
+          }
+          const sl = exportedSlots.get(pi.slot_id);
+          const fbContent = sl && sl.fallback_content_id ? (idMap.content[sl.fallback_content_id] || null) : null;
+          const fbWidget = sl && !fbContent && sl.fallback_widget_id ? (idMap.widgets[sl.fallback_widget_id] || null) : null;
+          if (fbContent || fbWidget) {
+            db.prepare('INSERT INTO playlist_items (playlist_id, content_id, widget_id, sort_order, duration_sec) VALUES (?, ?, ?, ?, ?)')
+              .run(playlistId, fbContent, fbWidget, pi.sort_order || 0, (sl && sl.fallback_duration_sec) || 10);
+            stats.converted_slots = (stats.converted_slots || 0) + 1;
+          } else {
+            stats.dropped_slots = (stats.dropped_slots || 0) + 1;
+          }
+          continue;
+        }
+        const contentId = pi.content_id ? idMap.content[pi.content_id] : null;
+        const widgetId = pi.widget_id ? idMap.widgets[pi.widget_id] : null;
+        // Nested items remap through the SAME playlist id map — every playlist is inserted above,
+        // before any item, so a child's new id is always known here. Without this a nested item had
+        // no content and no widget and was dropped by the guard below: exporting a workspace and
+        // importing it silently returned playlists SHORTER than the ones exported.
+        const childPlaylistId = pi.child_playlist_id ? idMap.playlists[pi.child_playlist_id] : null;
+        if (!contentId && !widgetId && !childPlaylistId) continue;
+        db.prepare('INSERT INTO playlist_items (playlist_id, content_id, widget_id, child_playlist_id, sort_order, duration_sec) VALUES (?, ?, ?, ?, ?, ?)').run(playlistId, contentId, widgetId, childPlaylistId, pi.sort_order || 0, pi.duration_sec || 10);
+      }
+      // Set device playlist_id references
+      for (const d of (data.devices || [])) {
+        if (d.playlist_id && idMap.playlists[d.playlist_id]) {
+          /*
+           * ⚠️ An export written before playlist_source existed has none, and a restored device with
+           * an id but no classification would be resolved by the view's LAST-RESORT branch — which
+           * works, but sits BELOW its group and wall, so a restored override would quietly lose to
+           * a group it happens to be in. Defaulting an old export's rows to 'device' preserves what
+           * the backup actually recorded: an id on the device row and no notion of inheritance.
+           */
+          db.prepare('UPDATE devices SET playlist_id = ?, playlist_source = ? WHERE id = ?')
+            .run(idMap.playlists[d.playlist_id], d.playlist_source || 'device', idMap.devices[d.id]);
+        }
+      }
+    } else {
+      // v1: defer playlist creation to after the transaction so we can async-probe videos
+      // Just stash the mapping for now; actual insertion happens below after importDb()
+    }
+
+    // Import schedules
+    for (const s of (data.schedules || [])) {
+      const devId = s.device_id ? (idMap.devices[s.device_id] || null) : null;
+      const grpId = s.group_id ? (idMap.groups[s.group_id] || null) : null;
+      // Must have either a mapped device or group target
+      if (!devId && !grpId) continue;
+      const newId = uuid.v4();
+      const playlistId = s.playlist_id ? (idMap.playlists[s.playlist_id] || null) : null;
+      db.prepare(`INSERT INTO schedules (id, user_id, device_id, group_id, zone_id, content_id, widget_id, layout_id, playlist_id, title, start_time, end_time, timezone, recurrence, recurrence_end, priority, enabled, color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(newId, userId, devId, grpId, s.zone_id ? (idMap.zones[s.zone_id] || null) : null, s.content_id ? (idMap.content[s.content_id] || null) : null, s.widget_id ? (idMap.widgets[s.widget_id] || null) : null, s.layout_id ? (idMap.layouts[s.layout_id] || null) : null, playlistId, s.title || '', s.start_time, s.end_time, s.timezone || 'UTC', s.recurrence || null, s.recurrence_end || null, s.priority || 0, s.enabled !== undefined ? s.enabled : 1, s.color || '#3B82F6', s.created_at || Math.floor(Date.now() / 1000));
+      stats.schedules++;
+    }
+    // A backup written before generated playlists carried the flag restores them as
+    // plain rows, and the boot backfill has already run — so re-derive the flag from
+    // the restored schedules here, or the throwaways stay visible forever.
+    backfillScheduledPlaylists(db);
+
+    // Version history: the imported rows get their first revision, attributed to the import, from
+    // the state that was just written (items and zones included, since this runs after them).
+    try { require('../lib/revisions').recordMissingIn(db, workspaceId, { userId, kind: 'import', label: 'workspace import' }, 'Imported'); } catch (e) { console.warn('[import] revisions:', e.message); }
+
+    // Import video walls
+    for (const w of (data.video_walls || [])) {
+      const newId = uuid.v4();
+      idMap.walls[w.id] = newId;
+      db.prepare(`INSERT INTO video_walls (id, user_id, name, grid_cols, grid_rows, bezel_h_mm, bezel_v_mm, screen_w_mm, screen_h_mm, sync_mode, content_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(newId, userId, w.name, w.grid_cols, w.grid_rows, w.bezel_h_mm || 0, w.bezel_v_mm || 0, w.screen_w_mm || 400, w.screen_h_mm || 225, w.sync_mode || 'leader', w.content_id ? (idMap.content[w.content_id] || null) : null, w.created_at || Math.floor(Date.now() / 1000));
+      stats.video_walls++;
+    }
+    for (const wd of (data.video_wall_devices || [])) {
+      const wallId = idMap.walls[wd.wall_id];
+      const devId = idMap.devices[wd.device_id];
+      if (!wallId || !devId) continue;
+      db.prepare(`INSERT INTO video_wall_devices (wall_id, device_id, grid_col, grid_row, rotation) VALUES (?, ?, ?, ?, ?)`).run(wallId, devId, wd.grid_col, wd.grid_row, wd.rotation || 0);
+    }
+
+    // Import kiosk pages
+    for (const k of (data.kiosk_pages || [])) {
+      const newId = uuid.v4();
+      idMap.kiosk[k.id] = newId;
+      const config = typeof k.config === 'string' ? k.config : JSON.stringify(k.config || {});
+      db.prepare(`INSERT INTO kiosk_pages (id, user_id, workspace_id, name, config, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(newId, userId, workspaceId, k.name, config, k.created_at || Math.floor(Date.now() / 1000));
+      stats.kiosk_pages++;
+    }
+
+    // Import device groups
+    for (const g of (data.device_groups || [])) {
+      const newId = uuid.v4();
+      idMap.groups[g.id] = newId;
+      const rules = require('../lib/device-group-rules').parseRules(g.rules);   // invalid -> a hand-built group
+      db.prepare(`INSERT INTO device_groups (id, user_id, workspace_id, name, color, rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(newId, userId, workspaceId, g.name, g.color || '#3B82F6', rules ? JSON.stringify(rules) : null, g.created_at || Math.floor(Date.now() / 1000));
+      stats.device_groups++;
+    }
+    for (const gm of (data.device_group_members || [])) {
+      const groupId = idMap.groups[gm.group_id];
+      const devId = idMap.devices[gm.device_id];
+      if (!groupId || !devId) continue;
+      db.prepare(`INSERT OR IGNORE INTO device_group_members (group_id, device_id) VALUES (?, ?)`).run(groupId, devId);
+    }
+
+    // Import alert configs
+    for (const a of (data.alert_configs || [])) {
+      const newId = uuid.v4();
+      const config = typeof a.config === 'string' ? a.config : JSON.stringify(a.config || {});
+      db.prepare(`INSERT INTO alert_configs (id, user_id, alert_type, enabled, config, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(newId, userId, a.alert_type, a.enabled !== undefined ? a.enabled : 1, config, a.created_at || Math.floor(Date.now() / 1000));
+    }
+
+    // Import white label - UPSERT into the importer's current workspace.
+    if (data.white_label && workspaceId) {
+      const wl = data.white_label;
+      // custom_domain and custom_css stay platform-admin only, exactly as routes/white-label.js
+      // enforces: the domain drives the pre-auth branding resolver, the CSS lands on the login page.
+      const existing = db.prepare('SELECT id, custom_domain, custom_css FROM white_labels WHERE workspace_id = ?').get(workspaceId);
+      if (existing) {
+        db.prepare(`UPDATE white_labels SET brand_name=?, logo_url=?, favicon_url=?, primary_color=?, bg_color=?, custom_domain=?, custom_css=?, hide_branding=?, updated_at=strftime('%s','now') WHERE workspace_id=?`).run(wl.brand_name || 'ScreenTinker', wl.logo_url || null, wl.favicon_url || null, wl.primary_color || '#3B82F6', wl.bg_color || '#111827', importerIsPlatformAdmin ? (wl.custom_domain || null) : (existing.custom_domain ?? null), importerIsPlatformAdmin ? (wl.custom_css || null) : (existing.custom_css ?? null), wl.hide_branding || 0, workspaceId);
+      } else {
+        db.prepare(`INSERT INTO white_labels (id, user_id, workspace_id, brand_name, logo_url, favicon_url, primary_color, bg_color, custom_domain, custom_css, hide_branding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(uuid.v4(), userId, workspaceId, wl.brand_name || 'ScreenTinker', wl.logo_url || null, wl.favicon_url || null, wl.primary_color || '#3B82F6', wl.bg_color || '#111827', importerIsPlatformAdmin ? (wl.custom_domain || null) : null, importerIsPlatformAdmin ? (wl.custom_css || null) : null, wl.hide_branding || 0);
+      }
+    }
+  });
+
+  try {
+    importDb();
+
+    // v1: convert assignments to per-device playlists AFTER transaction (content files now on disk)
+    if (!isV2 && data.assignments?.length) {
+      const { execFile } = require('child_process');
+
+      async function probeImportedContent(newContentId) {
+        const c = db.prepare('SELECT id, mime_type, filepath, duration_sec FROM content WHERE id = ?').get(newContentId);
+        if (!c || !c.mime_type?.startsWith('video/') || !c.filepath) return c?.duration_sec ? Math.ceil(c.duration_sec) : null;
+        if (c.duration_sec) return Math.ceil(c.duration_sec);
+        try {
+          const fullPath = path.join(config.contentDir, c.filepath);
+          const stdout = await new Promise((resolve, reject) => {
+            execFile('ffprobe', ['-v', 'quiet', '-print_format', 'json', '-show_format', fullPath],
+              { timeout: 15000 }, (err, out) => err ? reject(err) : resolve(out));
+          });
+          const info = JSON.parse(stdout);
+          if (info.format?.duration) {
+            const dur = parseFloat(info.format.duration);
+            db.prepare('UPDATE content SET duration_sec = ? WHERE id = ?').run(dur, c.id);
+            return Math.ceil(dur);
+          }
+        } catch (e) { /* probe failed, fall back to default */ }
+        return null;
+      }
+
+      const assignmentsByDevice = {};
+      for (const a of (data.assignments || [])) {
+        if (!assignmentsByDevice[a.device_id]) assignmentsByDevice[a.device_id] = [];
+        assignmentsByDevice[a.device_id].push(a);
+      }
+
+      for (const [oldDevId, assignments] of Object.entries(assignmentsByDevice)) {
+        const devId = idMap.devices[oldDevId];
+        if (!devId) continue;
+        const devName = (data.devices || []).find(d => d.id === oldDevId)?.name || 'Display';
+
+        const items = [];
+        for (const a of assignments) {
+          const contentId = a.content_id ? idMap.content[a.content_id] : null;
+          const widgetId = a.widget_id ? idMap.widgets[a.widget_id] : null;
+          if (!contentId && !widgetId) continue;
+          let duration = a.duration_sec || 10;
+          if (contentId) {
+            const probed = await probeImportedContent(contentId);
+            if (probed) duration = probed;
+          }
+          items.push({ contentId, widgetId, sort_order: a.sort_order || 0, duration });
+        }
+
+        const playlistId = createAutoGeneratedPlaylist(db, {
+          name: `${devName} (imported)`, workspaceId, userId,
+          description: 'Converted from v1 assignments',
+        });
+        for (const item of items) {
+          db.prepare('INSERT INTO playlist_items (playlist_id, content_id, widget_id, sort_order, duration_sec) VALUES (?, ?, ?, ?, ?)')
+            .run(playlistId, item.contentId, item.widgetId, item.sort_order, item.duration);
+        }
+        db.prepare('UPDATE devices SET playlist_id = ? WHERE id = ?').run(playlistId, devId);
+        stats.playlists++;
+      }
+    }
+
+    // Collect pairing codes for imported devices
+    const devicePairings = (data.devices || []).map(d => {
+      const newId = idMap.devices[d.id];
+      const dev = db.prepare('SELECT name, pairing_code FROM devices WHERE id = ?').get(newId);
+      return dev ? { name: dev.name, pairing_code: dev.pairing_code } : null;
+    }).filter(Boolean);
+
+    res.json({
+      success: true,
+      message: 'Import complete',
+      stats,
+      device_pairings: devicePairings,
+      notes: [
+        'Devices need to be re-paired. Use the pairing codes below or re-pair from the Displays page.',
+        stats.files_restored ? `${stats.files_restored} content files restored from export.` : 'File-based content needs to be re-uploaded. Remote URL content works immediately.',
+        'All IDs have been regenerated to avoid conflicts.',
+      ]
+    });
+  } catch (err) {
+    console.error('Import error:', err);
+    res.status(500).json({ error: 'Import failed: ' + err.message });
+  }
+}
+
+module.exports = router;
+// Scale-out NOC (routes/mesh-enroll.js /noc) reads the same block rather than recomputing it.
+module.exports.scaleOutStatus = scaleOutStatus;
+// 3.0 complete exports (lib/trust/export.js) write this same format for each workspace and person.
+module.exports.collectExportData = collectExportData;
+// 3.0 organization import (lib/trust/import-restore.js) applies the same URL and type gates to the
+// content rows it restores.
+module.exports.importedContentRefusal = importedContentRefusal;

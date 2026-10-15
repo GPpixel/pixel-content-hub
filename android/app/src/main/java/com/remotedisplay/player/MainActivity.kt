@@ -1,0 +1,2456 @@
+package com.remotedisplay.player
+
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.util.Log
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
+import android.widget.ImageView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.media3.ui.PlayerView
+import com.remotedisplay.player.data.ContentCache
+import com.remotedisplay.player.data.ServerConfig
+import com.remotedisplay.player.player.MediaPlayerManager
+import com.remotedisplay.player.player.TransitionGLView
+import com.remotedisplay.player.player.TransitionGeometry
+import com.remotedisplay.player.player.TransitionGlsl
+import com.remotedisplay.player.player.PlaylistController
+import com.remotedisplay.player.player.PlaylistItem
+import com.remotedisplay.player.player.PipOverlay
+import com.remotedisplay.player.player.SlideAudioPlayer
+import com.remotedisplay.player.player.WallController
+import com.remotedisplay.player.player.GroupScheduleController
+import com.remotedisplay.player.player.Campaign
+import com.remotedisplay.player.player.CampaignPlayer
+import com.remotedisplay.player.player.CampaignStep
+import com.remotedisplay.player.player.LayoutMode
+import com.remotedisplay.player.player.layoutModeOf
+import com.remotedisplay.player.player.ZoneManager
+import com.remotedisplay.player.player.WallZoneRenderer
+import com.remotedisplay.player.player.WallZones
+import com.remotedisplay.player.player.Hold
+import com.remotedisplay.player.player.ItemTiming
+import com.remotedisplay.player.remote.ScreenshotCapture
+import com.remotedisplay.player.remote.TouchInjector
+import com.remotedisplay.player.service.UpdateChecker
+import com.remotedisplay.player.service.WebSocketService
+import org.json.JSONObject
+import kotlin.concurrent.thread
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var config: ServerConfig
+    private lateinit var contentCache: ContentCache
+    private lateinit var bundleCache: com.remotedisplay.player.data.BundleCache
+    private lateinit var downloadCoordinator: com.remotedisplay.player.data.DownloadCoordinator
+    // #170: content-id signature of the last processed playlist, to detect a genuine content change
+    // (first load / reassignment / toggle-back) vs the routine 60s same-playlist refresh.
+    private var lastDownloadSig: String? = null
+    private lateinit var cacheJanitor: com.remotedisplay.player.data.CacheJanitor
+    private var lastCacheSweepMs = 0L
+    private val webHealth = com.remotedisplay.player.player.OfflineGate.WebHealth()
+    private lateinit var screenshotCapture: ScreenshotCapture
+    private lateinit var touchInjector: TouchInjector
+
+    private var wsService: WebSocketService? = null
+    private var bound = false
+    private lateinit var mediaPlayer: MediaPlayerManager
+    private lateinit var playlistController: PlaylistController
+    private var slideAudioPlayer: SlideAudioPlayer? = null
+    private lateinit var updateChecker: UpdateChecker
+    private var zoneManager: ZoneManager? = null
+    // 3.0 campaigns: whole layouts switching with full-screen items (player/CampaignPlayer.kt).
+    private var campaignPlayer: CampaignPlayer? = null
+    // Wall zones: a video wall's own layout, each zone paced by the shared clock (WallZoneRenderer).
+    private var wallZones: WallZoneRenderer? = null
+    // #473: walk-up interactive web pages (fullscreen only; passive in zones, walls and groups).
+    private var kiosk: com.remotedisplay.player.kiosk.KioskSession? = null
+    private lateinit var wallController: WallController
+    private lateinit var groupSchedule: GroupScheduleController
+    private lateinit var pipOverlay: PipOverlay // #109: PiP overlay layer
+    /*
+     * ⚠️ The trigger stack, ASSEMBLED. Every piece of it existed and none of it was reachable —
+     * nothing constructed TriggerListeners or TriggerController and nothing consumed `triggers`
+     * from the device payload, so four files of tested code could never fire. If this field is not
+     * constructed the feature is visibly absent rather than quietly inert.
+     */
+    private var triggerManager: com.remotedisplay.player.trigger.TriggerManager? = null
+    private var triggerSweep: Runnable? = null
+
+    private lateinit var playerView: PlayerView
+    private lateinit var imageView: ImageView
+    private lateinit var statusOverlay: View
+    private lateinit var statusText: TextView
+    private lateinit var rootView: View
+    // 3.0 site cache (data/SiteCache.kt): the LAN box from the latest payload, read by the downloader.
+    @Volatile private var siteCacheConfig: com.remotedisplay.player.data.SiteCacheConfig? = null
+    // Audience counting (audience/AudienceController.kt): off unless the server's payload turns it on.
+    private var audience: com.remotedisplay.player.audience.AudienceController? = null
+    private lateinit var pipLayout: FrameLayout       // #109: reparented above rootView (see onCreate)
+    private var talkRenderer: org.webrtc.SurfaceViewRenderer? = null   // #talk video: operator webcam overlay
+    private var screenShareOverlay: com.remotedisplay.player.remote.ScreenShareOverlay? = null   // 3.0 screen share
+    @Volatile private var talkDucked = false
+    @Volatile private var shareDucked = false
+    private lateinit var captureRoot: View            // window content; capture source (includes pipLayout)
+    private var currentOrientation: String? = null
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var remoteStreaming = false
+    private var screenshotStreamRunnable: Runnable? = null
+    private var playbackStarted = false
+
+    // Multi-tap BACK/ESC for hidden settings menu.
+    // Collect taps in a 2-second window; on expiry: 2+ taps → PIN → settings (Exit lives there).
+    private val backTapTimes = mutableListOf<Long>()
+    private var backTapRunnable: Runnable? = null
+    private val TAP_WINDOW_MS = 1800L
+    // Connection-failure auto-prompt threshold.
+    private var failureBannerShown = false
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as WebSocketService.LocalBinder
+            wsService = binder.getService()
+            bound = true
+            setupServiceCallbacks()
+            wsService?.connect()
+            // If the service is ALREADY connected+registered when we bind (MainActivity relaunched
+            // via CLEAR_TASK right after a re-pair/reclaim, so the onRegistered that clears the boot
+            // "Connecting to server…" status fired before this Activity existed), catch the UI up by
+            // pulling a fresh playlist — its update drives the real status (playing / waiting-for-
+            // content / nothing-scheduled), replacing the stale "Connecting to server…". Without this
+            // a fully-online device could sit on "Connecting to server…" indefinitely. We keep the
+            // boot status until the playlist arrives (no blank screen) rather than blindly hiding it.
+            if (wsService?.isConnected() == true && !playlistController.isPlaying) {
+                ackedContent.clear()
+                wsService?.requestPlaylistRefresh(force = true)   // once per bind, so the throttle has nothing to protect
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            wsService = null
+            bound = false
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        config = ServerConfig(this)
+        // #473: a visitor's session cut off by a power cut or crash is wiped before anything loads.
+        com.remotedisplay.player.kiosk.KioskSession.wipeIfDirty(this)
+        // #device-owner: undo any prior restrictive permitted-accessibility policy set by an older
+        // build. Runs on every launch (cheap, idempotent, owner-guarded) so a panel enrolled before
+        // this change gets the restriction cleared after it OTA-updates — no re-provision needed.
+        try { com.remotedisplay.player.admin.STPolicy(this).clearAccessibilityRestriction() } catch (_: Throwable) {}
+        val prefs = getSharedPreferences("remote_display", MODE_PRIVATE)
+
+        // Show setup wizard if not completed yet
+        if (!prefs.getBoolean("setup_complete", false)) {
+            // Auto-mark complete if accessibility is already enabled (existing install)
+            if (isAccessibilityEnabled()) {
+                prefs.edit().putBoolean("setup_complete", true).apply()
+            } else {
+                startActivity(Intent(this, SetupActivity::class.java))
+                finish()
+                return
+            }
+        }
+
+        // Check provisioning BEFORE inflating the heavy media layout
+        if (!config.isProvisioned || !config.isPaired) {
+            startActivity(Intent(this, ProvisioningActivity::class.java))
+            finish()
+            return
+        }
+
+        setContentView(R.layout.activity_main)
+
+        // The display is up now — clear the boot "Starting display…" notification.
+        (getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager)?.cancel(999)
+
+        // Fullscreen immersive
+        @Suppress("DEPRECATION")
+        /*
+         * Ask for a full-bleed window through BOTH APIs.
+         *
+         * systemUiVisibility has been deprecated since API 30 and some OEM builds honour it only
+         * partially: `dumpsys window` on one RK356x box reported `init=1920x1080 app=1920x1024`,
+         * i.e. the firmware kept reserving 56px for a navigation bar that was set to hide, so the
+         * app was never given those pixels to paint. WindowCompat is the supported route on those
+         * builds. Both are set because neither is reliable alone across signage hardware: the
+         * legacy flags still carry older devices, the compat API carries newer and OEM ones.
+         *
+         * Verify per device rather than assume — `adb shell dumpsys window displays` should show
+         * app= equal to init=. If it still does not, the reservation is a firmware behaviour no
+         * app-side call can override and it has to be turned off on the device.
+         */
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        )
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // #160: re-apply the persisted per-window brightness so it survives a relaunch.
+        try { systemControl.applyPersistedWindowBrightness(window) } catch (_: Throwable) {}
+
+        contentCache = ContentCache(this)
+        cacheJanitor = com.remotedisplay.player.data.CacheJanitor(java.io.File(filesDir, "content_cache"))
+        bundleCache = com.remotedisplay.player.data.BundleCache(this)
+        // Coordinated background downloads (single-flight + bounded pool + backoff) — reconnect-safe.
+        downloadCoordinator = com.remotedisplay.player.data.DownloadCoordinator(
+            cache = contentCache,
+            serverUrl = { config.serverUrl },
+            socketAlive = { wsService?.isConnected() == true },
+            onAck = { cid, status -> ackContentOnce(cid, status) },
+            siteCache = { siteCacheConfig }
+        )
+        screenshotCapture = ScreenshotCapture()
+        touchInjector = TouchInjector()
+
+        playerView = findViewById(R.id.playerView)
+        imageView = findViewById(R.id.imageView)
+        statusOverlay = findViewById(R.id.statusOverlay)
+        statusText = findViewById(R.id.statusText)
+        rootView = findViewById(R.id.rootLayout)
+        audience = com.remotedisplay.player.audience.AudienceController(
+            activity = this,
+            overlayParent = { findViewById<ViewGroup>(android.R.id.content) },
+            onBuckets = { handler.post { wsService?.flushAudience() } },
+        )
+
+        // Hide player controls
+        playerView.useController = false
+
+        val youtubeWebView = findViewById<android.webkit.WebView>(R.id.youtubeWebView)
+
+        // #109 fix (1): the PiP layer must render ABOVE the YouTube WebView's video plane.
+        // As the last child of rootLayout it sat in the SAME compositing band as the WebView
+        // and was occluded by the playing video surface. Reparent it OUT of rootLayout to the
+        // window content (android.R.id.content), as a top-level sibling drawn AFTER rootLayout
+        // — so it composites above the WebView. applyOrientation()/applyWallTransform() mirror
+        // rootView's transform onto it so corner positions still track the rotated content,
+        // and the remote-view screenshot captures `captureRoot` (content) so the PiP is still
+        // included. See docs/109-android-pip-visibility.md.
+        captureRoot = findViewById(android.R.id.content)
+        pipLayout = findViewById(R.id.pipLayout)
+        (pipLayout.parent as? ViewGroup)?.removeView(pipLayout)
+        (captureRoot as ViewGroup).addView(
+            pipLayout,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        )
+
+        // #109: PiP overlay layer. Reports show/clear over device:log (tag "pip"); rootView +
+        // youtubeWebView are passed for pipDebug geometry logging only.
+        pipOverlay = PipOverlay(this, pipLayout, rootView, youtubeWebView) { level, message ->
+            wsService?.sendLog("pip", level, message)
+        }
+
+        // 3.0 screen share: the shared screen + its badge, and the meeting-room code, in the PiP layer
+        // (so they turn with the panel and are in the remote-view capture). remote/ScreenShareOverlay.
+        screenShareOverlay = com.remotedisplay.player.remote.ScreenShareOverlay(this, pipLayout).also { it.attach() }
+
+        /*
+         * Triggers. Shares the PiP layer, which draws above the playlist and inherits the
+         * orientation transform — the same reasoning as PipOverlay, and the reason both owners
+         * remove only their own views rather than clearing the layer (each was destroying the
+         * other's DOM on the web player, while the other's state machine carried on believing it
+         * was on screen).
+         *
+         * The overlay silences the base through MediaPlayerManager rather than by writing volumes
+         * itself: a per-element write is undone by the next item mount, so the suppression has to
+         * live where the volume is DECIDED.
+         */
+        val trigOverlay = com.remotedisplay.player.trigger.TriggerOverlay(
+            this, pipLayout, contentCache,
+            setBaseAudioSuppressed = { on ->
+                try { if (::mediaPlayer.isInitialized) mediaPlayer.setTriggerMute(on) } catch (e: Throwable) { }
+                try { slideAudioPlayer?.setMuted(on) } catch (e: Throwable) { }
+            }
+        ) { level, message -> wsService?.sendLog("trigger", level, message) }
+        /*
+         * ⚠️ The trigger stack is ASSEMBLED HERE, in the Activity, because the trigger overlay is a
+         * View and cannot live anywhere else. The inbound control door (Goal B part 3) shares its
+         * socket, so it inherits that lifetime — and that is a real limitation, stated rather than
+         * hidden: if this Activity is destroyed, the door closes with it until the Activity comes
+         * back. A signage panel keeps its Activity for weeks, and process death restarts it, so in
+         * practice the door is up; a screen sitting in a scheduled-off window is the case to watch,
+         * and it is the case where `screen_on` matters most. Moving the socket to the service is the
+         * fix and it is a bigger change than this one — noted so the next person finds it stated.
+         *
+         * The command itself is dispatched by the SERVICE (runLocalApiCommand), which is what makes
+         * a LAN command and a dashboard command the same command.
+         */
+        triggerManager = com.remotedisplay.player.trigger.TriggerManager(
+            trigOverlay,
+            log = { level, message -> wsService?.sendLog("trigger", level, message) },
+            onLocalCommand = { type, payload -> wsService?.runLocalApiCommand(type, payload) },
+            localStatus = { wsService?.localApiStatus() ?: org.json.JSONObject() }
+        )
+        // The lease sweep. ⚠️ This is what stops a lost clear stranding a screen: an until_cleared
+        // trigger whose sender stops re-asserting expires instead of holding the panel forever.
+        triggerSweep = object : Runnable {
+            override fun run() {
+                try { triggerManager?.sweep() } catch (e: Throwable) { }
+                handler.postDelayed(this, 5000)
+            }
+        }.also { handler.postDelayed(it, 5000) }
+
+        // Setup zone manager for multi-zone layouts
+        zoneManager = ZoneManager(this, rootView as FrameLayout) {
+            playlistController.onVideoComplete()
+        }
+        campaignPlayer = CampaignPlayer(
+            stage = rootView,
+            zones = { zoneManager },
+            render = { step -> renderCampaignStep(step) },
+            // Proof of play: the layout itself, and a full-screen step's item, like any played item.
+            onLayoutStart = { l -> if (l.gate.optInt("log_play", 1) != 0) wsService?.sendLayoutStart(l.layoutId, l.layoutName, (l.durationMs / 1000).toInt()) },
+            onItemStart = { s ->
+                val cid = if (!s.item.isNull("widget_id") && s.item.optString("widget_id", "").isNotEmpty()) s.item.optString("widget_id") else s.item.optString("content_id", "")
+                if (s.item.optInt("log_play", 1) != 0) wsService?.sendPlayStart(cid, s.item.optString("filename", s.item.optString("widget_name", "")), (s.durationMs / 1000).toInt())
+            },
+            onNothingAllowed = { zoneManager?.cleanup(); showStatus("Nothing scheduled right now") },
+        )
+        // Wall zones draw into the wall-transformed rootView, just above the static fullscreen views
+        // (and below the status overlay and anything layered on later).
+        wallZones = WallZoneRenderer(
+            context = this,
+            root = rootView as FrameLayout,
+            stageIndex = { (rootView as ViewGroup).indexOfChild(youtubeWebView) + 1 },
+            syncedNow = { syncedNowMs() },
+            report = { msg -> wsService?.sendLog("sync", "info", msg) }
+        )
+
+        // Setup playlist controller
+        playlistController = PlaylistController(
+            onItemChanged = { item ->
+                // Audience counts are attributed to what is on screen — every item, including ones
+                // left out of proof-of-play (log_play=0), which is why this is not the onPlayLog hook.
+                audience?.setItem(if (item?.contentId?.isNotEmpty() == true) "content" else "widget", item?.contentId?.ifEmpty { item.widgetId } )
+                item?.let { playItem(it) }
+            },
+            // #74/#75: clear the last frame when going idle (else a now-filtered item lingers on screen)
+            onPlaylistEmpty = { audience?.setItem("none", null); kiosk?.hide(); if (::mediaPlayer.isInitialized) mediaPlayer.stop(); showStatus(getString(R.string.waiting_for_content)) },
+            onRequestRefresh = { wsService?.requestPlaylistRefresh() },
+            onNothingScheduled = { audience?.setItem("none", null); kiosk?.hide(); if (::mediaPlayer.isInitialized) mediaPlayer.stop(); showStatus(getString(R.string.nothing_scheduled)) },
+            // Screen-resilience: the defined "waiting for content" state — ONLY on a fresh device
+            // with nothing to show yet (never while content is on screen; that path keeps current).
+            onWaitingForContent = { audience?.setItem("none", null); kiosk?.hide(); if (::mediaPlayer.isInitialized) mediaPlayer.stop(); showStatus(getString(R.string.waiting_for_content)) },
+            // Proof-of-play: forward play_start/play_end to the server (device:play-event) so this
+            // device shows Total Plays / Hours in Reports. Widgets have no content_id, so key on the
+            // widget id instead — keeping play_start and play_end consistent so the row's duration closes.
+            onPlayLog = { event, item, completed ->
+                val cid = item.contentId.ifEmpty { item.widgetId ?: "" }
+                if (event == "play_start") wsService?.sendPlayStart(cid, item.filename, item.durationSec)
+                else wsService?.sendPlayEnd(cid, item.filename, completed)
+            },
+            // #234: carry the playback position across Activity rebuilds. Without this a relaunch
+            // restarts the playlist at item 1, so anything after it never gets a turn.
+            loadResume = { config.resumeIndex.takeIf { it >= 0 }?.let { it to config.resumeAt } },
+            saveResume = { index, atMs -> config.resumeIndex = index; config.resumeAt = atMs }
+        )
+        // #473: interactive web pages mount inside rootLayout, so orientation transforms apply.
+        kiosk = com.remotedisplay.player.kiosk.KioskSession(
+            activity = this,
+            container = rootView as ViewGroup,
+            onHold = { playlistController.hold() },
+            onRelease = { playlistController.release() },
+            onSkip = { playlistController.next() },
+            onError = { reason, detail -> wsService?.sendKioskError(reason, detail) },
+            onSessionEnd = { r ->
+                com.remotedisplay.player.kiosk.KioskSessionLog.add(this, r)
+                wsService?.flushKioskSessions()
+            },
+        )
+        // Screen-resilience: an item is playable only when its content is actually available —
+        // a widget, a remote stream, or a fully-downloaded local file. A not-yet/failed download is
+        // skipped (kept in the background) instead of blanking the screen on a loading state.
+        playlistController.setContentReadyCheck { item ->
+            item.isWidget || item.isRemote || contentCache.isContentCached(item.contentId, item.contentRev)
+        }
+        /*
+         * ⚠️ AND THE LAST-RESORT ANSWER, consulted only when nothing above passes.
+         *
+         * The strict check demands the cached copy carry the revision the playlist asked for, which
+         * is what lets a replaced asset reach a screen that already had the old one. But an asset
+         * cached by a build from before revisions existed has no sidecar to read, so it can never
+         * match — and a panel with a full cache showed "Waiting for content" after an OTA instead of
+         * playing media it was holding the whole time. This is the same question without the
+         * revision: do we have bytes for this at all? PlaylistController asks it only after the
+         * strict pass comes back empty, so fresh content still always wins.
+         */
+        playlistController.setContentUsableCheck { item ->
+            item.isWidget || item.isRemote || contentCache.isContentCached(item.contentId)
+        }
+
+        // Slide audio: a deck's voiceover and music bed. They live OUTSIDE the widget WebView that
+        // renders the slide, because a slide is published as a widget and a widget iframe makes no
+        // sound of its own — the same reason the web and Tizen players own these elements too.
+        slideAudioPlayer = SlideAudioPlayer(this)
+        playlistController.setSlideAudioPlayer(slideAudioPlayer)
+        playlistController.setServerBase { config.serverUrl }
+
+        // feat/transition-engine: full-screen GLES2 overlay that plays image/video wipes.
+        //
+        // #344: attach it to the WINDOW CONTENT ROOT (android.R.id.content), NOT the rotated stage,
+        // just below pipLayout — the same move #109 made for the PiP. A SurfaceView is not guaranteed
+        // to inherit a rotated ancestor's transform on every ROM, so keeping the overlay on the raw,
+        // unrotated screen and baking the stage's rotation into the fitted bitmaps (see
+        // fitTransitionBitmapRotated + setTransitionStage) makes the wipe match the mounted content
+        // regardless of the composer. It was previously on rootView, which is what made the wipe draw
+        // in the panel's native orientation on ROMs that do not rotate the surface.
+        val transitionView = TransitionGLView(this)
+        (captureRoot as ViewGroup).let { root ->
+            val idx = root.indexOfChild(pipLayout).coerceAtLeast(0)
+            root.addView(transitionView, idx,
+                FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+
+        // Setup media player
+        mediaPlayer = MediaPlayerManager(
+            context = this,
+            playerView = playerView,
+            imageView = imageView,
+            youtubeWebView = youtubeWebView,
+            onVideoComplete = { playlistController.onVideoComplete() },
+            onVideoFault = { playlistController.onVideoFault() },   // #333
+            onImageError = {
+                Log.w("MainActivity", "Image failed to load, skipping to next item")
+                handler.postDelayed({ playlistController.next() }, 500)
+            },
+            transitionView = transitionView,
+            // #624 play to end: the YouTube page reports the video's length and its end.
+            onYoutubeLength = { sec -> playlistController.onYoutubeLength(sec) },
+            onYoutubeEnded = { playlistController.onYoutubeEnded() }
+        )
+
+        /*
+         * Offline fallback (OfflineGate). An item cannot load when the socket to the server is down,
+         * or when that item just failed by itself — decided here rather than from Android's VALIDATED
+         * flag, which took minutes to notice an unplugged modem. The failure is recorded BEFORE the
+         * controller hears about it, so the selection it makes next already passes over the item.
+         */
+        playlistController.setOfflineCheck { item ->
+            com.remotedisplay.player.player.OfflineGate.cannotLoad(item, wsService?.isConnected() == true, webHealth, System.currentTimeMillis())
+        }
+        mediaPlayer.onWebLoadState = { ok ->
+            val key = playlistController.currentItem?.itemKey
+            if (key != null) {
+                if (ok) { webHealth.reportSuccess(key); playlistController.onNetworkItemRecovered() }
+                else { webHealth.reportFailure(key, System.currentTimeMillis()); playlistController.onNetworkItemFailed() }
+            }
+        }
+
+        // #344: applyOrientation() may have already run before mediaPlayer existed (its isInitialized
+        // guard skipped the geometry push then), so seed the transition-stage geometry now from
+        // whatever orientation is currently applied. Later orientation changes push it themselves.
+        if (appliedStageW > 0f && appliedStageH > 0f) {
+            val (rot0, swap0) = orientationRotSwap(currentOrientation)
+            val screenW0 = appliedStageW.toInt(); val screenH0 = appliedStageH.toInt()
+            mediaPlayer.setTransitionStage(
+                if (swap0) screenH0 else screenW0, if (swap0) screenW0 else screenH0,
+                screenW0, screenH0, rot0
+            )
+        }
+
+        // Video-wall controller. The emit lambdas read wsService lazily (it's bound after
+        // onCreate), and they no-op until the socket is connected (guarded in the service).
+        wallController = WallController(
+            media = mediaPlayer,
+            playlist = playlistController,
+            deviceId = { config.deviceId },
+            emitSync = { isGroup, id, idx, contentId, posSec ->
+                if (isGroup) wsService?.emitGroupSync(id, idx, contentId, posSec)
+                else wsService?.emitWallSync(id, idx, contentId, posSec)
+            },
+            emitSyncRequest = { isGroup, id ->
+                if (isGroup) wsService?.emitGroupSyncRequest(id) else wsService?.emitWallSyncRequest(id)
+            },
+            applyTransform = { cfg -> applyWallTransform(cfg) }
+        )
+
+        // #group-sync: clock/schedule group sync (no leader, offline-native). Reads the disciplined
+        // clock from the bound service; streams diagnostics to the dashboard live-log (tag 'sync').
+        groupSchedule = GroupScheduleController(
+            playlist = playlistController,
+            media = mediaPlayer,
+            syncedNow = { syncedNowMs() },
+            report = { msg -> wsService?.sendLog("sync", "info", msg) },
+            // Double buffer: warm the NEXT clip's second player if it's a locally-cached video, so the
+            // boundary switch is a warm swap (no black hold). Non-video / uncached items just skip it.
+            onPreloadNext = { idx ->
+                val next = playlistController.itemAt(idx)
+                if (next != null && !next.isRemote && next.mimeType.startsWith("video/")) {
+                    contentCache.getCachedFile(next.contentId)?.let { mediaPlayer.preloadVideo(it) }
+                }
+            }
+        )
+        // #624: play to end is ignored while a shared clock drives the screen (a sync group or a wall).
+        playlistController.syncDriven = { groupSchedule.isActive || wallController.isActive }
+
+        // Restore cached playlist for offline cold-start (play immediately from disk cache).
+        // Catch Throwable (not just Exception) so an OOM or corrupt entry can't kill the app
+        // before the WebSocket connects — that's the crash-loop scenario. If the cache is
+        // unusable for any reason, drop it and continue; the server will resend on connect.
+        val cachedJson = config.cachedPlaylist
+        if (cachedJson.isNotEmpty()) {
+            try {
+                val cached = JSONObject(cachedJson)
+                // An offline cold start keeps counting if it was counting (the cache is the whole payload).
+                /*
+                 * ⚠️ Audience counting is NOT restored from this cache. It is only rewritten when a
+                 * payload has assignments, so a switch-off that arrived while the screen had none is
+                 * not in it, and restoring it could start a camera an admin had stopped. Counting
+                 * waits for a fresh payload, which says on or off every time.
+                 */
+                val assignments = cached.getJSONArray("assignments")
+                if (assignments.length() > 0) {
+                    Log.i("MainActivity", "Restoring cached playlist: ${assignments.length()} items")
+                    /*
+                     * ⚠️ RESTORE THE SHAPE OF THE SCREEN, NOT JUST ITS CONTENT.
+                     *
+                     * The cache is the WHOLE payload (`data.toString()` on every update) — layout,
+                     * orientation and wall geometry included — and this used to read only the
+                     * assignments out of it. So an offline cold start replayed the right clips in the
+                     * wrong screen: a PORTRAIT panel came back landscape, a ZONED panel flattened
+                     * every zone into one fullscreen rotation, and a wall member came back untiled
+                     * and unsynced — with the correct configuration sitting in the same string it had
+                     * just parsed. A power cut at a site with no WAN meant coming back visibly wrong
+                     * and staying that way until the server was reachable.
+                     *
+                     * Orientation first, because the layout is measured against the rotated stage.
+                     * Each piece is independently guarded: a payload cached by an older build simply
+                     * will not have the key, and must still restore everything it does have.
+                     */
+                    if (!cached.isNull("orientation")) {
+                        val o = cached.optString("orientation", "")
+                        if (o.isNotEmpty()) {
+                            Log.i("MainActivity", "Restoring cached orientation: $o")
+                            applyOrientation(o)
+                        }
+                    }
+                    // #74/#75: restore the cached effective timezone too (offline schedules)
+                    playlistController.setTimezone(if (cached.isNull("timezone")) null else cached.optString("timezone", "").ifEmpty { null })
+                    // Standby content survives an offline cold-start too: the cached payload is the whole
+                    // server message, so default_content rides along and the off-hours standby shows even
+                    // with no WAN (a LOCAL default is pinned on disk by the download loop; a remote one
+                    // can't stream offline and simply won't show).
+                    playlistController.setDefaultContent(if (cached.isNull("default_content")) null else cached.optJSONObject("default_content"))
+                    // The site cache too: a panel that reboots with the WAN down can still fill from its LAN box.
+                    siteCacheConfig = com.remotedisplay.player.data.SiteCacheConfig.parse(if (cached.isNull("site_cache")) null else cached.optJSONObject("site_cache"))
+                    // Restore the SHAPE too, not just the content: a zoned (or wall) panel must
+                    // cold-start into its zones/tiling, not render flat-fullscreen and then snap into
+                    // zones the moment the server reconnects (the visible "loads fullscreen, then jumps
+                    // to 4 zones" flash). Mirror onPlaylistUpdate's wall / multi-zone / single dispatch;
+                    // zoneManager and wallController are both initialised earlier in onCreate. We are on
+                    // the main thread here, so applyMultiZoneLayout can run directly.
+                    val cachedOrder = cached.optString("playback_order", "sequential")
+                    when (layoutModeOf(cached)) {
+                        // A wall with its own layout comes back as THIS panel's slice of every zone,
+                        // on the cached clock offset — no server needed (WallZoneRenderer).
+                        LayoutMode.WALL_ZONES -> {
+                            val wc = cached.optJSONObject("wall_config")
+                            val z = cached.optJSONObject("layout")?.optJSONArray("zones")
+                            if (wc != null && z != null) enterWallZones(wc, z, assignments)
+                        }
+                        LayoutMode.WALL -> {
+                            cached.optJSONObject("wall_config")?.let { wallController.apply(parseWallConfig(it)) }
+                            playlistController.updatePlaylist(assignments, cachedOrder)
+                            playlistController.startIfNeeded()
+                        }
+                        LayoutMode.MULTI_ZONE -> {
+                            val l = cached.optJSONObject("layout")
+                            val z = l?.optJSONArray("zones")
+                            if (z != null) applyMultiZoneLayout(z, l.optString("id", ""), assignments)
+                        }
+                        LayoutMode.SINGLE -> {
+                            playlistController.updatePlaylist(assignments, cachedOrder)
+                            playlistController.startIfNeeded()
+                        }
+                    }
+                    // #group-sync: if this device was in a sync group, resume the schedule immediately
+                    // from the cached clock offset — a reboot mid-outage comes back aligned, no server.
+                    val cg = if (cached.isNull("group_sync")) null else cached.optJSONObject("group_sync")
+                    if (cg != null) groupSchedule.apply(cg.optString("group_id"))
+                }
+            } catch (e: Throwable) {
+                Log.w("MainActivity", "Failed to restore cached playlist, clearing cache: ${e.message}")
+                try { config.clearPlaylistCache() } catch (_: Throwable) {}
+            }
+        }
+
+        // Only nudge "Connecting..." when nothing is on screen yet. A multi-zone panel restored from
+        // cache above renders through zoneManager (not playlistController), so isPlaying stays false
+        // even though the zones ARE up - without the hasZones guard the connecting overlay flashes on
+        // top of the restored zones on every cold boot until the online catch-up hides it.
+        if (!playlistController.isPlaying && zoneManager?.hasZones() != true && wallZones?.isActive != true) {
+            showStatus("Connecting to server...")
+        }
+
+        // Start and bind to WebSocket service
+        try {
+            val serviceIntent = Intent(this, WebSocketService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+            bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to start service: ${e.message}")
+            showStatus("Service error: ${e.message}")
+        }
+
+        // Start auto-update checker
+        updateChecker = UpdateChecker(this)
+        // #139: surface OTA status (applying / backing off / manual-update-required) to the
+        // dashboard. wsService is read lazily — it binds after this runs.
+        updateChecker.otaLogReporter = { level, msg -> wsService?.sendLog("ota", level, msg) }
+        // #139 Phase 2 (Option B): announce OTA status transitions (clear / enter-backoff) so the
+        // dashboard badge clears/lights up promptly without waiting for a reconnect.
+        updateChecker.otaStatusReporter = { wsService?.sendOtaStatus() }
+        updateChecker.startPeriodicCheck()
+
+        // Periodic connection-failure check so the "Stuck connecting?" banner appears
+        // without waiting for the next playlist update
+        val failureCheck = object : Runnable {
+            override fun run() {
+                checkConnectionFailureBanner()
+                handler.postDelayed(this, 30_000L)
+            }
+        }
+        handler.postDelayed(failureCheck, 15_000L)
+
+    }
+
+    // Rotate the whole stage in software so portrait / flipped signage works even on
+    // fixed-landscape hardware (Fire TV, Android TV and most signage sticks ignore
+    // setRequestedOrientation - they can't physically rotate the panel). Resizes
+    // rootView to the rotated dimensions, recenters, and rotates. Covers single-zone
+    // (playerView/imageView/youtubeWebView) and multi-zone (ZoneManager renders into
+    // the same rootView). Values mirror the dashboard: landscape / portrait /
+    // landscape-flipped / portrait-flipped.
+    /**
+     * The size of the WINDOW we are allowed to paint, measured NOW.
+     *
+     * ⚠️ Deliberately the window and not the display. On a box whose firmware keeps reserving space
+     * for a system bar, `dumpsys window` reports e.g. `init=1920x1080 app=1920x1024`: the panel is
+     * 1080 tall but the window is 56px shorter, and those 56px are simply not ours to draw in.
+     * Sizing the stage to the DISPLAY there would not fill the gap — it would push the bottom of
+     * every asset outside the window and silently crop it, which is worse than a border.
+     *
+     * The original defect was not which size was read but WHEN: `resources.displayMetrics` was read
+     * once, while a bar was still on screen, and written into rootView's layoutParams for good.
+     * Immersive mode is a request — bars hide and the window grows a few frames later — so a
+     * playlist arriving first froze the stage at bar-sized dimensions, leaving dead space exactly
+     * the size of a bar that had since vanished. It looked random because it was a race, and
+     * rendering the cached playlist immediately at boot made losing it the common case.
+     *
+     * So: read it late, read it again whenever the window changes, and never cache it across a
+     * window resize. See reapplyOrientation().
+     */
+    private fun windowSize(): Pair<Float, Float> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = windowManager.currentWindowMetrics.bounds
+            return b.width().toFloat() to b.height().toFloat()
+        }
+        // Pre-R there is no window-metrics API, and `resources.displayMetrics` is NOT the window:
+        // it is Display.getSize(), which subtracts the navigation bar permanently — even once
+        // immersive mode has hidden it and LAYOUT_HIDE_NAVIGATION has laid our window out
+        // underneath. On an 800x1280 ThinkSmart View (Android 8.1) it reports 800x1208 forever
+        // (dumpsys: `cur=800x1280 app=800x1208`), so the stage was 36px short on the long axis and
+        // the reapply-on-focus above could never heal it: the measurement never changed. The decor
+        // view IS the window — laid out to the window frame, grows when the bars go, and still
+        // honours a firmware that truly reserves space (its frame is smaller then, too).
+        val dv = window.decorView
+        if (dv.width > 0 && dv.height > 0) return dv.width.toFloat() to dv.height.toFloat()
+        val m = resources.displayMetrics
+        return m.widthPixels.toFloat() to m.heightPixels.toFloat()
+    }
+
+    /** Stage size last applied, so a stage sized during a transient window state can heal. */
+    private var appliedStageW = 0f
+    private var appliedStageH = 0f
+
+    /**
+     * Re-run the current orientation against the panel size as it is NOW.
+     *
+     * Called when the window settles (focus regained, bars finally hidden). Without this, a stage
+     * measured too early is permanent: applyOrientation() returns immediately when the orientation
+     * string has not changed, and it never changes on a display that has always been landscape.
+     */
+    private fun reapplyOrientation() {
+        /*
+         * ⚠️ NOT ON A WALL. The wall transform owns rootView (and sets currentOrientation = null), so
+         * re-measuring here re-rotated a wall panel to "landscape" on the next focus change — seen
+         * on the emulator as a wall zone turned 90° and pushed off its slice after a relaunch.
+         */
+        if (::wallController.isInitialized && wallController.isWall) return
+        applyOrientation(currentOrientation ?: "landscape")
+    }
+
+    // (rotation, transpose?) for an orientation string, resolved against the panel's own window
+    // aspect so a native-portrait panel rotates a landscape slide instead of letterboxing it. One
+    // source (TransitionGeometry.orientationRotSwap), shared by applyOrientation and the initial
+    // transition-stage push so the two can never disagree on what "portrait" means.
+    private fun orientationRotSwap(o: String?): Pair<Float, Boolean> {
+        val (w, h) = windowSize()
+        return TransitionGeometry.orientationRotSwap(o, h > w)
+    }
+
+    private fun applyOrientation(orientation: String) {
+        val (w, h) = windowSize()
+        // The guard compares the measured SIZE as well as the orientation. Comparing the string
+        // alone is what made a bad measurement unrecoverable.
+        if (orientation == currentOrientation && w == appliedStageW && h == appliedStageH) return
+        currentOrientation = orientation
+        appliedStageW = w
+        appliedStageH = h
+        // Decide rot/swap from the SAME (w, h) this method sizes the stage with, so the two cannot
+        // disagree if the window changes between measurements.
+        val (rot, swap) = TransitionGeometry.orientationRotSwap(orientation, h > w)
+        val lp = rootView.layoutParams
+        lp.width = (if (swap) h else w).toInt()
+        lp.height = (if (swap) w else h).toInt()
+        rootView.layoutParams = lp
+        rootView.translationX = if (swap) (w - h) / 2f else 0f
+        rootView.translationY = if (swap) (h - w) / 2f else 0f
+        rootView.rotation = rot
+        rootView.requestLayout()
+        mirrorTransformToPip()
+        // #344: tell the wipe compositor the box it must fit into. The overlay lives on the unrotated
+        // content root, so it needs the stage box (lp.width/height), the screen box (w/h) and the
+        // rotation to bake in — NOT its own measured size, which is 0 while it is GONE between wipes.
+        if (::mediaPlayer.isInitialized) mediaPlayer.setTransitionStage(lp.width, lp.height, w.toInt(), h.toInt(), rot)
+        // The dashboard models screenshots as a native-landscape framebuffer; on a native-portrait
+        // window the capture has to be turned to match (0 on every landscape panel).
+        ScreenshotCapture.uprightDeg = TransitionGeometry.screenshotUprightDeg(orientation, h > w)
+        Log.i("MainActivity", "Applied orientation: $orientation (rotation=$rot, swap=$swap, window=${w.toInt()}x${h.toInt()}, screenshotTurn=${ScreenshotCapture.uprightDeg})")
+    }
+
+    // #109: pipLayout was reparented out of rootView (to draw above the WebView), so it no
+    // longer inherits the orientation/wall transform. Copy rootView's current size + transform
+    // onto it verbatim so the PiP box still lands in the same rotated coordinate space as the
+    // visible content (mirrors the web/Tizen players, which apply the same transform to #pip
+    // as to #stage). Called after every rootView transform change.
+    private fun mirrorTransformToPip() {
+        if (!::pipLayout.isInitialized) return
+        val rl = rootView.layoutParams
+        val pl = pipLayout.layoutParams
+        pl.width = rl.width
+        pl.height = rl.height
+        pipLayout.layoutParams = pl
+        pipLayout.translationX = rootView.translationX
+        pipLayout.translationY = rootView.translationY
+        pipLayout.rotation = rootView.rotation
+        pipLayout.scaleX = rootView.scaleX
+        pipLayout.scaleY = rootView.scaleY
+        pipLayout.requestLayout()
+    }
+
+    private fun parseWallConfig(wc: JSONObject): WallController.WallConfig {
+        fun rect(key: String): WallController.Rect {
+            val o = wc.optJSONObject(key)
+            return WallController.Rect(
+                x = o?.optDouble("x", 0.0)?.toFloat() ?: 0f,
+                y = o?.optDouble("y", 0.0)?.toFloat() ?: 0f,
+                w = o?.optDouble("w", 0.0)?.toFloat() ?: 0f,
+                h = o?.optDouble("h", 0.0)?.toFloat() ?: 0f
+            )
+        }
+        return WallController.WallConfig(
+            wallId = wc.optString("wall_id", ""),
+            screen = rect("screen_rect"),
+            player = rect("player_rect"),
+            isLeader = wc.optBoolean("is_leader", false),
+            rotation = wc.optInt("rotation", 0)
+        )
+    }
+
+    // #group-sync: fullscreen synchronized playback — no tile geometry, just id + leader role.
+    private fun parseGroupConfig(gs: JSONObject): WallController.WallConfig {
+        val zero = WallController.Rect(0f, 0f, 0f, 0f)
+        return WallController.WallConfig(
+            wallId = gs.optString("group_id", ""),
+            screen = zero, player = zero, rotation = 0,
+            isLeader = gs.optBoolean("is_leader", false),
+            mode = WallController.Mode.GROUP
+        )
+    }
+
+    // Video-wall slice transform. The content view represents the whole wall (player_rect);
+    // size + offset rootView so this screen's screen_rect fills the device viewport, content
+    // stretched to fill (object-fit:fill parity, set on the views via MediaPlayerManager).
+    // Mirrors the web player's vw/vh stage math. cfg == null restores full screen.
+    //
+    // #236: per-panel mounting rotation is now applied. Ported by hand from
+    // server/lib/wall-geometry.js, which is the canonical rule and the only place it is tested —
+    // Kotlin cannot load the shared script the web player pulls, so any change there has to be
+    // mirrored here or a wall of mixed players grows a seam. `rotation` is degrees CLOCKWISE the
+    // content is turned inside the framebuffer (the same convention as the orientation setting),
+    // and Android's View.rotation is clockwise-positive too, so it maps straight across.
+    //
+    // Transform order matters: Android rotates about the pivot (view centre) and THEN applies
+    // translation, so the translation is computed to land the view's CENTRE, not its top-left.
+    private fun applyWallTransform(cfg: WallController.WallConfig?) {
+        val lp = rootView.layoutParams
+        if (cfg == null) {
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+            rootView.layoutParams = lp
+            rootView.translationX = 0f
+            rootView.translationY = 0f
+            rootView.rotation = 0f
+            rootView.scaleX = 1f
+            rootView.scaleY = 1f
+            rootView.requestLayout()
+            mirrorTransformToPip()
+            // Force the next playlist update to re-apply orientation (applyOrientation
+            // early-returns when the value is unchanged).
+            currentOrientation = null
+            Log.i("MainActivity", "Wall transform cleared (restored full screen)")
+            return
+        }
+        val s = cfg.screen
+        val p = cfg.player
+        if (s.w == 0f || s.h == 0f) {
+            Log.w("MainActivity", "Wall screen_rect has zero size; skipping transform")
+            return
+        }
+        val dw = resources.displayMetrics.widthPixels.toFloat()
+        val dh = resources.displayMetrics.heightPixels.toFloat()
+        val rot = when (cfg.rotation) { 90 -> 90; 180 -> 180; 270 -> 270; else -> 0 }
+
+        if (rot == 0) {
+            // Left byte-identical to the pre-#236 expression on purpose: every wall in the field is
+            // rotation 0, and an operator who updates must not find a wall that was aligned
+            // yesterday has shifted by a rounding error.
+            lp.width = ((p.w / s.w) * dw).toInt()
+            lp.height = ((p.h / s.h) * dh).toInt()
+            rootView.layoutParams = lp
+            rootView.translationX = ((p.x - s.x) / s.w) * dw   // negative for right/lower tiles
+            rootView.translationY = ((p.y - s.y) / s.h) * dh
+            rootView.rotation = 0f
+        } else {
+            // A quarter turn measures the wall's horizontal against the framebuffer's VERTICAL —
+            // on a panel hung sideways, moving right along the wall moves down the display.
+            val quarter = (rot == 90 || rot == 270)
+            val boxW = (p.w / s.w) * (if (quarter) dh else dw)
+            val boxH = (p.h / s.h) * (if (quarter) dw else dh)
+            // Where the player rect's centre sits within this panel's rect, 0..1 in wall space.
+            val nx = (p.x + p.w / 2f - s.x) / s.w
+            val ny = (p.y + p.h / 2f - s.y) / s.h
+            // ...and where that lands in the framebuffer once the panel's turn is undone.
+            val cx: Float
+            val cy: Float
+            when (rot) {
+                90 -> { cx = 1f - ny; cy = nx }
+                180 -> { cx = 1f - nx; cy = 1f - ny }
+                else -> { cx = ny; cy = 1f - nx }   // 270
+            }
+            lp.width = boxW.toInt()
+            lp.height = boxH.toInt()
+            rootView.layoutParams = lp
+            rootView.rotation = rot.toFloat()
+            rootView.translationX = cx * dw - boxW / 2f
+            rootView.translationY = cy * dh - boxH / 2f
+        }
+        rootView.scaleX = 1f
+        rootView.scaleY = 1f
+        rootView.requestLayout()
+        mirrorTransformToPip()
+        // Orientation no longer reflects reality; ensure it re-applies after wall exit.
+        currentOrientation = null
+        Log.i("MainActivity", "Wall transform: size=${lp.width}x${lp.height} tx=${rootView.translationX} ty=${rootView.translationY} rot=$rot")
+    }
+
+    private fun setupServiceCallbacks() {
+        // #170: on a fresh network connection, clear stuck download backoff so content that failed
+        // to download while the link was settling retries on the next sweep (the service also
+        // requests a playlist refresh). Keeps single-flight; only touches failure/backoff state.
+        // #234: the server rejecting us (operator block, cleared credentials, reclaim settle) has
+        // to be VISIBLE. Only ProvisioningActivity ever assigned onUnpaired, and it is gone by the
+        // time playback is running — so a rejection left the screen sitting on "Connecting to
+        // server", and the player then blamed the URL. The server always says why; show that.
+        /*
+         * The service owns the backlight schedule and tells us when a window opens or closes. We
+         * hold only the window flag (see applyPowerWindowFlag). Registered here, cleared in
+         * onDestroy — a null callback simply means "no UI attached", which is the normal state
+         * DURING a window, since blanking the panel is lockNow().
+         */
+        wsService?.onPowerWindow = { off -> applyPowerWindowFlag(off) }
+        wsService?.onBeforeBlank = { releaseLockScreenWake() }
+
+        wsService?.onUnpaired = {
+            runOnUiThread {
+                val why = wsService?.lastRejectionReason ?: ""
+                val blocked = why.contains("block", ignoreCase = true)
+                val transient = wsService?.lastRejectionTransient == true
+                Log.w("MainActivity", "server rejected this device ($why, transient=$transient)")
+                showStatus(
+                    if (blocked) getString(R.string.device_blocked_status)
+                    else getString(R.string.device_unpaired_status)
+                )
+
+                // A TRANSIENT rejection (the reclaim-settle hold: "retry after N seconds") is one
+                // the service recovers from by itself — it holds, retries once and comes back. Tear
+                // nothing down for it. The previous handler did the opposite: it wiped the offline
+                // playlist cache and jumped to provisioning on every rejection, so a self-healing
+                // hold cost the panel its cache and forced a full re-download after re-pairing.
+                //
+                // A terminal rejection means this device really is gone from the server, and the
+                // operator needs the pairing code, so provisioning is right. The cache is kept
+                // here: re-pairing restores the settings, so the same files are wanted again. The
+                // one exception is an explicit delete from the dashboard, which the service has
+                // already wiped before this runs (DeletedDeviceWipe).
+                if (!transient && !blocked) {
+                    handler.post {
+                        startActivity(Intent(this@MainActivity, ProvisioningActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
+                            // Server-initiated re-pair (known-good URL): show the code, not URL entry.
+                            putExtra("EXTRA_REPAIR", true)
+                        })
+                        finish()
+                    }
+                }
+            }
+        }
+
+        wsService?.onNetworkAvailable = {
+            if (::downloadCoordinator.isInitialized) downloadCoordinator.resetAllBackoff()
+        }
+
+        wsService?.onPlaylistUpdate = { data ->
+            try {
+            // ⚠️ Adopt triggers on EVERY payload, before anything else can early-return. The device
+            // learns its listener config and its trigger definitions here and nowhere else, and the
+            // media they need is pinned by the same message that pins the base playlist — which is
+            // the entire offline guarantee.
+            try { triggerManager?.onPayload(data) } catch (e: Throwable) {
+                Log.w("MainActivity", "trigger adopt failed: ${e.message}")
+            }
+            // Audience counting rides every payload; absent means OFF, so this runs before any early return.
+            try { audience?.onPayload(data) } catch (e: Throwable) { Log.w("MainActivity", "audience adopt failed: ${e.message}") }
+            /*
+             * ⚠️ AND PIN WHAT THEY NEED — the comment above describes the WEB player's mechanism,
+             * not this one. There, device-triggers.js appends trigger media to the same
+             * st-cache-playlist message the service worker already handles. Android has no service
+             * worker: it downloads through DownloadCoordinator, driven by a loop over `assignments`
+             * ONLY. Trigger items live in a separate `triggers` array that never reached it, so
+             * assigning a trigger to a device whose base playlist was unchanged downloaded nothing,
+             * and the fire rendered its black box over the playlist with no media inside.
+             *
+             * Measured on hardware before this: fire accepted, TriggerController logged it, screen
+             * went black, and content_cache held only the four base clips.
+             */
+            try { pinTriggerMedia(data) } catch (e: Throwable) {
+                Log.w("MainActivity", "trigger media pin failed: ${e.message}")
+            }
+            // Orientation is applied in the non-wall branch below; wall mode owns the
+            // root-view transform itself and must not be rotated.
+            // Check if device is suspended (trial expired / over limit)
+            if (data.optBoolean("suspended", false)) {
+                val message = data.optString("message", "Account Suspended")
+                val detail = data.optString("detail", "Please upgrade your plan.")
+                handler.post {
+                    wallZones?.stop()
+                    showStatus("$message\n$detail")
+                    kiosk?.hide()
+                    if (::mediaPlayer.isInitialized) mediaPlayer.stop()
+                }
+            } else {
+
+            val assignments = data.getJSONArray("assignments")
+
+            // #74/#75: device-effective IANA timezone for per-item schedule evaluation
+            val effectiveTz = if (data.isNull("timezone")) null else data.optString("timezone", "").ifEmpty { null }
+            playlistController.setTimezone(effectiveTz)
+            zoneManager?.setTimezone(effectiveTz)
+            wallZones?.setTimezone(effectiveTz)
+
+            // Default / standby content: a per-device, per-payload fallback IMAGE the server attaches
+            // TOP-LEVEL (not in assignments) as `default_content`. Handed to the controller so it can
+            // render it in the defined idle states (empty playlist / everything dayparted off) instead
+            // of the idle text. Null/absent when unset. Set here so BOTH the wall and single-zone
+            // updatePlaylist paths below have it before they run.
+            playlistController.setDefaultContent(if (data.isNull("default_content")) null else data.optJSONObject("default_content"))
+            // 3.0 site cache: set BEFORE the download sweep this payload triggers, so new media is
+            // tried from the LAN box first. Absent = no box (an un-assigned screen, or a server
+            // that predates it) and downloads go to the origin as before.
+            siteCacheConfig = com.remotedisplay.player.data.SiteCacheConfig.parse(if (data.isNull("site_cache")) null else data.optJSONObject("site_cache"))
+
+            /*
+             * Cache playlist JSON for offline cold-start.
+             *
+             * ⚠️ ONLY IF IT IS WORTH KEEPING. This used to write unconditionally, before anything
+             * judged the payload — so one empty or degraded push replaced a perfectly good offline
+             * copy, and the panel then had nothing to fall back to. That is why rebooting a stuck
+             * screen made it worse instead of better: the reboot restored the emptiness. A payload
+             * with no assignments is a statement about right now (suspended, unassigned, still
+             * draining); it is not a better answer than what we already had on disk when the
+             * network is gone.
+             *
+             * A deliberate clear still works — playlist_id set to nothing is an operator decision
+             * and arrives as an ordinary update — but it is applied to PLAYBACK by the controller
+             * below. What survives on disk is the last payload we could actually have played.
+             */
+            if (assignments.length() > 0) {
+                config.cachedPlaylist = data.toString()
+            } else {
+                Log.i("MainActivity", "Empty playlist payload — keeping the previous offline cache")
+            }
+
+            // Video-wall mode takes precedence over orientation + multi-zone: the wall is
+            // fullscreen, and WallController owns the root-view slice transform and the
+            // leader/follower role. (We're on the main thread here — onPlaylistUpdate is
+            // posted to the main looper by WebSocketService.)
+            // Wall > multi-zone > single. This is the inline mirror of layoutModeOf() (player/LayoutMode.kt),
+            // which the offline cached cold-start restore uses directly and LayoutModeTest pins. Keep the
+            // two in step: they diverging is what made a zoned panel cold-start fullscreen then snap into zones.
+            val wallObj = if (data.isNull("wall_config")) null else data.optJSONObject("wall_config")
+            if (wallObj != null) {
+                com.remotedisplay.player.util.DebugLog.i("Player", "Layout: VIDEO-WALL (${assignments.length()} assignments)")
+                if (campaignPlayer?.isActive == true) handler.post { campaignPlayer?.stop() }   // a wall never runs a campaign
+                if (zoneManager?.hasZones() == true) zoneManager?.cleanup()
+                groupSchedule.exit()                 // wall and group are mutually exclusive
+                kiosk?.hide()                        // interactive pages render passively on a wall
+                playlistController.dropHold()        // a wall never holds; clear any interactive hold
+                if (layoutModeOf(data) == LayoutMode.WALL_ZONES) {
+                    // The wall's own layout: every zone on the shared clock, no leader relay.
+                    val lz = data.optJSONObject("layout")!!.optJSONArray("zones")!!
+                    com.remotedisplay.player.util.DebugLog.i("Player", "Layout: WALL ZONES (${lz.length()} zones)")
+                    enterWallZones(wallObj, lz, assignments)
+                } else {
+                    wallZones?.stop()                // layout cleared, or an emergency took the wall
+                    wallController.apply(parseWallConfig(wallObj))
+                    playlistController.updatePlaylist(assignments, data.optString("playback_order", "sequential"))
+                }
+            } else {
+            // #group-sync: not a wall — enter clock/schedule group sync if the payload carries a
+            // group_sync block, else leave it. No leader/relay: the schedule tick drives index +
+            // position locally (offline-native). Content renders through the normal path below.
+            wallZones?.stop()                        // never wall zones here either
+            wallController.exit()                    // never in wall mode here
+            val groupObj = if (data.isNull("group_sync")) null else data.optJSONObject("group_sync")
+            if (groupObj != null) groupSchedule.apply(groupObj.optString("group_id")) else groupSchedule.exit()
+            // #320: uploaded shaders arrive with the playlist, keyed by the ids the items reference.
+            // Handed to the loader, which checks them before assets. Re-sent on every reconnect, so
+            // there is no cache to invalidate; an id that never arrives hard-cuts exactly as before.
+            run {
+                val cs = data.optJSONObject("custom_shaders")
+                val map = HashMap<String, String>()
+                if (cs != null) { val it2 = cs.keys(); while (it2.hasNext()) { val k = it2.next(); cs.optString(k, "").takeIf { v -> v.isNotEmpty() }?.let { v -> map[k] = v } } }
+                TransitionGlsl.setUploadedShaders(map)
+            }
+            applyOrientation(data.optString("orientation", "landscape"))
+
+            // Check for multi-zone layout
+            val layoutObj = if (data.isNull("layout")) null else data.optJSONObject("layout")
+            val layoutZones = layoutObj?.optJSONArray("zones")
+
+            // 3.0 campaigns (player/Campaign.kt): whole layouts switching with full-screen items. The
+            // server sends `campaign` only because PlayerCapabilities declares layout.campaign; never
+            // in a synced group (one shared item clock), where the fallback in assignments plays.
+            val campaign = if (groupObj == null) Campaign.parse(data) else null
+            if (campaign != null) {
+                com.remotedisplay.player.util.DebugLog.i("Player", "Layout: CAMPAIGN (${campaign.steps.size} steps)")
+                handler.post { campaignPlayer?.apply(campaign) }
+            } else {
+            if (campaignPlayer?.isActive == true) {
+                handler.post {
+                    campaignPlayer?.stop()
+                    zoneManager?.cleanup()
+                    zoneManager?.lastAssignmentSig = null
+                    zoneManager?.lastZoneSig = null
+                }
+            }
+            if (layoutZones != null && layoutZones.length() > 1) {
+                // Multi-zone mode - use ZoneManager
+                val layoutId = layoutObj?.optString("id", "") ?: ""
+                val currentLayoutId = zoneManager?.currentLayoutId
+
+                // Build a signature of current assignments to detect content changes
+                // widget_rev belongs in here for the same reason it is in the fullscreen playlist
+                // signature: editing a widget changes its CONTENT, never its id, so without it a
+                // zone assignment looked identical and the re-render was skipped as "unchanged".
+                val assignmentSig = zoneAssignmentSig(assignments)
+                val changed = assignmentSig != zoneManager?.lastAssignmentSig
+
+                // The ZONES themselves can change without the layout id changing — editing a layout
+                // in place (adding a 4th zone to a 3-zone layout) keeps the same id. Rebuilding only
+                // on an id change meant the new zone never appeared: the geometry stayed as it was
+                // and only the assignments re-rendered into the OLD zones, so the change looked like
+                // it had been ignored until the app was force-stopped. Reported on #234.
+                val zoneSig = zoneGeometrySig(layoutZones)
+                val zonesChanged = zoneSig != zoneManager?.lastZoneSig
+
+                com.remotedisplay.player.util.DebugLog.i("Player", "Layout: MULTI-ZONE (${layoutZones.length()} zones, layout=$layoutId), ${assignments.length()} assignments")
+                if (zoneManager?.hasZones() != true || layoutId != currentLayoutId || zonesChanged) {
+                    Log.i("MainActivity", "Multi-zone layout with ${layoutZones.length()} zones (layout=$layoutId, was=$currentLayoutId)")
+                    handler.post { applyMultiZoneLayout(layoutZones, layoutId, assignments) }
+                } else if (changed) {
+                    Log.i("MainActivity", "Multi-zone assignments changed, re-rendering")
+                    handler.post {
+                        zoneManager?.renderAssignments(assignments, config.serverUrl, contentCache, config.deviceId)
+                        zoneManager?.lastAssignmentSig = assignmentSig
+                    }
+                } else {
+                    Log.i("MainActivity", "Multi-zone unchanged, skipping")
+                }
+            } else {
+                // Single-zone mode - use PlaylistController (existing behavior)
+                com.remotedisplay.player.util.DebugLog.i("Player", "Layout: SINGLE/FULLSCREEN (${layoutZones?.length() ?: 0} zones), ${assignments.length()} assignments")
+                if (zoneManager?.hasZones() == true) handler.post { zoneManager?.cleanup() }
+                playlistController.updatePlaylist(assignments, data.optString("playback_order", "sequential"))
+            }
+            } // end else (not a campaign)
+            } // end else (not a video wall)
+
+            // #170: a genuine content change (first load, reassignment, toggle-back) resets any
+            // stuck download backoff below, so "download missing" isn't blocked by a backoff that
+            // ballooned during the unstable first-boot window. The routine 60s same-playlist refresh
+            // keeps the same signature -> no reset -> the retry-storm guard (backoff) stays intact.
+            val downloadSig = (0 until assignments.length()).mapNotNull { i ->
+                val a = assignments.getJSONObject(i)
+                if (a.isNull("content_id")) null else a.optString("content_id", "").ifEmpty { null }
+            }.sorted().joinToString(",")
+            val contentChanged = downloadSig != lastDownloadSig
+            lastDownloadSig = downloadSig
+
+            // Download any missing local content (skip remote URLs).
+            // Runs for wall + single-zone; multi-zone drives its own rendering via ZoneManager
+            // (the startIfNeeded below is guarded so it won't run behind zones).
+            thread {
+                /*
+                 * Reclaim media nothing references any more. The media cache had no eviction at all: a
+                 * removed item's file stayed on disk forever, until a small stick filled up and every
+                 * new download failed. See CacheJanitor for the grace period and the low-space rule.
+                 *
+                 * ⚠️ ONLY FROM A PAYLOAD WITH ASSIGNMENTS — the same rule as the offline playlist copy
+                 * above. An empty push (suspended, unassigned, still draining) says nothing about what
+                 * the next offline period will need, and sweeping on it would empty the cache that
+                 * copy exists to play from. The item on screen is kept too: a #157 deferred removal
+                 * is still playing it. FIRST in this thread, so a disk that is already full is cleared
+                 * before the downloads below need the room.
+                 */
+                if (assignments.length() > 0 && (contentChanged || System.currentTimeMillis() - lastCacheSweepMs > CACHE_SWEEP_EVERY_MS)) {
+                    lastCacheSweepMs = System.currentTimeMillis()
+                    try {
+                        val keep = com.remotedisplay.player.data.CacheJanitor.referencedIds(data).toMutableSet()
+                        playlistController.currentContentId?.takeIf { it.isNotEmpty() }?.let { keep.add(it) }
+                        val swept = cacheJanitor.sweep(keep)
+                        swept.deletedIds.forEach { downloadCoordinator.forget(it) }
+                    } catch (e: Exception) { Log.w("MainActivity", "cache sweep failed: ${e.message}") }
+                }
+
+                // 3.0 campaigns: every zone and full-screen item a campaign can show is downloaded too,
+                // so the next layout's media is on disk before the switch (this player's preload).
+                val toFetch = org.json.JSONArray()
+                for (i in 0 until assignments.length()) toFetch.put(assignments.getJSONObject(i))
+                try { for (it in Campaign.items(Campaign.parse(data))) toFetch.put(it) } catch (e: Exception) { /* fallback list only */ }
+                for (i in 0 until toFetch.length()) {
+                    val item = toFetch.getJSONObject(i)
+                    // Widget assignments have no downloadable content file - skip
+                    // (also avoids getString throwing on a null content_id).
+                    val widgetId = if (item.isNull("widget_id")) "" else item.optString("widget_id", "")
+                    if (widgetId.isNotEmpty()) continue
+                    val contentId = if (item.isNull("content_id")) "" else item.optString("content_id", "")
+                    if (contentId.isEmpty()) continue
+                    val filename = item.optString("filename", "content")
+            // Bumped when the bytes behind this id change. A cached copy at a different revision is
+            // a MISS: the id, the filename and the URL are all identical after a replace, so this
+            // is the only thing that can tell a panel its copy is out of date.
+            val contentRev = item.optLong("content_rev", 0L)
+                    // org.json's optString(key, null) returns the STRING "null" when the value is JSON
+                    // null (not the fallback) — so a local item with "remote_url": null was being
+                    // misclassified as a remote stream, ack'd "ready", and NEVER downloaded, stranding
+                    // the screen on "waiting for content". Guard with isNull() like widget_id/content_id above.
+                    val remoteUrl = if (item.isNull("remote_url")) null else item.optString("remote_url", null)
+
+                    // Skip remote URL content - it streams directly
+                    if (!remoteUrl.isNullOrEmpty()) {
+                        ackContentOnce(contentId, "ready")
+                        continue
+                    }
+
+                    // Background download is now COORDINATED: single-flight per contentId + a bounded
+                    // pool + failure backoff. So a watchdog/ConnectionGuard reconnect mid-fetch can't
+                    // spawn a duplicate racing the .part, orphan/pile up threads, or storm a failing
+                    // URL. ensure() is non-blocking and idempotent: it re-acks cached content (SEED-A),
+                    // defers when the socket is down (watchdog owns recovery), respects backoff, and
+                    // downloads at most once. It acks ready/failed itself (deduped via onAck).
+                    if (contentChanged) downloadCoordinator.resetBackoff(contentId) // #170: retry now, don't wait out a stale backoff
+                    downloadCoordinator.ensure(contentId, filename, contentRev)
+
+                    /*
+                     * ⚠️ A BUNDLE NEEDS A SECOND THING FETCHED, AND THE LOOP ABOVE CANNOT KNOW IT.
+                     *
+                     * ensure() pulls /api/content/:id/file — for a bundle that is the .zip, which
+                     * nothing here can open. What renders is the server's flattened document at
+                     * /api/content/:id/bundle, a URL this sweep has never heard of. Without warming
+                     * it, a bundle plays only while the server is reachable, and the first play
+                     * after an outage starts is a black frame — on the exact feature whose whole
+                     * point is that a screen keeps working when the WAN does not.
+                     *
+                     * Already on a background thread here, so the fetch is inline and its failure
+                     * is nothing: playBundle retries on demand and falls back to the URL.
+                     */
+                    if (item.optString("mime_type", "") == ItemTiming.BUNDLE_MIME
+                        && !bundleCache.isCached(contentId, contentRev)) {
+                        bundleCache.fetch(config.serverUrl, contentId, contentRev)
+                    }
+                }
+
+                // OFFLINE STANDBY: a LOCAL default image (filepath, no remote_url) must be pinned into
+                // the content cache alongside the playlist, so it can render during off-hours when the
+                // WAN is down — the exact scenario default_content exists for. Same single-flight
+                // download path as an assignment. A remote_url default streams and can't be cached
+                // (it just won't show offline); a widget/no-id default has nothing to fetch.
+                try {
+                    val dc = if (data.isNull("default_content")) null else data.optJSONObject("default_content")
+                    if (dc != null) {
+                        val dcId = if (dc.isNull("content_id")) "" else dc.optString("content_id", "")
+                        val dcRemote = if (dc.isNull("remote_url")) null else dc.optString("remote_url", null)
+                        if (dcId.isNotEmpty() && dcRemote.isNullOrEmpty()) {
+                            downloadCoordinator.ensure(dcId, dc.optString("filename", "default"), dc.optLong("content_rev", 0L))
+                        }
+                    }
+                } catch (e: Exception) { /* standby pin is best-effort */ }
+
+                // Reclaim renders for bundles that have left the playlist. Unlike the media cache
+                // (CacheJanitor, above) this store is small and bounded by the playlist, so it is
+                // pruned on sight: one pass stops a long-lived panel accreting dead documents.
+                try {
+                    val live = mutableSetOf<String>()
+                    for (i in 0 until assignments.length()) {
+                        val a = assignments.getJSONObject(i)
+                        if (!a.isNull("content_id")) live.add(a.optString("content_id", ""))
+                    }
+                    if (live.isNotEmpty()) bundleCache.pruneToPlaylist(live)
+                } catch (e: Exception) { /* reclaim is best-effort */ }
+
+
+                // Start/resume playback immediately — do NOT wait on downloads (they're async now).
+                // Screen-resilience plays whatever is cached and skips not-yet-ready items; the 3s
+                // recheck swaps new content in once its download completes. Single-zone only; in
+                // multi-zone, ZoneManager drives each zone.
+                handler.post {
+                    if (zoneManager?.hasZones() != true && wallZones?.isActive != true) playlistController.startIfNeeded()
+                }
+            }
+            } // end else (not suspended)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Playlist update error: ${e.message}")
+            }
+        }
+
+        wsService?.onContentDelete = { contentId ->
+            downloadCoordinator.forget(contentId) // drop in-flight/backoff state so a re-add re-downloads
+            contentCache.deleteContent(contentId)
+            bundleCache.delete(contentId)          // its render lives in a separate store, so it needs saying
+            playlistController.removeContent(contentId)
+            // Update cached playlist to reflect deletion
+            try {
+                val cached = JSONObject(config.cachedPlaylist)
+                val arr = cached.optJSONArray("assignments")
+                if (arr != null) {
+                    val filtered = org.json.JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val item = arr.getJSONObject(i)
+                        if (item.optString("content_id") != contentId) filtered.put(item)
+                    }
+                    cached.put("assignments", filtered)
+                    config.cachedPlaylist = cached.toString()
+                }
+            } catch (_: Exception) {}
+        }
+
+        wsService?.onScreenshotRequest = {
+            // Handled by service now
+        }
+
+        wsService?.onRemoteStart = {
+            // Handled by service now
+        }
+
+        // Provide screenshot callback to service (composite capture on main thread).
+        // Capture the window content (not just rootView) so the reparented #109 PiP layer
+        // is included in remote-view screenshots.
+        // #473: while a visitor uses an interactive page the operator sees a blank frame and cannot
+        // inject input — they would otherwise watch (or type into) a stranger's form.
+        wsService?.privacyActive = { kiosk?.sessionActive == true }
+        // The HDMI input is a hardware plane no capture can read (LiveInput): the service sends a
+        // placeholder card while one is up, full screen or in any zone.
+        wsService?.isShowingLiveInput = {
+            (::mediaPlayer.isInitialized && mediaPlayer.isShowingLiveInput()) || zoneManager?.hasLiveInput() == true ||
+                wallZones?.hasLiveInput() == true
+        }
+        wsService?.onCaptureScreenshot = {
+            screenshotCapture.captureView(captureRoot, 40)
+        }
+
+        wsService?.onRemoteStop = {
+            remoteStreaming = false
+            stopScreenshotStreaming()
+        }
+
+        // #talk: duck the playlist (mute + freeze video) while a call/PA is active, so the
+        // announcement is heard; restore on stop. Same ducking the trigger overlay uses.
+        // 3.0 screen share ducks the same way; the two are OR-ed so one ending never un-ducks the other.
+        val applyDuck = {
+            val on = talkDucked || shareDucked
+            try { if (::mediaPlayer.isInitialized) mediaPlayer.setTalkMute(on) } catch (e: Throwable) { }
+            try { slideAudioPlayer?.setMuted(on) } catch (e: Throwable) { }
+        }
+        wsService?.onTalkDuck = { on -> talkDucked = on; applyDuck() }
+        wsService?.onShareDuck = { on -> shareDucked = on; applyDuck() }
+
+        // #talk video: render the operator's optional webcam fullscreen over the (paused) content.
+        // The track + its EglBase context arrive from AudioTalker via TalkVideoBus; a null track
+        // means the call ended, so tear the surface down.
+        com.remotedisplay.player.remote.TalkVideoBus.listener = { track, egl ->
+            runOnUiThread {
+                try {
+                    if (track != null && egl != null) {
+                        if (talkRenderer == null) {
+                            val r = org.webrtc.SurfaceViewRenderer(this)
+                            r.init(egl, null)
+                            r.setScalingType(org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+                            r.setEnableHardwareScaler(true)
+                            r.setZOrderMediaOverlay(true)   // above the content video surface
+                            pipLayout.addView(r, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+                            talkRenderer = r
+                        }
+                        try { track.addSink(talkRenderer) } catch (e: Throwable) { }
+                    } else {
+                        talkRenderer?.let { rr -> try { pipLayout.removeView(rr); rr.release() } catch (e: Throwable) { } }
+                        talkRenderer = null
+                    }
+                } catch (e: Throwable) { }
+            }
+        }
+
+        wsService?.onRemoteTouch = { x, y, action ->
+            when (action) {
+                "tap" -> touchInjector.injectTap(rootView, x, y)
+                "down" -> touchInjector.injectDown(rootView, x, y)
+                "move" -> touchInjector.injectMove(rootView, x, y)
+                "up" -> touchInjector.injectUp(rootView, x, y)
+            }
+        }
+
+        wsService?.onRemoteKey = { _ ->
+            // Key injection handled in WebSocketService directly
+        }
+
+        wsService?.onCommand = { type, payload ->
+            Log.i("MainActivity", "Command received: $type")
+            when (type) {
+                // #161 Tier-2: real reboot on a device owner. The `input keyevent`/power-dialog hacks
+                // are retired — off-owner we best-effort the accessibility power dialog, else report
+                // unsupported (never the denied exec, which was theater on a non-rooted panel).
+                "reboot", "shutdown", "power_menu" -> {
+                    if (stPolicy().reboot()) {
+                        Log.i("MainActivity", "Reboot via device owner")
+                    } else {
+                        val svc = com.remotedisplay.player.service.PowerAccessibilityService.instance
+                        if (svc != null) svc.showPowerDialog()
+                        else Log.w("MainActivity", "reboot: not device owner and no accessibility — unsupported on this panel")
+                    }
+                }
+                // Screen off = real lock on owner/admin (FORCE_LOCK), else accessibility lock. Exec retired.
+                "screen_off", "lock_now" -> {
+                    releaseLockScreenWake()   // or the lock is undone by our own turn-screen-on
+                    if (!stPolicy().lockNow()) {
+                        com.remotedisplay.player.service.PowerAccessibilityService.instance?.lockScreen()
+                            ?: Log.w("MainActivity", "screen_off/lock_now: no owner/admin/accessibility — unsupported")
+                    }
+                }
+                // Was a logged no-op: the retired `input keyevent 224` is denied to an app UID, and
+                // that one failure was read as "no wake path exists". A wake LOCK is a different
+                // mechanism needing only WAKE_LOCK, which we already hold — so screen_off worked
+                // and screen_on did not, and an operator who slept a panel overnight had to drive
+                // out to wake it. Losing the screen is the expensive direction to fail in.
+                "screen_on" -> {
+                    val woke = systemControl.wakeScreen()
+                    // The wake lock lights the panel; on a locked device the keyguard is still in
+                    // front of the player, so ask for it to be dismissed too. Both are best-effort
+                    // and independent — a device that ignores one may honour the other.
+                    runOnUiThread {
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                                setShowWhenLocked(true)
+                                setTurnScreenOn(true)
+                                (getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager)
+                                    ?.requestDismissKeyguard(this, null)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                window.addFlags(
+                                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                                        WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                                )
+                            }
+                        } catch (e: Throwable) { Log.w("MainActivity", "screen_on keyguard: ${e.message}") }
+                    }
+                    Log.i("MainActivity", "screen_on: wake=$woke")
+                }
+                // #161 Tier-2 (all no-op off-owner via STPolicy): kiosk lock-task, time/tz, status bar,
+                // uninstall block. Device owner enters lock-task silently; others get screen-pinning.
+                "kiosk_lock" -> setKioskMode(true)
+                "kiosk_unlock" -> setKioskMode(false)
+                "set_time" -> { val ms = payload?.optLong("millis", 0L) ?: 0L; if (ms > 0) stPolicy().setTime(ms) }
+                "set_timezone" -> { val tz = payload?.optString("timezone", "") ?: ""; if (tz.isNotEmpty()) stPolicy().setTimeZone(tz) }
+                "status_bar" -> stPolicy().setStatusBarDisabled(payload?.optBoolean("disabled", true) ?: true)
+                "block_uninstall" -> stPolicy().setUninstallBlocked(true)
+                "unblock_uninstall" -> stPolicy().setUninstallBlocked(false)
+                "launch" -> {
+                    val intent = android.content.Intent(this@MainActivity, MainActivity::class.java).apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    startActivity(intent)
+                }
+                "update" -> {
+                    // FORCED: an operator aimed this at ONE device and is watching the screen.
+                    // Ignores the backoff cap and the MDM stand-down, and reports the outcome back
+                    // — including "nothing to do", which used to return in silence and made a
+                    // working button look broken.
+                    Log.i("MainActivity", "Force update check triggered (operator)")
+                    if (::updateChecker.isInitialized) updateChecker.checkForUpdate(forced = true)
+                }
+                // #161 device-owner tooling: push + silently install an arbitrary APK from a URL.
+                // Escape hatch for a panel holding a stale/bad staged APK: drop every cached file
+                // so the next check downloads afresh. Only ever deletes caches.
+                "clear_update_cache" -> {
+                    if (::updateChecker.isInitialized) {
+                        val n = updateChecker.clearUpdateCache()
+                        Log.i("MainActivity", "clear_update_cache removed $n file(s)")
+                    }
+                }
+                "install_apk" -> {
+                    val url = payload?.optString("url", "") ?: ""
+                    if (url.isNotBlank() && ::updateChecker.isInitialized) {
+                        Log.i("MainActivity", "install_apk from $url")
+                        updateChecker.installFromUrl(url)
+                    }
+                }
+                "refresh" -> {
+                    wsService?.connect()
+                }
+                // #160 Track-A system control — NO device owner required. All best-effort (no-op if
+                // unsupported at this panel's tier). Tier 0: media volume + per-window brightness.
+                "set_volume" -> {
+                    val f = payload?.optDouble("level", -1.0) ?: -1.0   // 0..1 of media stream
+                    if (f >= 0) { systemControl.setMediaVolume(f); wsService?.reportInfoNow() }
+                }
+                "set_brightness" -> {                                    // per-window (Tier 0); -1 = follow system
+                    val f = payload?.optDouble("level", -1.0) ?: -1.0
+                    runOnUiThread { systemControl.setWindowBrightness(window, f); wsService?.reportInfoNow() }
+                }
+                // Tier 1: system-wide brightness. WRITE_SETTINGS OR a device owner (setSystemSetting).
+                "set_system_brightness" -> {
+                    val f = payload?.optDouble("level", -1.0) ?: -1.0
+                    if (f >= 0) { systemControl.setSystemBrightness(f); wsService?.reportInfoNow() }
+                }
+                "set_screen_timeout" -> {                                // ms; <=0 = never
+                    val ms = payload?.optInt("ms", -1) ?: -1
+                    if (ms != -1) { systemControl.setScreenOffTimeout(ms); wsService?.reportInfoNow() }
+                }
+                // #109 debug: toggle the PiP magenta-box + geometry logging (default off).
+                // device:command {type:"pip_debug", payload:{enabled:true}}.
+                "pip_debug" -> {
+                    val on = payload?.optBoolean("enabled", false) ?: false
+                    if (::pipOverlay.isInitialized) pipOverlay.pipDebug = on
+                    Log.i("MainActivity", "PiP debug ${if (on) "ENABLED" else "disabled"}")
+                }
+            }
+        }
+
+        wsService?.onWallSync = { data -> if (::wallController.isInitialized) wallController.onSync(data) }
+        wsService?.onWallSyncRequest = { data -> if (::wallController.isInitialized) wallController.onSyncRequest(data) }
+        // #group-sync is clock/schedule now (no leader relay). The server only nudges an immediate
+        // re-align (dashboard "Resync now"); the schedule tick otherwise runs entirely locally.
+        wsService?.onGroupResync = { if (::groupSchedule.isInitialized) groupSchedule.resync() }
+
+        // #109: PiP overlay show/clear (posted to the main thread by the service).
+        wsService?.onPipShow = { data -> if (::pipOverlay.isInitialized) pipOverlay.show(data) }
+        wsService?.onPipClear = { data -> if (::pipOverlay.isInitialized) pipOverlay.clearFrom(data) }
+
+        // #129: real-time mute. Apply immediately if the toggled item is the one playing now;
+        // otherwise it's already persisted server-side and lands via the next playlist update.
+        wsService?.onMuteChanged = { data ->
+            val contentId = if (data.isNull("content_id")) "" else data.optString("content_id", "")
+            val current = playlistController.currentContentId ?: ""
+            if (contentId.isNotEmpty() && contentId == current && ::mediaPlayer.isInitialized) {
+                mediaPlayer.setVideoMuted(data.optBoolean("muted", false))
+            }
+        }
+
+        wsService?.onRegistered = { _ ->
+            hideStatus()
+            // Root-2 (SEED-B): a disconnect may have dropped in-flight content-acks. Clear the
+            // de-dup set so the next playlist-update re-acks all content and the CMS re-syncs.
+            ackedContent.clear()
+        }
+
+    }
+
+    // Root-2 content-ack de-dup. Re-acking content state (SEED-A) fixes the CMS "stuck downloading"
+    // label, but we must not re-ack the same (content,status) every 60s playlist refresh. This set
+    // is cleared on each (re)registration (see onRegistered) so a reconnect re-acks everything the
+    // server may have missed while we were disconnected (SEED-B), but is quiet within a session.
+    private val ackedContent = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /**
+     * Download the media every assigned trigger needs, so a fire has something to show.
+     *
+     * Idempotent and non-blocking: ensure() is single-flight per contentId and returns immediately
+     * for anything already cached, so running this on every payload costs nothing in the steady
+     * state. Items carry the same shape as an assignment because the server projects a trigger's
+     * target as the playlist's published snapshot.
+     */
+    private fun pinTriggerMedia(data: org.json.JSONObject) {
+        if (!::downloadCoordinator.isInitialized) return
+        val triggers = data.optJSONArray("triggers") ?: return
+        var pinned = 0
+        for (i in 0 until triggers.length()) {
+            val t = triggers.optJSONObject(i) ?: continue
+            val items = t.optJSONArray("items") ?: continue
+            for (j in 0 until items.length()) {
+                val item = items.optJSONObject(j) ?: continue
+                // isNull() first: org.json's optString hands back the STRING "null" for a JSON null.
+                val contentId = if (item.isNull("content_id")) "" else item.optString("content_id", "")
+                if (contentId.isEmpty()) continue          // widgets carry no content to fetch
+                // A remote item (a stream, a hold://) has no file behind /api/content/:id/file.
+                if (!item.isNull("remote_url") && item.optString("remote_url", "").isNotEmpty()) continue
+                val filename = item.optString("filename", "content")
+                val rev = item.optLong("content_rev", 0L)
+                downloadCoordinator.ensure(contentId, filename, rev)
+                pinned++
+            }
+        }
+        if (pinned > 0) Log.i("MainActivity", "[trigger] pinning $pinned trigger item(s)")
+    }
+
+    private fun ackContentOnce(contentId: String, status: String) {
+        if (ackedContent.add("$contentId:$status")) {
+            // a status change for this content supersedes the opposite one
+            ackedContent.remove("$contentId:${if (status == "ready") "failed" else "ready"}")
+            wsService?.sendContentAck(contentId, status)
+        }
+    }
+
+    private fun playItem(item: PlaylistItem) {
+        hideStatus()
+        com.remotedisplay.player.util.DebugLog.i("Player", "playItem: ${item.filename} mime=${item.mimeType} widget=${item.widgetId ?: "-"} zone=fullscreen")
+
+        // Widget content - render fullscreen in a WebView (single-zone / fullscreen
+        // layouts; multi-zone widgets go through ZoneManager). Previously unhandled,
+        // so widgets were blank/broken in default-fullscreen and the fullscreen template.
+        // #473: an interactive webpage item plays in its own fresh WebView (KioskSession), loading the
+        // site TOP-LEVEL so its forms, cookies and navigation work and the allowlist can see them.
+        // Fullscreen only: in a wall or a synced group one screen cannot hold the shared timeline, so
+        // there the item renders passively through the normal widget path below.
+        val kioskCfg = if (item.isWidget) com.remotedisplay.player.kiosk.KioskConfig.parse(item.widgetType, item.widgetConfig) else null
+        val kioskAllowed = kioskCfg != null && !playlistController.isFollower &&
+            !(::wallController.isInitialized && wallController.isActive) &&
+            !(::groupSchedule.isInitialized && groupSchedule.isActive)
+        if (kioskAllowed && kiosk != null) {
+            mediaPlayer.stop()
+            kiosk?.show(item.itemKey, kioskCfg!!, item.widgetId)
+            wsService?.sendPlaybackState(item.widgetId ?: "", 0f)
+            return
+        }
+        kiosk?.hide()
+
+        // A HOLD: nothing new for its duration. FREEZE keeps the outgoing frame, paused; BLANK clears
+        // to the background. Its duration is a timer (ItemTiming.endsOnTimer); in a wall or a synced
+        // group the tick moves on instead. Never a file, never "unknown type -> skip".
+        if (Hold.isHold(item.mimeType)) {
+            if (Hold.mode(item.remoteUrl) == Hold.Mode.FREEZE) mediaPlayer.holdFreeze() else mediaPlayer.holdBlank()
+            wsService?.sendPlaybackState(item.contentId, 0f)
+            return
+        }
+
+        if (item.isWidget) {
+            // rev makes the URL change when — and only when — the widget's content changed, so an
+            // edit reloads while an untouched widget still hits the no-flash reuse path.
+            val url = "${config.serverUrl}/api/widgets/${item.widgetId}/render" +
+                (if (config.deviceId.isNotEmpty()) "?device=" + android.net.Uri.encode(config.deviceId) else "?d=") +
+                "&rev=${item.widgetRev}" +
+                com.remotedisplay.player.util.WidgetUrls.panelFragment(item.widgetPanel)
+            Log.i("MainActivity", "Playing widget fullscreen: ${url.substringBefore('#')}")
+            mediaPlayer.showWidget(url)
+            wsService?.sendPlaybackState(item.contentId.ifEmpty { item.widgetId ?: "" }, 0f)
+            return
+        }
+
+        // HTML bundle - the server flattens the uploaded .wgt/.zip into one self-contained
+        // document and this mounts it exactly like a widget. `rev` is contentRev, so replacing the
+        // archive changes the URL; without it MediaPlayerManager.showWidget's same-URL reuse would
+        // keep the OLD bundle on screen after a replace, which is the same trap widget_rev exists
+        // for.
+        if (item.mimeType == ItemTiming.BUNDLE_MIME) {
+            playBundle(item)
+            return
+        }
+
+        // The screen's own HDMI input (LiveInput). Before the remote-URL branch below: it carries a
+        // remote_url (hdmi://<port>) but there is nothing to stream. No input on this device — the
+        // server should never have sent it, but a box can lose one — is a fault like a dead stream.
+        if (com.remotedisplay.player.player.LiveInput.isLiveInput(item.mimeType)) {
+            if (!mediaPlayer.playLiveInput(item.remoteUrl ?: "hdmi://", item.muted)) {
+                Log.w("MainActivity", "No HDMI input for ${item.remoteUrl} — skipping")
+                handler.post { playlistController.onVideoFault() }
+            }
+            wsService?.sendPlaybackState(item.contentId, 0f)
+            return
+        }
+
+        // YouTube content - play in WebView
+        if (item.mimeType == "video/youtube" && !item.remoteUrl.isNullOrEmpty()) {
+            Log.i("MainActivity", "Playing YouTube: ${item.remoteUrl}")
+            mediaPlayer.playYoutube(item.remoteUrl!!, item.durationSec, item.muted, playlistController.playsToEnd(item))
+            wsService?.sendPlaybackState(item.contentId, 0f)
+            return
+        }
+
+        // Remote URL content - stream directly, no download
+        if (item.isRemote) {
+            Log.i("MainActivity", "Playing remote content: ${item.remoteUrl}")
+            if (item.mimeType.startsWith("video/")) {
+                applyVideoTurn(item)
+                mediaPlayer.playVideoFromUrl(item.remoteUrl!!, item.muted) // remote video: plain (no wipe)
+            } else if (item.mimeType.startsWith("image/")) {
+                mediaPlayer.showImageFromUrl(item.remoteUrl!!, item.transition)
+            }
+            wsService?.sendPlaybackState(item.contentId, 0f)
+            return
+        }
+
+        // Local content - play from cache. Screen-resilience: the controller only advances to
+        // items whose content is READY, so reaching here uncached is a rare race (e.g. the file
+        // was evicted between selection and play). NEVER blank or show a "Downloading…" screen —
+        // keep whatever is on screen and move on; the background download loop (onPlaylistUpdate)
+        // fetches it and it plays once fully + validly downloaded. Content update is a BACKGROUND
+        // operation; we only ever SWAP to fully-downloaded content.
+        val file = contentCache.getCachedFile(item.contentId)
+        if (file == null) {
+            Log.i("MainActivity", "Content not ready at play time (${item.filename}) — keeping screen, advancing (bg download continues)")
+            downloadCoordinator.ensure(item.contentId, item.filename, item.contentRev) // ensure it's being fetched (single-flight)
+            handler.post { playlistController.next() }
+            return
+        }
+
+        playFile(item, file)
+    }
+
+    /**
+     * Play an HTML bundle: the server's flattened document, from disk when we have it.
+     *
+     * ⚠️ CACHE FIRST, AND SYNCHRONOUSLY, because this is the offline path. A cached render is shown
+     * immediately on the main thread — no fetch, no await, nothing that can fail with the WAN down.
+     * Only a MISS goes to the network, and it does so on a background thread so a slow or dead
+     * server cannot stall playback; the item advances on its timer either way (ItemTiming).
+     *
+     * The last-resort fallback loads the URL directly. That path cannot work offline, but it is
+     * strictly better than a black screen on a player whose cache was evicted while online.
+     */
+    private fun playBundle(item: PlaylistItem) {
+        val key = "${item.contentId}@${item.contentRev}"
+        val cached = bundleCache.cachedHtml(item.contentId, item.contentRev)
+        if (cached != null) {
+            Log.i("MainActivity", "Playing HTML bundle from cache: $key")
+            mediaPlayer.showBundle(cached, key)
+            wsService?.sendPlaybackState(item.contentId, 0f)
+            return
+        }
+        Log.i("MainActivity", "HTML bundle not cached ($key) — fetching")
+        Thread {
+            val html = bundleCache.fetch(config.serverUrl, item.contentId, item.contentRev)
+            handler.post {
+                // The playlist may have moved on while we were fetching; mounting then would yank
+                // whatever is now on screen. Only show it if this item is still the current one.
+                if (playlistController.currentItem?.contentId != item.contentId) return@post
+                if (html != null) {
+                    mediaPlayer.showBundle(html, key)
+                } else {
+                    Log.w("MainActivity", "Bundle fetch failed for $key — falling back to direct URL")
+                    mediaPlayer.showWidget("${config.serverUrl}/api/content/${item.contentId}/bundle?rev=${item.contentRev}")
+                }
+                wsService?.sendPlaybackState(item.contentId, 0f)
+            }
+        }.start()
+    }
+
+    /*
+     * 3.0 TV-safe video: the quarter-turn to undo for a video the operator marked "already rotated
+     * for portrait screens" — the stage's own turn on a portrait screen, else 0. Never on a wall
+     * (currentOrientation is null there; the wall geometry owns rootView).
+     */
+    private fun prerotatedTurn(item: PlaylistItem): Float {
+        if (!item.videoPrerotated || currentOrientation == null) return 0f
+        val q = ((rootView.rotation % 360f) + 360f) % 360f
+        return if (q == 90f || q == 270f) q else 0f
+    }
+
+    private fun applyVideoTurn(item: PlaylistItem): Float {
+        val turn = prerotatedTurn(item)
+        val (w, h) = windowSize()
+        mediaPlayer.setVideoCounterTurn(turn, w.toInt(), h.toInt())
+        return turn
+    }
+
+    private fun playFile(item: PlaylistItem, file: java.io.File) {
+        if (item.mimeType.startsWith("video/")) {
+            // A counter-turned view cannot be composited into a wipe (the snapshot is the stage's).
+            val turn = applyVideoTurn(item)
+            mediaPlayer.playVideo(file, item.muted, if (turn != 0f) null else item.transition)
+        } else if (item.mimeType.startsWith("image/")) {
+            mediaPlayer.showImage(file, item.transition)
+        } else {
+            /*
+             * ⚠️ AN UNRECOGNISED MIME MUST ADVANCE, NOT SIT THERE.
+             *
+             * This chain had no else, so an item of any other type mounted NOTHING — and
+             * ItemTiming.endsOnTimer returns false for it, so no advance was armed either. The
+             * playlist stopped on that item permanently, which is precisely the YouTube defect
+             * documented in PlaylistSelection.kt in a new place. It is reachable in one call:
+             * POST /api/content/remote stores mime_type verbatim from the request body with no
+             * validation, so a typo is enough.
+             */
+            Log.w("MainActivity", "Unrecognised item type ${item.mimeType} (${item.filename}) — skipping")
+            handler.post { playlistController.next() }
+            return
+        }
+
+        // Report playback state
+        wsService?.sendPlaybackState(item.contentId, 0f)
+    }
+
+    // ---- Multi-zone layout: shared by the live server update AND the cached cold-start restore ----
+    // Extracted so an offline cold boot renders straight into its zones instead of flashing fullscreen
+    // first (the single-zone playlistController path) and snapping into zones only once the server
+    // reconnects. The signatures let a later identical server payload be recognised as unchanged.
+
+    private fun zoneAssignmentSig(assignments: org.json.JSONArray): String =
+        (0 until assignments.length()).map { i ->
+            val a = assignments.getJSONObject(i)
+            "${a.optString("content_id")}:${a.optString("zone_id")}:${a.optString("widget_id")}:${a.optLong("widget_rev", 0L)}"
+        }.sorted().joinToString("|")
+
+    private fun zoneGeometrySig(layoutZones: org.json.JSONArray): String =
+        (0 until layoutZones.length()).map { i ->
+            val z = layoutZones.getJSONObject(i)
+            "${z.optString("id")}:${z.optDouble("x_percent", -1.0)}:${z.optDouble("y_percent", -1.0)}:" +
+                "${z.optDouble("width_percent", -1.0)}:${z.optDouble("height_percent", -1.0)}:" +
+                "${z.optInt("z_index", 0)}:${z.optString("zone_type")}:${z.optString("fit_mode")}"
+        }.sorted().joinToString("|")
+
+    /** Build zones and render assignments into them, recording the change-detection signatures so a
+     *  later identical server payload is a no-op. Call on the main thread. */
+    /*
+     * 3.0 campaigns: draw one step. A layout step is its own zones; a full-screen item is a one-zone
+     * layout. The single-item engine stays stopped while a campaign runs, and the zone signatures are
+     * cleared so the normal path rebuilds from scratch if the campaign ends.
+     */
+    private fun renderCampaignStep(step: CampaignStep) {
+        hideStatus()
+        kiosk?.hide()
+        if (::mediaPlayer.isInitialized) mediaPlayer.stop()
+        playlistController.stop()
+        playerView.visibility = View.GONE
+        imageView.visibility = View.GONE
+        val zm = zoneManager ?: return
+        when (step) {
+            is CampaignStep.Layout -> {
+                zm.setupZones(step.zones, step.layoutId)
+                zm.renderAssignments(step.assignments(), config.serverUrl, contentCache, config.deviceId)
+            }
+            is CampaignStep.Item -> {
+                zm.setupZones(Campaign.fullScreenZones(), Campaign.FULL_ZONE_ID)
+                val a = JSONObject(step.item.toString()).put("zone_id", Campaign.FULL_ZONE_ID)
+                zm.renderAssignments(org.json.JSONArray().put(a), config.serverUrl, contentCache, config.deviceId)
+            }
+        }
+        zm.lastAssignmentSig = null
+        zm.lastZoneSig = null
+    }
+
+    private fun applyMultiZoneLayout(layoutZones: org.json.JSONArray, layoutId: String, assignments: org.json.JSONArray) {
+        hideStatus()
+        kiosk?.hide()
+        if (::mediaPlayer.isInitialized) mediaPlayer.stop()
+        playlistController.stop()
+        playerView.visibility = View.GONE
+        imageView.visibility = View.GONE
+        zoneManager?.setupZones(layoutZones, layoutId)
+        zoneManager?.renderAssignments(assignments, config.serverUrl, contentCache, config.deviceId)
+        zoneManager?.lastAssignmentSig = zoneAssignmentSig(assignments)
+        zoneManager?.lastZoneSig = zoneGeometrySig(layoutZones)
+    }
+
+    /**
+     * The server-disciplined clock group sync and wall zones share. Before the service is bound (a
+     * cold boot restoring from cache) it falls back to the offset the service last persisted, so an
+     * offline reboot still lands on the same slot as the rest of the wall.
+     */
+    private fun syncedNowMs(): Long = wsService?.syncedNowMs() ?: (System.currentTimeMillis() + try {
+        getSharedPreferences("remote_display", MODE_PRIVATE).getLong("clock_offset_ms", 0L)
+    } catch (e: Throwable) { 0L })
+
+    /**
+     * Enter (or refresh) wall zones: the wall transform without the relay, the fullscreen player
+     * stopped, and every zone on the shared clock. Main thread. The renderer places the zones from a
+     * layout listener, so they land on the canvas the transform sized, not on a stale window.
+     */
+    private fun enterWallZones(wallObj: JSONObject, layoutZones: org.json.JSONArray, assignments: org.json.JSONArray) {
+        val cfg = parseWallConfig(wallObj).copy(canvasLayout = true)
+        val audio = wallObj.optJSONArray("audio_zones")?.let { a -> (0 until a.length()).map { a.optString(it, "") }.filter { it.isNotEmpty() } } ?: emptyList()
+        val first = wallZones?.isActive != true
+        wallController.apply(cfg)
+        if (first) {
+            hideStatus()
+            kiosk?.hide()
+            if (::mediaPlayer.isInitialized) mediaPlayer.stop()
+            playlistController.stop()
+            playerView.visibility = View.GONE
+            imageView.visibility = View.GONE
+        }
+        val key = WallZones.configKey(cfg.wallId, cfg.isLeader, cfg.rotation, cfg.screen, cfg.player, true, audio)
+        wallZones?.apply(layoutZones, assignments, key, cfg.screen, cfg.player, audio, config.serverUrl, config.deviceId, contentCache)
+    }
+
+    private fun showStatus(message: String) {
+        statusOverlay.visibility = View.VISIBLE
+        statusText.text = message
+    }
+
+    private fun hideStatus() {
+        statusOverlay.visibility = View.GONE
+    }
+
+    private fun captureAndSendScreenshot() {
+        Log.i("MainActivity", "Capturing screenshot")
+        val base64 = screenshotCapture.captureView(captureRoot, 40)
+        if (base64 != null) {
+            Log.i("MainActivity", "Screenshot captured, size=${base64.length} chars, sending...")
+            wsService?.sendScreenshot(base64)
+        } else {
+            Log.e("MainActivity", "Screenshot capture returned null!")
+        }
+    }
+
+    private fun startScreenshotStreaming() {
+        stopScreenshotStreaming()
+        screenshotStreamRunnable = object : Runnable {
+            override fun run() {
+                if (remoteStreaming) {
+                    captureAndSendScreenshot()
+                    handler.postDelayed(this, 1000) // ~1 FPS
+                }
+            }
+        }
+        handler.post(screenshotStreamRunnable!!)
+    }
+
+    private fun stopScreenshotStreaming() {
+        screenshotStreamRunnable?.let { handler.removeCallbacks(it) }
+        screenshotStreamRunnable = null
+    }
+
+    private fun handleRemoteKey(keycode: String) {
+        // Use shell `input keyevent` for system keys (HOME, BACK, etc.)
+        // This works from the app process on most Android TV devices
+        thread {
+            try {
+                val code = when (keycode) {
+                    "KEYCODE_HOME" -> "3"
+                    "KEYCODE_BACK" -> "4"
+                    "KEYCODE_MENU" -> "82"
+                    "KEYCODE_VOLUME_UP" -> "24"
+                    "KEYCODE_VOLUME_DOWN" -> "25"
+                    "KEYCODE_DPAD_UP" -> "19"
+                    "KEYCODE_DPAD_DOWN" -> "20"
+                    "KEYCODE_DPAD_LEFT" -> "21"
+                    "KEYCODE_DPAD_RIGHT" -> "22"
+                    "KEYCODE_DPAD_CENTER" -> "23"
+                    "KEYCODE_ENTER" -> "66"
+                    "KEYCODE_POWER" -> "26"
+                    else -> return@thread
+                }
+                Log.i("MainActivity", "Injecting key: $keycode ($code)")
+                val process = Runtime.getRuntime().exec(arrayOf("input", "keyevent", code))
+                process.waitFor()
+                Log.i("MainActivity", "Key injection result: ${process.exitValue()}")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Key injection failed: ${e.message}")
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        // Don't exit the app on back press - this is a kiosk/signage app.
+        // Multi-tap detection is handled in dispatchKeyEvent.
+        Log.i("MainActivity", "Back press intercepted (kiosk mode)")
+    }
+
+    // Multi-tap BACK/ESC detection — 2+ taps → PIN → settings (which holds Exit).
+    // Catches hardware BACK, D-pad BACK (KEYCODE_BACK=4), and ESC (111).
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                    handleBackTap()
+                    return true  // consume — never let the system handle it
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun handleBackTap() {
+        val now = System.currentTimeMillis()
+        backTapTimes.add(now)
+
+        // Trim taps older than the window
+        while (backTapTimes.isNotEmpty() && now - backTapTimes.first() > TAP_WINDOW_MS) {
+            backTapTimes.removeAt(0)
+        }
+
+        // Cancel any pending evaluation and re-schedule
+        backTapRunnable?.let { handler.removeCallbacks(it) }
+        backTapRunnable = Runnable {
+            val count = backTapTimes.size
+            backTapTimes.clear()
+            when {
+                // #471: every multi-tap goes through the PIN. 3+ presses used to open the exit
+                // dialog directly, so anyone with a remote, a keyboard or the nav bar could close
+                // the kiosk - and 3 presses are easier to hit than exactly 2. Exit is still one
+                // item away, inside the PIN-gated settings menu.
+                count >= 2 -> showPinDialog()
+                // count == 1 → ignored (kiosk)
+            }
+        }
+        handler.postDelayed(backTapRunnable!!, TAP_WINDOW_MS)
+    }
+
+    // Show a dialog containing a text field over the IMMERSIVE_STICKY fullscreen so the soft
+    // keyboard actually attaches. A dialog shown over an immersive activity otherwise doesn't gain
+    // window focus -> its EditText gets no cursor/IME, so on a kiosk with no hardware keyboard the
+    // PIN/URL can't be typed. Fix: mark the dialog NOT_FOCUSABLE *before* show() so it doesn't steal
+    // focus and reset the activity's immersive flags; mirror those flags onto the dialog; then clear
+    // NOT_FOCUSABLE *after* show() so the IME can attach to the focused field.
+    @Suppress("DEPRECATION")
+    private fun showImeDialog(dialog: AlertDialog, focus: android.view.View?) {
+        val w = dialog.window
+        w?.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        )
+        w?.decorView?.systemUiVisibility = window.decorView.systemUiVisibility
+        dialog.show()
+        w?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        w?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        focus?.requestFocus()
+    }
+
+    private fun showPinDialog() {
+        val input = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            hint = getString(R.string.settings_pin_hint)
+            setSingleLine()
+        }
+        val container = FrameLayout(this).apply {
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, 0)
+            addView(input)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_pin_title))
+            .setView(container)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                if (input.text.toString() == config.settingsPin) {
+                    showSettingsDialog()
+                } else {
+                    Toast.makeText(this, getString(R.string.settings_pin_wrong), Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        showImeDialog(dialog, input)
+    }
+
+    private fun showSettingsDialog() {
+        val serverUrl = config.serverUrl
+        val connected = wsService?.isConnected() == true
+        val version = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (_: Exception) { "?" }
+
+        // #161: live privilege tier for the Hardware control entry.
+        val tier = try { com.remotedisplay.player.admin.STPolicy(this).tier() } catch (_: Throwable) { 0 }
+        val items = arrayOf(
+            "${getString(R.string.settings_change_server)}\n  ${if (serverUrl.isEmpty()) "—" else serverUrl}",
+            getString(R.string.settings_reconfigure),
+            getString(R.string.settings_permissions),
+            "${getString(R.string.settings_hardware_control)}\n  ${hwTierShort(tier)}",
+            "${getString(R.string.settings_device_info)}\n  ${getString(R.string.settings_info_device)}: ${config.deviceId.take(8)}…  |  v$version  |  ${if (connected) "●" else "○"}",
+            getString(R.string.settings_exit)
+        )
+
+        // Requested from the field: with kiosk on, the PIN menu is the ONLY way back out on a
+        // panel with no other input. Shown only when locked — an entry that does nothing is worse
+        // than no entry, and this menu is already long.
+        val kiosk = kioskModeEnabled()
+        val menu = if (kiosk) items + getString(R.string.settings_exit_kiosk) else items
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_title))
+            .setItems(menu) { _, which ->
+                when (which) {
+                    items.size -> {   // the appended exit-kiosk entry; only present when locked
+                        setKioskMode(false)
+                        Toast.makeText(this, getString(R.string.settings_exit_kiosk_done), Toast.LENGTH_LONG).show()
+                    }
+                    0 -> showChangeServerDialog(serverUrl)
+                    1 -> {
+                        config.clearDeviceCredentials()
+                        navigateToProvisioning(serverUrl)
+                    }
+                    2 -> showPermissionsDialog()
+                    3 -> showHardwareControlDialog()
+                    5 -> showExitDialog()
+                    // 4 = info (read-only, dismiss)
+                }
+            }
+            .setOnCancelListener { /* dismissed, back to kiosk */ }
+            .show()
+    }
+
+    /*
+     * Kiosk lock, remembered.
+     *
+     * startLockTask() is a runtime call on the Activity — it does not survive a reboot. A panel
+     * locked from the dashboard came back up unlocked, with nothing to say so, and the only way
+     * to notice was that someone could suddenly leave the app. Reported from the field.
+     *
+     * The flag is written BEFORE the lock is attempted so a device that reboots mid-call still
+     * comes back in the state the operator asked for; a lock that then fails is retried on the
+     * next start rather than being forgotten.
+     */
+    /**
+     * The Activity's ONLY part in a scheduled power window: the window flag.
+     *
+     * ⚠️ FLAG_KEEP_SCREEN_ON IS THE WHOLE REASON THIS CALLBACK EXISTS. MainActivity adds it
+     * unconditionally in onCreate so a kiosk never sleeps mid-playback. Leave it set during a
+     * scheduled-off window and the first person to walk past and touch the panel at 23:00 relights
+     * it FOR THE REST OF THE NIGHT — the OS will not sleep a window that is asking to stay awake,
+     * and the schedule has no edge left to fire until 06:00. The screen an operator scheduled off
+     * burns until morning while the dashboard reports it as scheduled_off the whole time.
+     *
+     * Only a window can hold that flag, which is why this one piece lives in the Activity. The
+     * blanking and the waking are the SERVICE's (WebSocketService.blankPanel / wakePanel), because
+     * a scheduled off is lockNow() and therefore stops this Activity: anything owned here would
+     * switch the panel off and then die with it, and the morning wake would never run.
+     */
+    /**
+     * Undo what screen_on set so a lock STAYS dark: show-when-locked + turn-screen-on (and their
+     * pre-O_MR1 window flags). screen_on sets them again when the panel is woken on purpose. Must run
+     * on the main thread, BEFORE lockNow() — see WebSocketService.onBeforeBlank.
+     */
+    private fun releaseLockScreenWake() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(false)
+                setTurnScreenOn(false)
+            }
+            @Suppress("DEPRECATION")
+            window.clearFlags(
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+            )
+        } catch (e: Throwable) { Log.w("MainActivity", "releaseLockScreenWake: ${e.message}") }
+    }
+
+    private fun applyPowerWindowFlag(off: Boolean) {
+        runOnUiThread {
+            try {
+                if (off) {
+                    // Let the OS sleep the panel again after any incidental wake.
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    // Playback is live again, so the kiosk must stop sleeping.
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            } catch (e: Throwable) {
+                Log.w("MainActivity", "applyPowerWindowFlag($off): ${e.message}")
+            }
+        }
+    }
+
+    private fun setKioskMode(enabled: Boolean) {
+        try {
+            getSharedPreferences("screentinker", Context.MODE_PRIVATE)
+                .edit().putBoolean("kiosk_enabled", enabled).apply()
+        } catch (e: Throwable) { Log.w("MainActivity", "kiosk pref: ${e.message}") }
+
+        if (enabled) {
+            stPolicy().setLockTaskAllowed(true)
+            try { startLockTask() } catch (e: Throwable) { Log.w("MainActivity", "startLockTask: ${e.message}") }
+        } else {
+            try { stopLockTask() } catch (e: Throwable) { Log.w("MainActivity", "stopLockTask: ${e.message}") }
+            stPolicy().setLockTaskAllowed(false)
+        }
+    }
+
+    private fun kioskModeEnabled(): Boolean = try {
+        getSharedPreferences("screentinker", Context.MODE_PRIVATE).getBoolean("kiosk_enabled", false)
+    } catch (e: Throwable) { false }
+
+    /** Re-enter lock task after a restart, if that is the state the operator left it in. */
+    private fun restoreKioskMode() {
+        if (!kioskModeEnabled()) return
+        stPolicy().setLockTaskAllowed(true)
+        try {
+            startLockTask()
+            Log.i("MainActivity", "Kiosk mode restored after restart")
+        } catch (e: Throwable) {
+            Log.w("MainActivity", "Kiosk restore failed: ${e.message}")
+        }
+    }
+
+    // #161: device-policy wrapper (degrades safely off-tier — every Tier-2 call no-ops when not owner).
+    private fun stPolicy() = com.remotedisplay.player.admin.STPolicy(this)
+    // #160 Track-A: no-device-owner system control (media volume, brightness, screen-off timeout).
+    private val systemControl by lazy { com.remotedisplay.player.system.SystemControl(this) }
+
+    // #161: one-line tier label for the settings list.
+    private fun hwTierShort(tier: Int): String = when (tier) {
+        2 -> getString(R.string.hw_tier_owner)
+        1 -> getString(R.string.hw_tier_admin)
+        else -> getString(R.string.hw_tier_none)
+    }
+
+    // #161 first-run/guidance surface: show the live privilege tier and, when not owner (and not
+    // MDM-managed), the exact ADB enrollment one-liner. "Re-check" re-reads the tier live, so it
+    // flips as soon as `dpm set-device-owner` succeeds.
+    private fun showHardwareControlDialog() {
+        val policy = com.remotedisplay.player.admin.STPolicy(this)
+        val tier = policy.tier()
+        val foreign = policy.hasForeignDeviceOwner()
+        val component = "com.remotedisplay.player/.admin.STDeviceAdminReceiver"
+        val msg = buildString {
+            append(hwTierShort(tier)); append("\n\n")
+            when {
+                policy.isDeviceOwner() -> append(getString(R.string.hw_owner_note))
+                foreign -> append(getString(R.string.hw_managed_note))
+                else -> {
+                    append(getString(R.string.hw_enroll_intro)); append("\n\n")
+                    append("adb shell dpm set-device-owner\n  $component\n\n")
+                    append(getString(R.string.hw_enroll_constraints))
+                }
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_hardware_control))
+            .setMessage(msg)
+            .setPositiveButton(getString(R.string.hw_recheck)) { _, _ -> showHardwareControlDialog() }
+            .setNegativeButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun showChangeServerDialog(currentUrl: String) {
+        val input = EditText(this).apply {
+            setText(currentUrl)
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+            hint = "https://screentinker.com"
+            setSingleLine()
+        }
+        val container = FrameLayout(this).apply {
+            val pad = (16 * resources.displayMetrics.density).toInt()
+            setPadding(pad, pad, pad, 0)
+            addView(input)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_change_server))
+            .setView(container)
+            .setPositiveButton(getString(R.string.settings_save)) { _, _ ->
+                val url = input.text.toString().trim().trimEnd('/')
+                if (url.isNotEmpty() && url != currentUrl) {
+                    config.clearDeviceCredentials()
+                    navigateToProvisioning(url)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        showImeDialog(dialog, input)
+    }
+
+    private fun showPermissionsDialog() {
+        val accEnabled = isAccessibilityEnabled()
+        val notifyGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        val lines = buildString {
+            appendLine("${getString(R.string.settings_perm_accessibility)}: ${if (accEnabled) "✓" else "✗"}")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appendLine("${getString(R.string.settings_perm_notifications)}: ${if (notifyGranted) "✓" else "✗"}")
+            }
+            appendLine("")
+            appendLine(getString(R.string.settings_perm_hint))
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_permissions))
+            .setMessage(lines)
+            // Primary action opens OUR permissions screen — the one with a row per permission and
+            // a Manage button that stays visible once granted, so an installer can review or revoke
+            // what was given. Android's App Info page is still offered as the secondary, because a
+            // few things (notification access, some OEM toggles) are only reachable there.
+            .setPositiveButton(getString(R.string.settings_perm_manage)) { _, _ ->
+                startActivity(Intent(this, SetupActivity::class.java).apply {
+                    // Review mode: leaving must return to playback, NOT restart pairing.
+                    putExtra(SetupActivity.EXTRA_MANAGE_ONLY, true)
+                })
+            }
+            .setNeutralButton(getString(R.string.settings_perm_open)) { _, _ ->
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showExitDialog() {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.settings_exit_title))
+            .setMessage(getString(R.string.settings_exit_confirm))
+            .setPositiveButton(getString(R.string.settings_exit_yes)) { _, _ ->
+                try {
+                    wsService?.disconnect()
+                    if (bound) { unbindService(connection); bound = false }
+                } catch (_: Exception) {}
+                finishAffinity()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun navigateToProvisioning(url: String? = null) {
+        try { wsService?.disconnect() } catch (_: Exception) {}
+        if (bound) { try { unbindService(connection) } catch (_: Exception) {}; bound = false }
+        val intent = Intent(this, ProvisioningActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
+            url?.let { putExtra("EXTRA_SERVER_URL", it) }
+        }
+        startActivity(intent)
+        finish()
+    }
+
+    private fun checkConnectionFailureBanner() {
+        val failures = wsService?.consecutiveFailures ?: 0
+        if (failures > 10 && !failureBannerShown && wsService?.isConnected() != true) {
+            failureBannerShown = true
+            showStatus("${getString(R.string.settings_connection_failed)}\n${getString(R.string.settings_connection_hint)}")
+        }
+        if (failures == 0) {
+            failureBannerShown = false
+        }
+    }
+
+    private fun isAccessibilityEnabled(): Boolean {
+        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        val myComponent = ComponentName(this, com.remotedisplay.player.service.PowerAccessibilityService::class.java)
+        return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK).any {
+            it.resolveInfo.serviceInfo.let { si -> ComponentName(si.packageName, si.name) == myComponent }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        // Home press brings us back - just re-apply immersive mode
+        Log.i("MainActivity", "onNewIntent - returning to foreground")
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        )
+    }
+
+    /**
+     * Nothing in the Android lifecycle pauses a WebView, so a YouTube embed kept playing with the
+     * app in the background and the panel kept making noise with the app "closed". Reported on
+     * #234. onStop (not onPause) is the right hook: onPause also fires for a transient dialog or a
+     * permission prompt, and pausing playback for those would be a visible stutter on a wall.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (::mediaPlayer.isInitialized) mediaPlayer.onAppBackgrounded()
+        // The camera runs only while the player is on screen.
+        try { audience?.onStop() } catch (e: Throwable) { }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == com.remotedisplay.player.audience.AudienceController.REQUEST_CODE) {
+            try { audience?.onPermissionResult(grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) }
+            catch (e: Throwable) { Log.w("MainActivity", "audience permission result: ${e.message}") }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::mediaPlayer.isInitialized) mediaPlayer.onAppForegrounded()
+        try { audience?.onStart() } catch (e: Throwable) { }
+
+        // Clear the boot "Starting display…" prompt EVERY time the player becomes visible, not
+        // just in onCreate.
+        //
+        // Relauncher launches the activity directly when the overlay permission is granted — the
+        // normal kiosk setup — and THEN posts the notification, deliberately, so a device that
+        // could not auto-launch still has a tappable way back. On a device where the launch DID
+        // work, that ordering means the prompt is posted after onCreate already cancelled it, and
+        // nothing clears it again: a permanent "Starting display…" banner over content that is
+        // already playing. Reported from the field with a photo of exactly that.
+        //
+        // If the player is on screen, the prompt is stale by definition — so clearing it here is
+        // correct regardless of who posted it or when.
+        (getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager)?.cancel(999)
+
+        // Re-enter kiosk if that is how the operator left it. Done in onStart rather than onCreate
+        // because lock-task can be dropped by the system on some transitions, and a panel that
+        // quietly stopped being locked is the failure people notice only when someone walks out of
+        // the app.
+        restoreKioskMode()
+    }
+
+    override fun onDestroy() {
+        // ⚠️ Stop the listeners and the sweep. A bound socket and a self-re-arming Runnable both
+        // outlive the Activity otherwise — the socket then holds the port against the next launch,
+        // which presents as "triggers stopped working after an app restart".
+        try { triggerSweep?.let { handler.removeCallbacks(it) } } catch (e: Throwable) { }
+        try { triggerManager?.stop() } catch (e: Throwable) { }
+        triggerManager = null
+        try { audience?.onDestroy() } catch (e: Throwable) { }
+        audience = null
+        // Drop the window-flag callback so the service stops calling into a dead Activity. The
+        // SCHEDULE keeps running — it is the service's, deliberately.
+        try { wsService?.onPowerWindow = null } catch (e: Throwable) { }
+        try { wsService?.onBeforeBlank = null } catch (e: Throwable) { }
+        remoteStreaming = false
+        // #talk video: drop the bus listener (it holds `this`) and release the renderer.
+        try { com.remotedisplay.player.remote.TalkVideoBus.listener = null } catch (e: Throwable) { }
+        try { talkRenderer?.let { pipLayout.removeView(it); it.release() }; talkRenderer = null } catch (e: Throwable) { }
+        try { screenShareOverlay?.detach(); screenShareOverlay = null } catch (e: Throwable) { }
+        // Everything below this line exists for the same reason the wall/group shutdown does, and
+        // was missing: these Handlers are on the MAIN LOOPER, which outlives the Activity.
+        //
+        // PlaylistController kept advancing after the Activity was destroyed. Each tick wrote the
+        // resume index and emitted play_start/play_end through the still-live WebSocketService, so
+        // after a relaunch (the "launch" command, Relauncher after OTA/boot, a re-pair, or a config
+        // change outside the ones we handle) TWO controllers were reporting playback for one screen
+        // — inflating Total Plays and Hours in Reports, and racing over the resume position that
+        // #234 relies on. Widget items also re-entered showWidget on a WebView nobody owned.
+        kiosk?.hide()
+        if (::playlistController.isInitialized) playlistController.stop()
+        // Belt and braces: controller.stop() already releases these, but two ExoPlayers on the main
+        // looper are exactly the kind of thing that outlives an Activity if the controller never got
+        // as far as being initialized.
+        try { slideAudioPlayer?.stop() } catch (e: Throwable) { }
+        slideAudioPlayer = null
+        if (::updateChecker.isInitialized) updateChecker.shutdown()
+        // The 30s failure-check loop and anything else this Activity posted.
+        handler.removeCallbacksAndMessages(null)
+        // Kill the wall/group leader tick BEFORE releasing media. The Handler is on the main looper
+        // (outlives this Activity), so a surviving tick would keep broadcasting sync frames against
+        // the released player forever — the zombie-leader / split-brain / garbage-position leak.
+        if (::wallController.isInitialized) wallController.shutdown()
+        if (::groupSchedule.isInitialized) groupSchedule.shutdown()
+        if (::downloadCoordinator.isInitialized) downloadCoordinator.shutdown() // cancel in-flight downloads (no orphan/leak)
+        zoneManager?.cleanup()
+        wallZones?.stop()
+        if (::pipOverlay.isInitialized) pipOverlay.clear(null) // #109: tear down overlay WebView
+        if (::mediaPlayer.isInitialized) {
+            stopScreenshotStreaming()
+            mediaPlayer.release()
+        }
+        if (bound) {
+            try { unbindService(connection) } catch (_: Exception) {}
+            bound = false
+        }
+        super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            /*
+             * Re-measure the stage once the window has settled.
+             *
+             * Hiding the bars is asynchronous, so the window is often still bar-sized when the
+             * first playlist arrives and sizes the stage. Without this the mistake is permanent:
+             * applyOrientation() used to return immediately whenever the orientation string was
+             * unchanged, and it never changes on a display that has always been landscape. Posting
+             * it runs after this layout pass, when the window is whatever it is finally going to be.
+             */
+            rootView.post { reapplyOrientation() }
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            )
+        }
+    }
+
+    private companion object {
+        // The routine refresh lands every ~60s with an unchanged playlist; a sweep then has nothing
+        // new to decide, so it runs on a real change or at most this often.
+        const val CACHE_SWEEP_EVERY_MS = 30L * 60 * 1000
+    }
+}
