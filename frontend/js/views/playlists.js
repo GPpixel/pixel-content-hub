@@ -10,6 +10,8 @@ import { openSmartRulesModal, rulesSummary, loadFolders, DEFAULT_RULES } from '.
 import * as cui from '../components/corporate-ui.js';
 import { openSlotDialog } from '../components/corporate-slot-dialog.js';
 import { confirmAccessibility } from '../components/accessibility.js';
+import { layoutPickerHtml, mountLayoutPicker, zoneSelectHtml, bindZoneSelects } from '../components/playlist-layout.js';
+import { layoutThumbHtml, layoutItemSummary, campaignZoneOptions, campaignZoneSelectHtml, campaignBannerHtml, openLayoutItemDialog } from '../components/campaign-editor.js';
 
 function formatDate(ts) {
   if (!ts) return '--';
@@ -107,6 +109,8 @@ try {
 // Last fetched page, so flipping the toggle filters client-side instead of re-fetching
 // GET /playlists for data already in hand.
 let cachedPlaylists = null;
+// 3.0: the layout the open playlist is drawn in (explicit or derived), for the per-item zone picker.
+let currentLayout = null;
 
 async function renderList(container) {
   container.innerHTML = `
@@ -441,7 +445,11 @@ function layoutMockup(playlist) {
   }
 
   const counts = {};
-  for (const it of items) if (it.zone_id) counts[it.zone_id] = (counts[it.zone_id] || 0) + 1;
+  // 3.0: on a playlist that chose its layout, an item without a zone plays in the main zone.
+  for (const it of items) {
+    const zid = it.zone_id || (layout.explicit ? layout.main_zone_id : null);
+    if (zid) counts[zid] = (counts[zid] || 0) + 1;
+  }
 
   const w = Number(layout.width) || 1920;
   const h = Number(layout.height) || 1080;
@@ -524,7 +532,7 @@ function renderDetailContent(container, playlist) {
         <button class="btn btn-secondary" id="previewPlaylistBtn">${t('widget.preview')}</button>
         ${playlist.smart_rules
           ? `<button class="btn btn-primary" id="editRulesBtn">${t('smart.edit_rules')}</button>`
-          : `<button class="btn btn-secondary" id="addHoldBtn">${esc(t('playlist.add_hold'))}</button><button class="btn btn-primary" id="addItemBtn">${t('playlist.add_content')}</button>`}
+          : `${playlist.corporate || playlist.corporate_slot || (playlist.layout && playlist.layout.explicit) ? '' : `<button class="btn btn-secondary" id="addLayoutItemBtn" data-advanced-ui title="${esc(t('campaign.add_hint'))}">${esc(t('campaign.add_btn'))}</button>`}<button class="btn btn-secondary" id="addHoldBtn">${esc(t('playlist.add_hold'))}</button><button class="btn btn-primary" id="addItemBtn">${t('playlist.add_content')}</button>`}
         ${corpMode === 'corporate' ? `<button class="btn btn-secondary" id="addSlotBtn" style="display:none">+ ${esc(t('corp.hq.add_slot'))}</button>` : ''}
       </div>
     </div>
@@ -535,7 +543,9 @@ function renderDetailContent(container, playlist) {
          checklist at exactly this hop is what made the flow feel like it ended. -->
     <div id="gettingStarted"></div>
 
-    ${layoutMockup(playlist)}
+    ${campaignBannerHtml(playlist)}
+    ${layoutPickerHtml(playlist)}
+    ${(playlist.items || []).some((it) => it.layout_ref_id) ? '' : layoutMockup(playlist)}
     
     <!-- #319: reordering was one-step-at-a-time only. A playlist of 160 photos spanning several
          screens made "put these in filename order" a manual, error-prone job. -->
@@ -567,8 +577,10 @@ function renderDetailContent(container, playlist) {
     </div>
   `;
 
+  currentLayout = playlist.layout || null;
   if (playlist.smart_rules) renderSmart(playlist);
   else renderItems(playlist.items || []);
+  mountLayoutPicker(playlist, () => refreshAfterMutation());
   if (corpMode) mountCorporateEditor(container, playlist);
 
   renderApprovalBar(document.getElementById('playlistApprovalBar'), {
@@ -617,6 +629,10 @@ function renderDetailContent(container, playlist) {
 
   document.getElementById('addItemBtn')?.addEventListener('click', () => showAddItemModal(playlist.id));
   document.getElementById('addHoldBtn')?.addEventListener('click', (e) => showAddHoldModal(playlist.id, e.currentTarget));
+  // 3.0 campaigns: a whole layout as an item.
+  document.getElementById('addLayoutItemBtn')?.addEventListener('click', async () => {
+    if (await openLayoutItemDialog(playlist)) refreshAfterMutation();
+  });
   document.getElementById('editRulesBtn')?.addEventListener('click', () => {
     openSmartRulesModal({
       title: t('smart.title_edit', { name: playlist.name }),
@@ -1326,12 +1342,16 @@ function renderItems(items) {
   }
 
   const fillMode = !!(corpEditor && corpEditor.mode === 'fill');
+  // 3.0 campaigns: the zones of this playlist's layout items, for items placed inside them.
+  const campaignZones = campaignZoneOptions(items);
   itemsEl.innerHTML = items.map((item, i) => item.slot_id ? slotRowHtml(item, i, items.length) : `
     <div class="playlist-item" data-item-id="${item.id}" data-index="${i}" draggable="true" style="background:var(--bg-card);border:1px solid ${selectedItemIds.has(String(item.id)) ? 'var(--accent, #3B82F6)' : 'var(--border)'};border-radius:var(--radius);padding:12px 16px;display:flex;align-items:center;gap:12px;cursor:grab;transition:border-color 0.15s;${item.enabled === 0 ? 'opacity:0.55' : ''}">
       <input type="checkbox" class="item-select" data-item-id="${item.id}" data-index="${i}" ${selectedItemIds.has(String(item.id)) ? 'checked' : ''} style="flex-shrink:0" onclick="event.stopPropagation()">
       <div style="color:var(--text-muted);font-size:12px;min-width:24px;text-align:center;user-select:none">${i + 1}</div>
       <div style="width:48px;height:36px;border-radius:4px;overflow:hidden;background:var(--bg-input);flex-shrink:0;display:flex;align-items:center;justify-content:center">
-        ${item.child_playlist_id
+        ${item.layout_ref_id
+          ? layoutThumbHtml(item.layout)
+          : item.child_playlist_id
           ? '<div style="color:var(--text-muted)">☰</div>'
           : item.thumbnail_path
             ? `<img data-auth-src="/api/content/${esc(item.content_id)}/thumbnail" style="width:100%;height:100%;object-fit:cover">`
@@ -1339,9 +1359,9 @@ function renderItems(items) {
         }
       </div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:14px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(item.child_playlist_name || item.filename || item.widget_name || t('common.unknown'))}</div>
+        <div style="font-size:14px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.layout_ref_id ? esc(t('campaign.item_name', { name: item.filename || '' })) : esc(item.child_playlist_name || item.filename || item.widget_name || t('common.unknown'))}</div>
         <div style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:8px;min-width:0">
-          <span style="white-space:nowrap">${item.child_playlist_id ? t('playlist.item_nested') : item.widget_id ? t('playlist.item_widget') : esc(item.mime_type || t('playlist.unknown_type'))}</span>
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.layout_ref_id ? esc(layoutItemSummary(item)) : item.child_playlist_id ? t('playlist.item_nested') : item.widget_id ? t('playlist.item_widget') : esc(item.mime_type || t('playlist.unknown_type'))}</span>
           ${/* In a slot a video counts at its full length (it always plays to the end), so say so. */ ''}
           ${fillMode && item.content_duration && /^(video|audio)\//.test(item.mime_type || '') ? `<span style="font-size:11px;white-space:nowrap;color:var(--warning)">${esc(t('corp.slot.video_len', { len: cui.formatSec(item.content_duration) }))}</span>` : ''}
           ${item.experiment_id ? `<a href="#/experiments" style="font-size:11px;padding:1px 6px;border-radius:4px;background:#3b2a0c;color:#fcd34d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex-shrink:1;text-decoration:none" title="${esc(t('exp.row_badge_tip'))}" aria-label="${esc(t('exp.row_badge'))}">⚗</a>` : ''}
@@ -1364,7 +1384,8 @@ function renderItems(items) {
         <span style="font-size:12px;color:var(--text-muted)">${t('playlist.sec')}</span>`}
         ${currentPlaybackOrder === 'weighted' && !item.child_playlist_id ? `<label style="font-size:12px;color:var(--text-muted)">${t('playlist.weight')}</label>
         <input type="number" class="input item-weight" data-item-id="${item.id}" value="${item.weight || 1}" min="1" max="1000" style="width:56px;padding:4px 8px;font-size:13px;text-align:center">` : ''}
-        ${currentPlaybackOrder === 'sequential' && !item.child_playlist_id && !fillMode ? repeatSelect(item) : ''}
+        ${currentPlaybackOrder === 'sequential' && !item.child_playlist_id && !item.layout_ref_id && !fillMode ? repeatSelect(item) : ''}
+        ${campaignZones.length ? campaignZoneSelectHtml(item, campaignZones) : zoneSelectHtml(item, currentLayout)}
         <label style="font-size:12px;color:var(--text-muted)" title="${esc(t('playlist.play_window_hint'))}">${t('playlist.play_from')}</label>
         <input type="datetime-local" class="input item-play-from" data-item-id="${item.id}" value="${esc(item.play_from || '')}" style="width:168px;padding:4px 6px;font-size:12px">
         <label style="font-size:12px;color:var(--text-muted)">${t('playlist.play_until')}</label>
@@ -1374,7 +1395,8 @@ function renderItems(items) {
         <button class="btn-icon item-schedule" data-item-id="${item.id}" title="${t('itemsched.title')}" aria-label="${t('itemsched.title')}" style="color:${item.schedules && item.schedules.length ? '#38bdf8' : 'var(--text-muted)'};background:none;border:none;cursor:pointer;padding:4px;border-radius:4px">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
         </button>
-        <button class="btn-icon item-replace" data-item-id="${item.id}" title="${t('playlist.replace_item')}" aria-label="${t('playlist.replace_item')}" style="color:var(--text-muted);background:none;border:none;cursor:pointer;padding:4px;border-radius:4px">
+        ${item.layout_ref_id ? `<button class="btn btn-secondary btn-sm item-layout-edit" data-item-id="${item.id}">${esc(t('campaign.edit_zones'))}</button>` : ''}
+        <button class="btn-icon item-replace" data-item-id="${item.id}" title="${t('playlist.replace_item')}" aria-label="${t('playlist.replace_item')}" style="color:var(--text-muted);background:none;border:none;cursor:pointer;padding:4px;border-radius:4px;${item.layout_ref_id ? 'display:none' : ''}">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
         </button>
         <button class="btn-icon item-duplicate" data-item-id="${item.id}" title="${t('playlist.duplicate_item')}" aria-label="${t('playlist.duplicate_item')}" style="color:var(--text-muted);background:none;border:none;cursor:pointer;padding:4px;border-radius:4px">
@@ -1393,6 +1415,14 @@ function renderItems(items) {
     </div>
   `).join('');
   hydrateAuthImages(itemsEl);
+  bindZoneSelects(itemsEl, currentPlaylistId, () => refreshAfterMutation());
+  itemsEl.querySelectorAll('.item-layout-edit').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const item = items.find((it) => String(it.id) === btn.dataset.itemId);
+      if (item && await openLayoutItemDialog({ id: currentPlaylistId }, item)) refreshAfterMutation();
+    });
+  });
   bindSelection(itemsEl, items);
   bindSlotRows(itemsEl);
   if (corpReadOnly) lockCorporateRows(itemsEl);

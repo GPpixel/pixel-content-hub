@@ -233,7 +233,7 @@ function collectExportData({ userId, workspaceId, byWorkspace = false }) {
   const layoutPlaceholders = layoutIds.map(() => '?').join(',') || "'__none__'";
   const layoutZones = layoutIds.length ? db.prepare(`SELECT * FROM layout_zones WHERE layout_id IN (${layoutPlaceholders})`).all(...layoutIds) : [];
 
-  const playlists = db.prepare(`SELECT id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate FROM playlists WHERE ${col} = ?`).all(key)
+  const playlists = db.prepare(`SELECT id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate${require('../lib/corporate/schema-probe').hasColumn(db, 'playlists', 'layout_id') ? ', layout_id' : ''} FROM playlists WHERE ${col} = ?`).all(key)
     .map(({ corporate, ...p }) => (corporate ? { ...p, corporate: 1 } : p));
   const playlistIds = playlists.map(p => p.id);
   const playlistPlaceholders = playlistIds.map(() => '?').join(',') || "'__none__'";
@@ -858,6 +858,12 @@ async function handleImport(req, res) {
         const asCorporate = corpImport && p.corporate && !smartRules ? 1 : 0;
         if (asCorporate) idMap.corporate = { ...(idMap.corporate || {}), [p.id]: newId };
         db.prepare('INSERT INTO playlists (id, user_id, workspace_id, name, description, is_auto_generated, smart_rules, created_at, updated_at, corporate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(newId, userId, workspaceId, p.name, p.description || '', p.is_auto_generated || 0, smartRules ? JSON.stringify(smartRules) : null, p.created_at || Math.floor(Date.now() / 1000), p.updated_at || Math.floor(Date.now() / 1000), asCorporate);
+        // 3.0 playlist layout: only a layout this same import created (its id is remapped), never a
+        // raw id from the file — that could name another tenant's layout on this server.
+        // A built-in template (shared by every tenant) keeps its id.
+        const importedLayout = p.layout_id && !asCorporate ? (idMap.layouts[p.layout_id]
+          || ((db.prepare('SELECT is_template FROM layouts WHERE id = ?').get(String(p.layout_id)) || {}).is_template ? String(p.layout_id) : null)) : null;
+        if (importedLayout) db.prepare('UPDATE playlists SET layout_id = ? WHERE id = ?').run(importedLayout, newId);
         stats.playlists++;
       }
       /*

@@ -236,6 +236,8 @@ function contentIdsInPayload(payload) {
   if (!payload || typeof payload !== 'object') return out;
   const add = (it) => { if (it && typeof it === 'object' && it.content_id && !it.remote_url) out.add(String(it.content_id)); };
   for (const it of Array.isArray(payload.assignments) ? payload.assignments : []) add(it);
+  // 3.0 campaigns: every zone and full-screen item a campaign step can show.
+  for (const it of require('../campaign').campaignItems(payload.campaign)) add(it);
   add(payload.default_content);
   for (const t of Array.isArray(payload.triggers) ? payload.triggers : []) {
     for (const it of Array.isArray(t && t.items) ? t.items : []) add(it);

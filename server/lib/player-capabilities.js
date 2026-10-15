@@ -170,6 +170,15 @@ const CAPABILITIES = [
    */
   'net.site_cache',
   /*
+   * 3.0 campaigns (lib/campaign.js, docs/layouts-and-campaigns.md): the player can play a playlist
+   * whose items are WHOLE LAYOUTS — switching between layouts (each zone with its own content) and
+   * full-screen items, preloading the next step. It CHANGES THE PAYLOAD (a top-level `campaign`), so
+   * it is opt-in by declaration and in NO baseline: a player that does not declare it gets the
+   * documented fallback in `assignments` and byte-for-byte nothing else. Declared by the web player
+   * in a plain browser and by the native Android player.
+   */
+  'layout.campaign',
+  /*
    * Audience counting (lib/audience.js): the player has a camera it can open and an on-device face
    * detector, and will report COUNTS ONLY. Declared by a player that could count if asked — not a
    * statement that it is counting; that is the org's switch, sent in the payload. In NO baseline.

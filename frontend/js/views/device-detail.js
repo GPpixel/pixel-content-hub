@@ -874,7 +874,7 @@ async function loadDevice(deviceId, activeTab = null) {
         ` : ''}
         <!-- Layout selector. 3.0: Advanced view only — unless this screen already runs a multi-zone
              layout, in which case hiding it would hide why its content is split up. -->
-        <div ${device.layout_id ? '' : 'data-advanced-ui'} style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+        <div ${activeLayoutIdOf(device) ? '' : 'data-advanced-ui'} style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" stroke-width="2">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
           </svg>
@@ -883,6 +883,7 @@ async function loadDevice(deviceId, activeTab = null) {
             <select id="deviceLayoutSelect" class="input" style="background:var(--bg-input);padding:4px 8px;font-size:13px">
               <option value="">${t('device.layout.fullscreen_default')}</option>
             </select>
+            ${layoutSourceNote(device)}
           </div>
           <button class="btn btn-secondary btn-sm" id="applyLayoutBtn">${t('device.layout.apply')}</button>
         </div>
@@ -3390,9 +3391,9 @@ async function setupPlaylistActions(device) {
     // network errors, so a 403/404 must throw here or zones would silently be [].
     let zones = [];
     let zonesFetchFailed = false;
-    if (device.layout_id) {
+    if (activeLayoutIdOf(device)) {
       try {
-        const res = await fetch(`/api/layouts/${device.layout_id}`, { headers });
+        const res = await fetch(`/api/layouts/${activeLayoutIdOf(device)}`, { headers });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         zones = (await res.json()).zones || [];
       } catch (e) {
@@ -3406,7 +3407,7 @@ async function setupPlaylistActions(device) {
           ${zones.map(z => `<option value="${esc(z.id)}">${esc(z.name)} (${Math.round(z.width_percent)}% x ${Math.round(z.height_percent)}%)</option>`).join('')}
         </select>`
       : `<div style="font-size:12px;color:${zonesFetchFailed ? 'var(--danger)' : 'var(--text-muted)'};padding:6px 0;line-height:1.5">${
-        !device.layout_id ? t('device.assign.zone_no_layout') : zonesFetchFailed ? t('device.assign.zone_load_failed') : t('device.assign.zone_empty_layout')}</div>`;
+        !activeLayoutIdOf(device) ? t('device.assign.zone_no_layout') : zonesFetchFailed ? t('device.assign.zone_load_failed') : t('device.assign.zone_empty_layout')}</div>`;
     const extraFieldsHtml = `
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <div class="form-group" style="flex:1;min-width:200px;margin:0"><label>${t('device.assign.zone_label')}</label>${zoneHtml}</div>
@@ -3493,6 +3494,23 @@ async function publishForSimpleMode(playlistId) {
   }
 }
 
+/*
+ * 3.0: the layout this screen actually draws — its own, a schedule's, or (new) the layout of the
+ * playlist it plays (docs/layouts-and-campaigns.md). Zone pickers offer THAT layout's zones; the
+ * device's own setting is only the fallback for a playlist without one.
+ */
+function activeLayoutIdOf(device) {
+  return (device && device.resolved_layout && device.resolved_layout.id) || (device && device.layout_id) || null;
+}
+
+/* A line under the layout picker when something other than this setting decides the layout. */
+function layoutSourceNote(device) {
+  const r = device && device.resolved_layout;
+  if (!r || r.source === 'device') return '';
+  const key = r.source === 'playlist' ? 'layoutpl.device_from_playlist' : r.source === 'schedule' ? 'layoutpl.device_from_schedule' : 'layoutpl.device_from_mandate';
+  return `<div id="layoutSourceNote" style="font-size:12px;color:var(--text-muted);margin-top:4px">${esc(t(key, { name: r.name || '' }))}</div>`;
+}
+
 function attachRemoveHandlers(device) {
   // Populate zone selectors if device has a layout. The current zone_id for
   // each assignment is read from data-current-zone-id on the .zone-select
@@ -3504,7 +3522,7 @@ function attachRemoveHandlers(device) {
   // visibility is NOT gated on whether the zone list arrived (gating on that silently hid
   // the selector when the server payload lacked active_layout_zones — e.g. a stale server
   // during a deploy skew). Only a genuinely fullscreen device (no layout_id) has no zones.
-  if (device.layout_id) {
+  if (activeLayoutIdOf(device)) {
     // Show the selectors immediately; they become usable once zones populate below.
     document.querySelectorAll('.zone-select').forEach(s => { s.style.display = ''; });
     // Clicking an item's orphan warning badge scrolls to + focuses its zone-select.
@@ -3549,7 +3567,7 @@ function attachRemoveHandlers(device) {
       // change) — fetch the layout so the dropdowns still populate. A missing field must
       // never make the selector silently vanish.
       const token = localStorage.getItem('token');
-      fetch(`/api/layouts/${device.layout_id}`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`/api/layouts/${activeLayoutIdOf(device)}`, { headers: { Authorization: `Bearer ${token}` } })
         .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
         .then(layout => populateZoneSelects(layout.zones || []))
         .catch(e => console.warn('Zone dropdowns: layout fetch fallback failed:', e.message));

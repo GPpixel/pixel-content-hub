@@ -91,6 +91,8 @@ function checkSlot(workspaceId, playlistId, itemId) {
   if (!item) fail('That item is not in this playlist any more.', 404, 'EXPERIMENT_NOT_FOUND');
   if (item.slot_id) fail('A head office slot cannot be tested.');
   if (item.child_playlist_id) fail('Choose a single item, not a nested playlist.');
+  // 3.0 campaigns: a layout item is a whole screen of zones; test an item inside one of its zones.
+  if (item.layout_ref_id) fail('Choose a single item, not a layout. To test something inside a layout, test the item in its zone.');
   if (item.experiment_id) {
     const other = db.prepare("SELECT 1 FROM experiments WHERE id = ? AND status = 'running'").get(item.experiment_id);
     if (other) fail('Another experiment is already running on this item.', 409, 'EXPERIMENT_BUSY');

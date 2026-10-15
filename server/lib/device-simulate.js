@@ -114,7 +114,25 @@ const INPUTS_SQL = `
     LEFT JOIN corporate_mandates cm ON cm.id = d.mandate_id`;
 
 function resolverInputs(db, deviceId) {
-  return db.prepare(INPUTS_SQL).get(deviceId) || null;
+  const r = db.prepare(INPUTS_SQL).get(deviceId) || null;
+  if (!r) return null;
+  /*
+   * The view's playlist-layout tier reads the PUBLISHED layout of whichever playlist the screen
+   * resolves to — and under a hypothetical schedule that can be any playlist, so it is a lookup
+   * rather than a column. Not enumerable: the inputs stay a plain row for anything that compares or
+   * logs them.
+   */
+  const memo = new Map();
+  const hasCol = require('./corporate/schema-probe').hasColumn(db, 'playlists', 'published_layout_id');
+  Object.defineProperty(r, 'playlistLayout', {
+    enumerable: false,
+    value: (playlistId) => {
+      if (!playlistId || !hasCol) return null;
+      if (!memo.has(playlistId)) memo.set(playlistId, (db.prepare('SELECT published_layout_id FROM playlists WHERE id = ?').get(playlistId) || {}).published_layout_id ?? null);
+      return memo.get(playlistId);
+    },
+  });
+  return r;
 }
 
 /**
@@ -149,7 +167,10 @@ function resolveFromInputs(r, sched = { playlist_id: null, layout_id: null }) {
   else if (r.group_playlist_id != null) source = 'group';
   else if (r.playlist_id != null) source = 'device';
   else source = null;
-  return { playlist_id, source, layout_id: sl ?? r.layout_id ?? null };
+  // Schedule's layout > the playlist's own (not on a wall member) > the device's.
+  const playlistLayout = r.wall_id == null && playlist_id != null && typeof r.playlistLayout === 'function'
+    ? r.playlistLayout(playlist_id) : null;
+  return { playlist_id, source, layout_id: sl ?? playlistLayout ?? r.layout_id ?? null };
 }
 
 /* ============================== schedule reasons ============================== */
@@ -318,7 +339,10 @@ function stateAt(ctx, ms) {
     return itemVerdict(it, LI);
   });
   const powerOff = !!(ctx.powerSupported && ctx.power && powerOffAt(ctx.power, ctx.powerClock(ms)));
-  return { ms, active, entry, verdicts, powerOff };
+  // 3.0 campaigns: each step's own verdict (its dayparts / window / play_when), for the timeline.
+  const steps = entry.payload && entry.payload.campaign && Array.isArray(entry.payload.campaign.steps) ? entry.payload.campaign.steps : null;
+  const stepVerdicts = steps ? steps.map((s) => itemVerdict(s.type === 'layout' ? s : s.item, LI)) : null;
+  return { ms, active, entry, verdicts, powerOff, stepVerdicts };
 }
 
 function playlistName(ctx, id) {
@@ -364,6 +388,51 @@ function fallbackTrail(ctx, resolved) {
   });
   if (!resolved.playlist_id) steps.push({ code: 'nothing_assigned' });
   return steps;
+}
+
+/*
+ * Which tier chose the layout — the same order as the view (mandate > schedule > the playlist's own
+ * > the device's), read back from the inputs so the preview can say "this playlist's layout".
+ */
+function layoutInfo(ctx, resolved, sched) {
+  const id = resolved.layout_id || null;
+  if (!id) return null;
+  const r = ctx.inputs || {};
+  let source = 'device';
+  if (resolved.source === 'corporate') source = 'mandate';
+  else if (sched && sched.layout_id) source = 'schedule';
+  else if (r.wall_id == null && resolved.playlist_id && typeof r.playlistLayout === 'function' && r.playlistLayout(resolved.playlist_id) === id) source = 'playlist';
+  let name = null;
+  try { name = (ctx.db.prepare('SELECT name FROM layouts WHERE id = ?').get(id) || {}).name || null; } catch (_) { name = null; }
+  return { id, name, source };
+}
+
+/*
+ * 3.0 campaigns: what a campaign screen shows at this instant — its steps (layouts and full-screen
+ * items) with the same per-step verdicts as items — or, for a screen that will play the simplified
+ * fallback, says so (`fallback: true`; `items` above is then that fallback, which is what it plays).
+ */
+function campaignInfo(ctx, entry, LI) {
+  const c = entry.payload && entry.payload.campaign;
+  if (c && Array.isArray(c.steps)) {
+    return {
+      fallback: false,
+      steps: c.steps.map((s) => {
+        const reason = itemVerdict(s.type === 'layout' ? s : s.item, LI);
+        if (s.type === 'layout') {
+          const zones = Object.values(s.zones || {});
+          return { type: 'layout', layout_id: s.layout_id, label: (s.layout && s.layout.name) || '', duration_sec: s.duration_sec || null,
+            zones: zones.length, items: zones.reduce((n, l) => n + l.length, 0), variant: (s.layout && s.layout.variant) || null, plays: reason === null, reason };
+        }
+        return { type: 'item', label: itemLabel(s.item), duration_sec: (s.item && s.item.duration_sec) || null, plays: reason === null, reason };
+      }),
+    };
+  }
+  const pid = entry.resolved && entry.resolved.playlist_id;
+  if (!pid) return null;
+  let has = false;
+  try { has = !!(ctx.db.prepare('SELECT published_campaign FROM playlists WHERE id = ?').get(pid) || {}).published_campaign; } catch (_) { has = false; }
+  return has ? { fallback: true, steps: [] } : null;
 }
 
 function liveNow(deviceId) {
@@ -473,6 +542,8 @@ function simulate(deviceId, atMs, opts = {}) {
     default_content: playing === 0 && entry.payload.default_content
       ? { content_id: entry.payload.default_content.content_id, label: entry.payload.default_content.filename || '' } : null,
     layout_id: resolved.layout_id || null,
+    layout: layoutInfo(ctx, resolved, entry.sched),
+    campaign: campaignInfo(ctx, entry, LI),
     power: {
       schedule: !!ctx.power,
       supported: ctx.powerSupported,
@@ -541,7 +612,11 @@ function edgeMinutes(ctx) {
     add(a); add(b); if (b !== null) add(b + 1);
   }
   for (const e of ctx.payloads.values()) {
-    for (const it of e.items) {
+    // 3.0 campaigns: a step's own gates and every zone item's are edges too.
+    const steps = e.payload && e.payload.campaign && Array.isArray(e.payload.campaign.steps) ? e.payload.campaign.steps : [];
+    const campaignGated = steps.map((s) => (s.type === 'layout' ? s : s.item))
+      .concat(...steps.filter((s) => s.type === 'layout').map((s) => [].concat(...Object.values(s.zones || {}))));
+    for (const it of e.items.concat(campaignGated)) {
       if (!it) continue;
       for (const b of it.schedules || []) { add(hmToMin(b && b.start)); add(hmToMin(b && b.end)); }
       for (const k of ['play_from', 'play_until']) {
@@ -555,7 +630,8 @@ function edgeMinutes(ctx) {
 }
 
 function signatureOf(st) {
-  return `${st.active ? st.active.id : ''}|${st.entry.key}|${st.powerOff ? 1 : 0}|${st.verdicts.map((v) => (v === null ? '1' : '0')).join('')}`;
+  return `${st.active ? st.active.id : ''}|${st.entry.key}|${st.powerOff ? 1 : 0}|${st.verdicts.map((v) => (v === null ? '1' : '0')).join('')}`
+    + (st.stepVerdicts ? `|c${st.stepVerdicts.map((v) => (v === null ? '1' : '0')).join('')}` : '');
 }
 
 /**
@@ -636,6 +712,10 @@ function segmentOf(ctx, st) {
     total: st.entry.items.length,
     items: names,
     default_content: playing === 0 && !!st.entry.payload.default_content,
+    // 3.0 campaigns: the steps that play in this segment, by name ("Lunch layout", "promo.mp4").
+    ...(st.stepVerdicts ? { campaign: st.entry.payload.campaign.steps
+      .filter((s, i) => st.stepVerdicts[i] === null)
+      .map((s) => (s.type === 'layout' ? (s.layout && s.layout.name) || '' : itemLabel(s.item))).slice(0, 8) } : {}),
   };
 }
 

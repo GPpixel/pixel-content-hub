@@ -3320,6 +3320,58 @@ const migrations = [
   'ALTER TABLE devices ADD COLUMN mirror_fingerprint TEXT',
   'ALTER TABLE devices ADD COLUMN mirror_location TEXT',
   'CREATE INDEX IF NOT EXISTS idx_devices_mirror_of ON devices(mirror_of) WHERE mirror_of IS NOT NULL',
+  /*
+   * 3.0: a layout on a playlist (docs/layouts-and-campaigns.md). layout_id is what the editor
+   * shows; published_layout_id is what screens get, written on Publish next to published_snapshot
+   * so a layout change and the zone moves that go with it reach screens together. Both NULL =
+   * exactly the old behaviour (the resolver view falls through to the device's layout).
+   * layout_zones.is_main marks the zone that items without a zone play in; none marked = the
+   * largest zone, which is also what every player already does with an orphaned item.
+   */
+  'ALTER TABLE playlists ADD COLUMN layout_id TEXT REFERENCES layouts(id) ON DELETE SET NULL',
+  'ALTER TABLE playlists ADD COLUMN published_layout_id TEXT REFERENCES layouts(id) ON DELETE SET NULL',
+  'ALTER TABLE layout_zones ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0',
+  /*
+   * 3.0: portrait and 4:3 versions of a layout (lib/layout-variants.js). The SAME zones (zone_id),
+   * different geometry per version. A side table rather than layout_zones columns because every
+   * payload is built with SELECT * FROM layout_zones: columns there would add fields to every
+   * screen's payload; rows here change nothing for a layout without versions. layout_id is
+   * denormalised so "this layout's versions" is one indexed read.
+   */
+  `CREATE TABLE IF NOT EXISTS layout_zone_variants (
+     zone_id TEXT NOT NULL REFERENCES layout_zones(id) ON DELETE CASCADE,
+     layout_id TEXT NOT NULL REFERENCES layouts(id) ON DELETE CASCADE,
+     variant TEXT NOT NULL CHECK (variant IN ('portrait','square')),
+     x_percent REAL NOT NULL DEFAULT 0,
+     y_percent REAL NOT NULL DEFAULT 0,
+     width_percent REAL NOT NULL DEFAULT 100,
+     height_percent REAL NOT NULL DEFAULT 100,
+     PRIMARY KEY (zone_id, variant))`,
+  'CREATE INDEX IF NOT EXISTS idx_layout_zone_variants_layout ON layout_zone_variants(layout_id, variant)',
+  // A zone deleted while foreign_keys is off (see routes/layouts.js) takes its versions with it.
+  `CREATE TRIGGER IF NOT EXISTS trg_layout_zone_variants_zone_del AFTER DELETE ON layout_zones
+     BEGIN DELETE FROM layout_zone_variants WHERE zone_id = OLD.id; END`,
+  /*
+   * 3.0 campaigns (lib/campaign.js, docs/layouts-and-campaigns.md). A playlist item may be a WHOLE
+   * LAYOUT (layout_ref_id); each of its zones plays a chosen playlist (playlist_item_zone_sources)
+   * or this playlist's rows bound to that zone. published_campaign is the structure players that
+   * declare layout.campaign get; NULL for every playlist without a layout item, whose snapshot and
+   * payload are unchanged. play_logs.layout_id records which layout a play happened in.
+   */
+  'ALTER TABLE playlist_items ADD COLUMN layout_ref_id TEXT REFERENCES layouts(id) ON DELETE CASCADE',
+  `CREATE TABLE IF NOT EXISTS playlist_item_zone_sources (
+     item_id INTEGER NOT NULL REFERENCES playlist_items(id) ON DELETE CASCADE,
+     zone_id TEXT NOT NULL REFERENCES layout_zones(id) ON DELETE CASCADE,
+     playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+     PRIMARY KEY (item_id, zone_id))`,
+  'CREATE INDEX IF NOT EXISTS idx_pizs_playlist ON playlist_item_zone_sources(playlist_id)',
+  // Paths that delete with foreign_keys off (see routes/layouts.js) still take the rows with them.
+  `CREATE TRIGGER IF NOT EXISTS trg_pizs_item_del AFTER DELETE ON playlist_items
+     BEGIN DELETE FROM playlist_item_zone_sources WHERE item_id = OLD.id; END`,
+  `CREATE TRIGGER IF NOT EXISTS trg_pizs_zone_del AFTER DELETE ON layout_zones
+     BEGIN DELETE FROM playlist_item_zone_sources WHERE zone_id = OLD.id; END`,
+  'ALTER TABLE playlists ADD COLUMN published_campaign TEXT',
+  'ALTER TABLE play_logs ADD COLUMN layout_id TEXT',
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

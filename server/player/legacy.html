@@ -1751,6 +1751,11 @@ let playbackOrder = "sequential";
 let playOrderState = {};
 const zoneOrderState = {};
 let zoneTimers = {};
+let campaign = null;
+let campaignRun = null;
+let campaignPreloads = [];
+const CAMPAIGN_CACHE_KEY = "st_campaign_cache" + SCREEN_SUFFIX;
+const CAMPAIGN_FADE_MS = 400;
 let previewBannerParts = {};
 let wallConfig = null;
 let wallSyncTimer = null;
@@ -2379,6 +2384,16 @@ if (VIEWER_MODE) {
         const cw = localStorage.getItem("st_wall_config" + LINK_SUFFIX);
         if (cw) applyWallMode(JSON.parse(cw));
       } catch (e) {
+      }
+      try {
+        const cachedCampaign = campaignSupported() ? loadCampaignCache() : null;
+        if (cachedCampaign && !localStorage.getItem("st_wall_config" + LINK_SUFFIX)) startCampaign(cachedCampaign);
+      } catch (e) {
+        console.warn("[campaign] cached campaign did not start:", e && e.message);
+        try {
+          stopCampaign();
+        } catch (e2) {
+        }
       }
       try {
         startPlaybackAt(0);
@@ -4192,6 +4207,7 @@ function declaredCapabilities() {
     const ios = typeof onIOS === "function" && onIOS();
     const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST && !ios;
     if (rtc && !shell) caps.push("remote.screen_share");
+    if (!shell) caps.push("layout.campaign");
   } catch (e) {
   }
   if (typeof triggerStats === "object" && triggerStats.listeners && triggerStats.listeners.http) {
@@ -4957,6 +4973,7 @@ function handlePlaylistUpdate(data) {
     }
   }
   if (siteCacheChanged) triggersRepin = true;
+  if (adoptCampaign(data)) return;
   if (newFp === oldFp && playlist.length > 0 && !wallChanged && !layoutChanged) {
     console.log("Playlist unchanged");
     let patched = false;
@@ -5173,6 +5190,7 @@ function showNothingScheduled() {
   }, 3e4);
 }
 function startPlaybackAt(idx) {
+  if (typeof campaignActive === "function" && campaignActive()) return;
   clearTimeout(scheduleRetryTimer);
   if (scheduleAllows(playlist[idx])) {
     currentIndex = idx;
@@ -5191,6 +5209,7 @@ function startPlaybackAt(idx) {
   }
 }
 function playCurrentItem() {
+  if (typeof campaignActive === "function" && campaignActive()) return;
   if (!playlist.length || !Number.isFinite(currentIndex)) {
     teardownCurrentMedia();
     stopSlideVo();
@@ -5232,6 +5251,7 @@ function nextItem() {
     console.log("[Kiosk] advance ignored \u2014 a visitor is using the interactive page");
     return;
   }
+  if (typeof campaignActive === "function" && campaignActive()) return;
   if (deferredRotation) {
     deferredRotation = false;
     if (deferredRotationDeadline) {
@@ -6272,6 +6292,7 @@ function renderVideoBuffered(item) {
 }
 function renderContent(item) {
   var _a, _b;
+  if (typeof campaignActive === "function" && campaignActive()) return;
   renderSeq++;
   if (advanceTimer) {
     clearTimeout(advanceTimer);
@@ -6634,6 +6655,12 @@ function showZoneItem(zone, div, items, index, timers = zoneTimers) {
   }
   index = activeIdx;
   const a = items[index % items.length];
+  if (div.__stOnShow) {
+    try {
+      div.__stOnShow(a);
+    } catch (e) {
+    }
+  }
   const multi = items.length > 1 || items.some((it) => it.schedules && it.schedules.length || it.play_from || it.play_until || it.play_when);
   const advance = () => showZoneItem(zone, div, items, index + 1, timers);
   if (a.mime_type === "application/x-st-hold") {
@@ -6764,6 +6791,277 @@ function showZoneItem(zone, div, items, index, timers = zoneTimers) {
     div.appendChild(img);
     if (multi) timers[zone.id] = setTimeout(advance, dur);
   }
+}
+function campaignActive() {
+  return !!(campaign && campaignRun);
+}
+function campaignSupported() {
+  try {
+    return typeof window !== "undefined" && !(typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN) && !(typeof HOST !== "undefined" && !!HOST);
+  } catch (e) {
+    return false;
+  }
+}
+function campaignSig(c) {
+  try {
+    return JSON.stringify(c.steps, (k, v) => k === "file_url" || k === "_ds" ? void 0 : v);
+  } catch (e) {
+    return String(Math.random());
+  }
+}
+function campaignItemsOf(c) {
+  const out = [];
+  for (const s of c && c.steps || []) {
+    if (s && s.type === "item" && s.item) out.push(s.item);
+    if (s && s.type === "layout" && s.zones) for (const k in s.zones) for (const it of s.zones[k] || []) out.push(it);
+  }
+  return out;
+}
+function saveCampaignCache(c) {
+  try {
+    localStorage.setItem(CAMPAIGN_CACHE_KEY, c ? JSON.stringify(c) : "");
+  } catch (e) {
+  }
+}
+function loadCampaignCache() {
+  try {
+    const raw = localStorage.getItem(CAMPAIGN_CACHE_KEY);
+    const c = raw ? JSON.parse(raw) : null;
+    return c && Array.isArray(c.steps) && c.steps.length ? c : null;
+  } catch (e) {
+    return null;
+  }
+}
+function campaignStepAllowed(s) {
+  if (!s) return false;
+  if (s.type === "layout") {
+    if (!s.layout || !Array.isArray(s.layout.zones) || s.empty) return false;
+    return scheduleAllows(s);
+  }
+  return !!s.item && scheduleAllows(s.item);
+}
+function campaignNextAllowed(from) {
+  const steps = campaign.steps;
+  for (let i = 0; i < steps.length; i++) {
+    const idx = (from + i) % steps.length;
+    if (campaignStepAllowed(steps[idx])) return idx;
+  }
+  return -1;
+}
+function campaignLogPlay(a, zoneId, layoutId) {
+  if (PREVIEW_MODE || !a || !shouldLogPlay(a) || !(socket == null ? void 0 : socket.connected)) return;
+  try {
+    socket.emit("device:play-event", {
+      device_id: config.deviceId,
+      event: "play_start",
+      content_id: a.content_id || null,
+      widget_id: a.widget_id || null,
+      content_name: a.filename || a.widget_name || a.title || null,
+      duration_sec: a.duration_sec || null,
+      zone_id: zoneId || null,
+      layout_id: layoutId || null
+    });
+  } catch (e) {
+  }
+}
+function campaignLogLayout(s) {
+  if (PREVIEW_MODE || !s || s.log_play === 0 || !(socket == null ? void 0 : socket.connected)) return;
+  try {
+    socket.emit("device:play-event", {
+      device_id: config.deviceId,
+      event: "layout_start",
+      layout_id: s.layout_id || s.layout && s.layout.id || null,
+      content_name: s.layout && s.layout.name || null,
+      duration_sec: s.duration_sec || null
+    });
+  } catch (e) {
+  }
+}
+function releaseStage(stage, timers) {
+  for (const k in timers || {}) {
+    try {
+      clearTimeout(timers[k]);
+    } catch (e) {
+    }
+  }
+  if (!stage) return;
+  stage.querySelectorAll("video").forEach((v) => {
+    try {
+      destroyHls(v);
+      v.onended = null;
+      v.onerror = null;
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    } catch (e) {
+    }
+  });
+  stage.querySelectorAll(".zone").forEach((d) => {
+    d.__stOnShow = null;
+    d.__stYtToken = (d.__stYtToken || 0) + 1;
+  });
+  try {
+    stage.remove();
+  } catch (e) {
+  }
+}
+function preloadCampaignStep(s) {
+  campaignPreloads.forEach((v) => {
+    try {
+      if (v && v.tagName === "VIDEO") {
+        v.removeAttribute("src");
+        v.load();
+      }
+    } catch (e) {
+    }
+  });
+  campaignPreloads = [];
+  if (!s) return;
+  const items = s.type === "item" ? [s.item] : Object.keys(s.zones || {}).map((k) => (s.zones[k] || [])[0]);
+  for (const a of items) {
+    if (!a || a.widget_id || !a.mime_type) continue;
+    const src = mediaUrl(a);
+    if (!src) continue;
+    if (a.mime_type.startsWith("image/")) {
+      const img = new Image();
+      img.src = src;
+      campaignPreloads.push(img);
+    } else if (a.mime_type.startsWith("video/") && a.mime_type !== "video/youtube" && a.mime_type !== "video/hls") {
+      const v = newVideoElement();
+      v.preload = "auto";
+      v.muted = true;
+      v.src = src;
+      campaignPreloads.push(v);
+    }
+  }
+}
+function runCampaignStep(from) {
+  if (!campaign) return;
+  const container = document.getElementById("playerContainer");
+  if (!container) return;
+  const gen = (campaignRun && campaignRun.gen || 0) + 1;
+  const prev = campaignRun;
+  if (prev && prev.timer) clearTimeout(prev.timer);
+  const idx = campaignNextAllowed(from);
+  if (idx === -1) {
+    if (prev) releaseStage(prev.stage, prev.timers);
+    campaignRun = { idx: from, stage: null, timers: {}, gen, timer: setTimeout(() => runCampaignStep(from), 3e4) };
+    if (!renderDefaultContent()) showNothingScheduled();
+    return;
+  }
+  hideStatus();
+  container.style.display = "block";
+  const s = campaign.steps[idx];
+  const stage = document.createElement("div");
+  stage.className = "campaign-stage";
+  stage.dataset.step = String(idx);
+  stage.style.cssText = "position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden;opacity:0;transition:opacity ".concat(CAMPAIGN_FADE_MS, "ms ease;z-index:").concat(10 + gen % 2);
+  container.appendChild(stage);
+  const timers = {};
+  const run = { idx, stage, timers, gen, timer: null };
+  campaignRun = run;
+  const advance = () => {
+    if (campaignRun === run) runCampaignStep(idx + 1);
+  };
+  let durMs;
+  if (s.type === "layout") {
+    stage.dataset.layout = s.layout.id;
+    if (s.layout.variant) stage.dataset.variant = s.layout.variant;
+    const layoutId = s.layout_id || s.layout.id;
+    for (const zone of s.layout.zones) {
+      const items = s.zones && s.zones[zone.id] || [];
+      if (!items.length) continue;
+      const div = document.createElement("div");
+      div.className = "zone";
+      div.dataset.zone = zone.id;
+      div.style.cssText = "position:absolute;left:".concat(zone.x_percent, "%;top:").concat(zone.y_percent, "%;width:").concat(zone.width_percent, "%;height:").concat(zone.height_percent, "%;z-index:").concat(zone.z_index || 0, ";overflow:hidden");
+      div.__stOnShow = (a) => campaignLogPlay(a, zone.id, layoutId);
+      stage.appendChild(div);
+      showZoneItem(zone, div, items, 0, timers);
+    }
+    campaignLogLayout(s);
+    durMs = Math.max(1, Number(s.duration_sec) || 10) * 1e3;
+    run.timer = setTimeout(advance, durMs);
+  } else {
+    const a = s.item;
+    const zone = { id: "__campaign_full__", x_percent: 0, y_percent: 0, width_percent: 100, height_percent: 100, z_index: 0, sort_order: 0, fit_mode: a.fit_mode || "contain" };
+    const div = document.createElement("div");
+    div.className = "zone";
+    div.dataset.zone = zone.id;
+    div.style.cssText = "position:absolute;top:0;right:0;bottom:0;left:0;overflow:hidden";
+    stage.appendChild(div);
+    showZoneItem(zone, div, [a], 0, timers);
+    campaignLogPlay(a, null, null);
+    const isVideo = typeof a.mime_type === "string" && a.mime_type.startsWith("video/") && a.mime_type !== "video/youtube" && a.mime_type !== "video/hls";
+    durMs = Math.max(1, Number(a.duration_sec) || 10) * 1e3;
+    const v = isVideo ? div.querySelector("video") : null;
+    if (v) {
+      v.loop = false;
+      v.onended = advance;
+      v.onerror = advance;
+      run.timer = setTimeout(advance, Math.max(durMs * 3, 3e5));
+    } else {
+      run.timer = setTimeout(advance, durMs);
+    }
+  }
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    stage.style.opacity = "1";
+  }));
+  if (prev && prev.stage) setTimeout(() => releaseStage(prev.stage, prev.timers), CAMPAIGN_FADE_MS + 50);
+  else if (prev) releaseStage(null, prev.timers);
+  const nxt = campaignNextAllowed(idx + 1);
+  preloadCampaignStep(nxt === -1 ? null : campaign.steps[nxt]);
+  if (PREVIEW_MODE) {
+    try {
+      window.__stCampaignStep = { index: idx, type: s.type, layout_id: s.type === "layout" ? s.layout.id : null };
+    } catch (e) {
+    }
+  }
+}
+function startCampaign(c) {
+  stopCampaign();
+  if (advanceTimer) {
+    clearTimeout(advanceTimer);
+    advanceTimer = null;
+  }
+  teardownCurrentMedia();
+  campaign = { steps: c.steps, sig: campaignSig(c) };
+  isPlaying = true;
+  document.getElementById("setupScreen").style.display = "none";
+  console.log("[campaign] playing " + c.steps.length + " step(s)");
+  runCampaignStep(0);
+}
+function stopCampaign() {
+  if (campaignRun) {
+    if (campaignRun.timer) clearTimeout(campaignRun.timer);
+    releaseStage(campaignRun.stage, campaignRun.timers);
+  }
+  document.querySelectorAll("#playerContainer > .campaign-stage").forEach((el) => releaseStage(el, null));
+  campaignPreloads = [];
+  campaignRun = null;
+  campaign = null;
+}
+function adoptCampaign(data) {
+  const c = campaignSupported() && data && data.campaign && Array.isArray(data.campaign.steps) && data.campaign.steps.length && !data.wall_config && !data.group_sync ? data.campaign : null;
+  if (!c) {
+    if (campaign) {
+      console.log("[campaign] ended \u2014 back to the playlist");
+      stopCampaign();
+      saveCampaignCache(null);
+      playlist = [];
+    }
+    return false;
+  }
+  playlist = Array.isArray(data.assignments) ? data.assignments : [];
+  if (playlist.length) savePlaylistCache(playlist);
+  saveCampaignCache(c);
+  requestOfflineCache((Array.isArray(data.assignments) ? data.assignments : []).concat(campaignItemsOf(c)), triggerItems(triggers));
+  if (campaign && campaign.sig === campaignSig(c)) {
+    console.log("[campaign] unchanged");
+    return true;
+  }
+  startCampaign(c);
+  return true;
 }
 function renderHold(item) {
   if (holdMode(item) === "freeze") {

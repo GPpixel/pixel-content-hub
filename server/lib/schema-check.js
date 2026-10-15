@@ -40,6 +40,8 @@ const REQUIRED_COLUMNS = [
   ['devices', 'scheduled_layout_id', 'ALTER TABLE devices ADD COLUMN scheduled_layout_id TEXT'],
   ['workspaces', 'organization_id', 'ALTER TABLE workspaces ADD COLUMN organization_id TEXT'],
   ['playlists', 'workspace_id', 'ALTER TABLE playlists ADD COLUMN workspace_id TEXT'],
+  // 3.0 playlist layouts: the resolver's layout tier reads the PUBLISHED one.
+  ['playlists', 'published_layout_id', 'ALTER TABLE playlists ADD COLUMN published_layout_id TEXT'],
   // Corporate (head office) playlists — lib/corporate/schema-sql.js is the one definition.
   ...require('./corporate/schema-sql').REQUIRED_CORPORATE_COLUMNS,
 ];

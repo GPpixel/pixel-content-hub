@@ -826,6 +826,9 @@ export const api = {
   clearDevicePlaylist: (device_id) => request(`/devices/${device_id}/playlist`, { method: 'DELETE' }),
   publishPlaylist: (id) => request(`/playlists/${id}/publish`, { method: 'POST' }),
   discardPlaylistDraft: (id) => request(`/playlists/${id}/discard`, { method: 'POST' }),
+  // 3.0 playlist layouts: the layouts a playlist may choose, and where its zoned items would go.
+  getLayouts: () => request('/layouts'),
+  getPlaylistLayoutZoneMap: (id, layoutId) => request(`/playlists/${id}/layout-zone-map?layout_id=${encodeURIComponent(layoutId || '')}`),
 
   // Content approval (optional per workspace) and version history. See docs/approvals-and-history.md.
   getApprovalSettings: () => request('/approvals/settings'),

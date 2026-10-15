@@ -75,6 +75,8 @@ const EXPORTED = {
   playlists: { category: 'playlists', scope: ws() },
   playlist_items: { category: 'playlists', scope: via('playlist_id', 'playlists') },
   playlist_item_schedules: { category: 'playlists', scope: via('playlist_item_id', 'playlist_items') },
+  // 3.0 campaigns: what each zone of a layout item plays (lib/campaign.js).
+  playlist_item_zone_sources: { category: 'playlists', scope: via('item_id', 'playlist_items') },
   corporate_slots: { category: 'playlists', scope: org() },
   corporate_mandates: { category: 'playlists', scope: org() },
   corporate_slot_fills: { category: 'playlists', scope: ws() },
@@ -85,6 +87,8 @@ const EXPORTED = {
   // layouts
   layouts: { category: 'layouts', scope: ws() },
   layout_zones: { category: 'layouts', scope: via('layout_id', 'layouts') },
+  // 3.0: a layout's portrait / 4:3 versions (lib/layout-variants.js).
+  layout_zone_variants: { category: 'layouts', scope: via('layout_id', 'layouts') },
   // slides, signs, kiosks
   slide_decks: { category: 'signs', scope: ws() },
   kiosk_pages: { category: 'signs', scope: ws() },
