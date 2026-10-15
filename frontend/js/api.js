@@ -764,6 +764,9 @@ export const api = {
   getWidgets: () => request('/widgets'),
   getWidget: (id) => request('/widgets/' + id),
   createWidget: (data) => request('/widgets', { method: 'POST', body: JSON.stringify(data) }),
+  // 3.0 news feeds (routes/news-feeds.js): "Find feeds" on a pasted site, and a feed's items.
+  newsDiscover: (url) => request('/news-feeds/discover', { method: 'POST', body: JSON.stringify({ url }) }),
+  newsPreview: (url, mode = 'feed') => request('/news-feeds/preview', { method: 'POST', body: JSON.stringify({ url, mode }) }),
   getKioskPages: () => request('/kiosk'),
 
   // Device Groups

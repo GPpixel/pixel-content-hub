@@ -7,6 +7,7 @@
  *   #/simple/passkey         Sign in with a passkey: confirm your password → the browser's prompt → done
  *   #/simple/share[?device]  Share my screen (3.0): pick the screen → choose what to share → live, Stop
  *   #/simple/sign            Make a sign: pick a template → fill it in → choose screens (views/make-sign.js)
+ *   #/simple/news            Show news headlines (3.0): a site or feed → how it looks → choose screens (views/simple-news.js)
  *   #/simple/brand           The workspace brand kit the sign templates use (components/brand-kit-editor.js)
  *   #/simple/ai-setup        Set up my screens with AI (3.0 Private AI): describe the place → pick signs → check each (views/ai-setup.js)
  *   #/simple/import          Import from another app (3.0, views/migrate.js in guide mode): offered on the
@@ -40,6 +41,7 @@ import { renderAiSetup, cleanup as cleanupAiSetup } from './ai-setup.js';
 import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
 import { upcomingChanges } from '../components/preview-at-time.js';
 import { mountMigrate, cleanup as cleanupMigrate } from './migrate.js';
+import { renderNews } from './simple-news.js';
 
 const SAMPLE_URL = '/assets/samples/welcome-screen.jpg';
 const ACCEPT = 'image/*,video/*,audio/*';
@@ -161,7 +163,8 @@ async function renderHome(container) {
       ${canChange ? `<a class="simple-task" href="#/add-screen"><span class="simple-task-icon">&#10133;</span><span><strong>${esc(t('simple.task.add'))}</strong><small>${esc(t('simple.task.add_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/change"><span class="simple-task-icon">&#9998;</span><span><strong>${esc(t('simple.task.change'))}</strong><small>${esc(t('simple.task.change_desc'))}</small></span></a>
       <a class="simple-task" href="#/simple/upload"><span class="simple-task-icon">&#128247;</span><span><strong>${esc(t('simple.task.upload'))}</strong><small>${esc(t('simple.task.upload_desc'))}</small></span></a>
-      <a class="simple-task" href="#/simple/sign"><span class="simple-task-icon">&#127991;&#65039;</span><span><strong>${esc(t('signs.task'))}</strong><small>${esc(t('signs.task_desc'))}</small></span></a>` : ''}
+      <a class="simple-task" href="#/simple/sign"><span class="simple-task-icon">&#127991;&#65039;</span><span><strong>${esc(t('signs.task'))}</strong><small>${esc(t('signs.task_desc'))}</small></span></a>
+      <a class="simple-task" href="#/simple/news"><span class="simple-task-icon">&#128240;</span><span><strong>${esc(t('news.simple.task'))}</strong><small>${esc(t('news.simple.task_desc'))}</small></span></a>` : ''}
       ${canChange ? `<a class="simple-task" href="#/simple/requests"><span class="simple-task-icon">&#128229;</span><span><strong>${esc(t('simple.task.requests'))}</strong><small>${esc(t('simple.task.requests_desc'))}</small></span></a>` : ''}
       ${canManageTeam() ? `<a class="simple-task" href="#/simple/team"><span class="simple-task-icon">&#128101;</span><span><strong>${esc(t('simple.task.team'))}</strong><small>${esc(t('simple.task.team_desc'))}</small></span></a>` : ''}
       <a class="simple-task" href="#/simple/help"><span class="simple-task-icon">&#10067;</span><span><strong>${esc(t('simple.task.help'))}</strong><small>${esc(t('simple.task.help_desc'))}</small></span></a>
@@ -1304,14 +1307,14 @@ export function render(container, hash = window.location.hash || '#/') {
   const onRefreshed = (e) => {
     const h = window.location.hash || '#/';
     if (accessKey(e.detail) === drawnFor || !isSimpleRoute(h)) return;
-    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share') || h.startsWith('#/simple/requests/new') || h.startsWith('#/simple/ai-setup') || h.startsWith('#/simple/import')) return;
+    if (h.startsWith('#/simple/change') || h.startsWith('#/simple/upload') || h.startsWith('#/simple/sign') || h.startsWith('#/simple/news') || h.startsWith('#/simple/brand') || h.startsWith('#/simple/share') || h.startsWith('#/simple/requests/new') || h.startsWith('#/simple/ai-setup') || h.startsWith('#/simple/import')) return;
     render(container, h);
   };
   window.addEventListener('user-refreshed', onRefreshed);
   cleanupFns.push(() => window.removeEventListener('user-refreshed', onRefreshed));
   const q = new URLSearchParams(hash.split('?')[1] || '');
   // A view-only member has nothing to do on Change or Upload (bookmark, shared link): go home.
-  if (!simpleCanChange() && (hash.startsWith('#/simple/import') || hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/requests') || hash.startsWith('#/simple/ai-setup'))) {
+  if (!simpleCanChange() && (hash.startsWith('#/simple/import') || hash.startsWith('#/simple/change') || hash.startsWith('#/simple/upload') || hash.startsWith('#/simple/share') || hash.startsWith('#/simple/sign') || hash.startsWith('#/simple/news') || hash.startsWith('#/simple/requests') || hash.startsWith('#/simple/ai-setup'))) {
     window.location.replace('#/');
     return undefined;
   }
@@ -1319,6 +1322,7 @@ export function render(container, hash = window.location.hash || '#/') {
   if (hash.startsWith('#/simple/upload')) return renderUpload(container, (q.get('ids') || '').split(',').filter((x) => /^[0-9a-f-]{36}$/i.test(x)));
   if (hash.startsWith('#/simple/sign')) return renderSign(container, { simple: true, device: q.get('device'), from: q.get('from') });
   if (hash.startsWith('#/simple/brand')) return renderBrand(container, { simple: true });
+  if (hash.startsWith('#/simple/news')) return renderNews(container);
   if (hash.startsWith('#/simple/ai-setup')) { cleanupFns.push(cleanupAiSetup); return renderAiSetup(container, { simple: true, hash }); }
   if (hash.startsWith('#/simple/help')) return renderHelp(container);
   if (hash.startsWith('#/simple/import')) return renderImport(container);

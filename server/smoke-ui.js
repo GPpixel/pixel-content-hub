@@ -143,6 +143,18 @@ const check = (name, ok, detail) => {
   check('a new account lands on the Simple home', await page.evaluate(() =>
     !!document.querySelector('.simple-tasks') && getComputedStyle(document.getElementById('sidebar')).display === 'none'));
   check('the Simple home offers Make a sign', await page.evaluate(() => !!document.querySelector('.simple-tasks a[href="#/simple/sign"]')));
+  // 3.0 news feeds: the Simple task opens on its "Which news?" step with the feed picker.
+  check('the Simple home offers Show news headlines', await page.evaluate(() => !!document.querySelector('.simple-tasks a[href="#/simple/news"]')));
+  {
+    const before = errors.length;
+    await page.goto(BASE + '/app#/simple/news', { waitUntil: 'networkidle2' });
+    await new Promise(r => setTimeout(r, 900));
+    check('Show news headlines opens with the feed picker', await page.evaluate(() =>
+      !!document.querySelector('.news-picker [data-np-url]') && !!document.querySelector('[data-np-find]')
+      && document.querySelector('[data-guide-next]').disabled === true), 'no picker, or Next enabled with no feed');
+    check('no uncaught error on #/simple/news', errors.length === before, errors.slice(before).join(' | '));
+    await page.goto(BASE + '/app#/', { waitUntil: 'networkidle2' });
+  }
   // Everything below exercises the full product, so switch this account to Advanced view.
   await page.evaluate(async () => {
     await fetch('/api/auth/me', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + localStorage.getItem('token') },
@@ -202,6 +214,8 @@ const check = (name, ok, detail) => {
       await sleep(250);
       const f = document.getElementById('widgetConfigForm');
       out[type] = f && f.children.length ? 'ok' : 'empty form';
+      // 3.0 news feeds: the news widget's form carries the feed picker.
+      if (type === 'rss' && out[type] === 'ok' && !f.querySelector('#wFeedPicker [data-np-url]')) out[type] = 'no feed picker';
       const modal = document.getElementById('widgetModal');
       if (modal) modal.style.display = 'none';
     }

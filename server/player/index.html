@@ -9158,7 +9158,9 @@
       // plane, so a DOM composite comes back with the content missing. It needs no host bridge at
       // all, which is what makes it work where the host route does not: page->host messaging is
       // dead after load on that platform, so a request relayed through BrightScript never arrives.
-      if (BS && typeof BS.captureScreen === 'function') {
+      // Only on real BrightSign hardware: the helper is loaded on every web player, so without the
+      // isBrightSign check a browser warned on every screenshot before taking the same canvas path.
+      if (BS && typeof BS.captureScreen === 'function' && typeof BS.isBrightSign === 'function' && BS.isBrightSign()) {
         BS.captureScreen({ width: 960, height: 540 })
           .then((dataUrl) => {
             const base64 = String(dataUrl).split(',')[1];

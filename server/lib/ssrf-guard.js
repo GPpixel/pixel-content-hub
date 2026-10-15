@@ -334,7 +334,8 @@ function pinnedLookup(vettedAddresses) {
  * @param {'stream'|'text'|'buffer'} [options.responseType='stream'] Response format
  * @param {string|Buffer} [options.body] Optional request body (capped at 64KiB)
  * @param {boolean} [options.accept2xx=false] Treat any 2xx as success (webhooks: Discord 204)
- * @returns {Promise<{res?: import('http').IncomingMessage, text?: string, buffer?: Buffer, notModified?: boolean, statusCode: number, headers: object}>}
+ * @returns {Promise<{res?: import('http').IncomingMessage, text?: string, buffer?: Buffer, notModified?: boolean, statusCode: number, headers: object, finalUrl?: string}>}
+ *   finalUrl is the address that answered after any redirects, for resolving relative links in it.
  */
 // Headers that must not survive a cross-origin redirect. Matched case-insensitively.
 const SENSITIVE_HEADERS = new Set(['authorization', 'cookie', 'proxy-authorization']);
@@ -435,7 +436,7 @@ function guardedRequest(urlString, options = {}) {
 
         if (responseType === 'stream') {
           clearDeadlineTimer();
-          return resolve({ res, statusCode: sc, headers: res.headers });
+          return resolve({ res, statusCode: sc, headers: res.headers, finalUrl: url.toString() });
         }
 
         const chunks = [];
@@ -455,9 +456,9 @@ function guardedRequest(urlString, options = {}) {
           clearDeadlineTimer();
           const buf = Buffer.concat(chunks);
           if (responseType === 'text') {
-            resolve({ text: buf.toString('utf8'), statusCode: sc, headers: res.headers });
+            resolve({ text: buf.toString('utf8'), statusCode: sc, headers: res.headers, finalUrl: url.toString() });
           } else {
-            resolve({ buffer: buf, statusCode: sc, headers: res.headers });
+            resolve({ buffer: buf, statusCode: sc, headers: res.headers, finalUrl: url.toString() });
           }
         });
 
