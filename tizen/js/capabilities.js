@@ -117,6 +117,10 @@
      */
     if (window.KioskLogic && window.KioskSession) caps.push('playback.web_interactive_framed');
 
+    /* 3.0 screen share: only where the web engine documents WebRTC (Tizen 10+) AND the receiver's own
+     * probe passes — js/screen-share-tizen.js explains the gate. */
+    try { if (window.STShareTizen && STShareTizen.supported()) caps.push('remote.screen_share'); } catch (e) { /* not claimed */ }
+
     var f = fleet();
     // Only on a partner-signed panel with the B2B/system surface present.
     if (f && f.reboot) caps.push('system.reboot');

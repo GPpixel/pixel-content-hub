@@ -141,8 +141,12 @@ function createSession(opts) {
   const { device, workspace } = opts;
   if (byDevice.has(device.id)) return { error: 'busy' };
   const ticket = crypto.randomBytes(32).toString('base64url');
+  const id = crypto.randomUUID();
   const s = {
-    id: crypto.randomUUID(),
+    id,
+    // Multi share: every screen of one share carries the same shareId; a one-screen share is its
+    // own share (shareId === id), so nothing that predates multi share changes.
+    shareId: opts.shareId || id,
     deviceId: device.id,
     deviceName: device.name || '',
     workspaceId: workspace.id,
@@ -172,7 +176,7 @@ function createSession(opts) {
   unrefTimer(s.timers.ticket);
   audit(s.guest ? 'screen_share.guest_join' : 'screen_share.start', {
     userId: s.userId, workspaceId: s.workspaceId, deviceId: s.deviceId, ip: s.ip,
-    details: { session_id: s.id, shared_by: s.sharedBy, guest: s.guest, audio: s.audio },
+    details: { session_id: s.id, share_id: s.shareId, shared_by: s.sharedBy, guest: s.guest, audio: s.audio },
   });
   // The badge on the screen must not offer a code while it is busy.
   if (s.guest || codes.has(device.id)) pushCode(device.id);
@@ -219,6 +223,8 @@ function publicSession(s) {
   return {
     session_id: s.id, shared_by: s.sharedBy, guest: s.guest, audio: s.audio, live: s.live,
     started_at: s.startedAt || s.createdAt, max_seconds: maxSeconds(),
+    // Multi share: which share this screen is part of, and how many screens it is on right now.
+    share_id: s.shareId, screens: sessionsForShare(s.shareId).length || 1,
   };
 }
 
@@ -227,6 +233,84 @@ function stopForDevice(deviceId, reason, by) {
   if (!s) return false;
   endSession(s, reason, by);
   return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Multi share: one person's screen on several screens at once
+// ------------------------------------------------------------------------------------------------
+/*
+ * A multi share is N ordinary sessions — one per screen, each with its own single-use ticket, its
+ * own sharer WebSocket and its own screen leg — that carry the same shareId. Nothing in the relay
+ * changes: a screen authenticates exactly as before, and a leg can only ever talk to the one screen
+ * its ticket was minted for (per-leg isolation is the relay's existing ticket ↔ session binding).
+ * The sharer's browser keeps one capture and one RTCPeerConnection per screen.
+ *
+ * What the shareId adds: the owner can stop ALL screens of a share at once, the dashboard can say
+ * "on 4 screens", and a screen that drops out ends only its own session — the others keep going.
+ *
+ * WHY A LIMIT (SCREEN_SHARE_MAX_TARGETS, default 6): every screen is a separate upload from the
+ * sharer's computer, ~1-3 Mbit/s each for a screen. Beyond a handful a laptop on office Wi-Fi
+ * cannot keep up and every screen degrades together. A whole floor of screens wants ONE upload to a
+ * restreamer that fans out (the go2rtc sidecar live video uses) — not implemented here; see
+ * docs/screen-share.md, "Sharing to many screens".
+ */
+function maxTargets() { return Math.max(1, Math.min(50, Number(config.screenShareMaxTargets) || 6)); }
+
+function sessionsForShare(shareId) {
+  if (!shareId) return [];
+  return [...sessions.values()].filter((s) => s.shareId === shareId && !s.ended);
+}
+
+/*
+ * The screens a share to `deviceIds` must reach, in order, without duplicates. Returns
+ * [{ id, via }] where via is null for a screen that was asked for and 'mirror' for one added because
+ * it mirrors one that was.
+ *
+ * Each requested screen's MIRRORS (lib/mirrors.js: the same display link open somewhere else) are
+ * added after it, so sharing to a display also reaches the places it is showing. Every caller
+ * treats a 'mirror' entry as best-effort (skipped, not refused, when the sharer cannot reach it).
+ */
+function expandShareTargets(deviceIds) {
+  const out = [];
+  const seen = new Set();
+  const add = (id, via) => { const k = String(id || ''); if (k && !seen.has(k)) { seen.add(k); out.push({ id: k, via }); } };
+  for (const id of deviceIds || []) {
+    add(id, null);
+    const mirrors = require('./mirrors').mirrorsOf(id);
+    for (const m of mirrors) add(m && m.id ? m.id : m, 'mirror');
+  }
+  return out;
+}
+
+/*
+ * Mint one share across targets [{ device, workspace }] (already access-checked and available).
+ * All or nothing: if any screen turned busy in between, nothing is left behind.
+ * returns { shareId, legs: [{ session, ticket, device }] } or { error }
+ */
+function createShare(opts) {
+  const targets = opts.targets || [];
+  if (!targets.length) return { error: 'none_available' };
+  if (targets.length > maxTargets()) return { error: 'too_many_targets' };
+  const busy = targets.find((t) => byDevice.has(t.device.id));
+  if (busy) return { error: 'busy', device_id: busy.device.id };
+  const shareId = crypto.randomUUID();
+  const legs = [];
+  for (const t of targets) {
+    const out = createSession({ ...opts, device: t.device, workspace: t.workspace, shareId });
+    if (out.error) {
+      for (const l of legs) endSession(l.session, 'not_connected');
+      return { error: out.error, device_id: t.device.id };
+    }
+    legs.push({ session: out.session, ticket: out.ticket, device: t.device });
+  }
+  return { shareId, legs };
+}
+
+// Stop every screen of a share (the owner's "stop on all screens"). Returns how many were running.
+function stopShare(shareId, reason, by) {
+  const all = sessionsForShare(shareId);
+  for (const s of all) endSession(s, reason, by);
+  return all.length;
 }
 
 // The screen dropped off Socket.IO: its share cannot continue and its code means nothing now.
@@ -556,6 +640,7 @@ module.exports = {
   init, attach,
   featureOn, workspaceOn, availability, isOnline, maxSeconds, iceServersFor, cleanName,
   createSession, endSession, stopForDevice, stopWorkspace, sessionForDevice, publicSession, deviceGone,
+  maxTargets, expandShareTargets, createShare, stopShare, sessionsForShare,
   guestEnabled, currentCode, rotateCode, redeemCode, normaliseCode, formatCode, pushCode, dropCode, onDeviceRegistered,
   _reset, _sessions: sessions, _codes: codes, _sweep: sweep,
 };

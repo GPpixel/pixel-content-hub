@@ -34,7 +34,7 @@ import { switchWorkspaceTo } from '../components/corporate-ui.js';
 import { mountStockPicker } from '../components/stock-picker.js';
 import { passkeysSupported, suggestedPasskeyName } from '../lib/passkeys.js';
 import { addPasskey, unavailableMessage } from '../components/passkey-setup.js';
-import { startScreenShare, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText } from '../components/screen-share.js';
+import { startScreenShare, startScreenShareTo, stopScreenShare, activeScreenShare, onScreenShareChange, screenShareUnsupportedText, screenShareUnsupportedNote } from '../components/screen-share.js';
 import { renderSign, renderBrand } from './make-sign.js';
 import { renderAiSetup, cleanup as cleanupAiSetup } from './ai-setup.js';
 import { loadStates as loadVerification, plainStatus } from '../components/screen-verify.js';
@@ -270,58 +270,91 @@ function canShareTo(d) {
 }
 
 async function renderShare(container, presetId) {
-  let devices = [];
-  try { devices = (await api.getDevices()).filter(canShareTo); } catch { devices = []; }
+  let all = [];
+  try { all = await api.getDevices(); } catch { all = []; }
+  const devices = (Array.isArray(all) ? all : []).filter(canShareTo);
   const on = await screenShareOn();
+  // Arrived from a screen that cannot show a share (a Roku, an old app): say so, plainly, by name.
+  if (on && presetId && !devices.some((d) => d.id === presetId)) {
+    let note = t('screen_share.reason.unsupported');
+    try { const st = await api.getScreenShare(presetId); if (st && !st.supported) note = screenShareUnsupportedNote(st.platform); } catch { /* generic words */ }
+    shell(container, guideFrame({ step: 0, total: 1, icon: '&#128421;&#65039;', title: t('screen_share.simple.none_title'), back: false,
+      body: `<p class="simple-lead">${esc(note)}</p><div class="simple-done-actions"><a class="btn btn-primary" href="#/">${esc(t('screen_share.simple.home'))}</a></div>` }));
+    return;
+  }
   if (!on || !devices.length) {
     shell(container, guideFrame({ step: 0, total: 1, icon: '&#128421;&#65039;', title: t('screen_share.simple.none_title'), back: false,
       body: `<p class="simple-lead">${esc(t(on ? 'screen_share.simple.none' : 'screen_share.reason.disabled'))}</p><div class="simple-done-actions"><a class="btn btn-primary" href="#/">${esc(t('screen_share.simple.home'))}</a></div>` }));
     return;
   }
-  let device = devices.find((d) => d.id === presetId) || (devices.length === 1 ? devices[0] : null);
-  const skipPick = !!device;
+  // 3.0 multi share: the person can pick several screens (up to the server's limit).
+  let maxTargets = 6;
+  try { const st = await api.getScreenShare(devices[0].id); if (st && st.max_targets) maxTargets = st.max_targets; } catch { /* default */ }
+  const preset = devices.find((d) => d.id === presetId) || (devices.length === 1 ? devices[0] : null);
+  let chosen = preset ? [preset] : [];
+  const skipPick = !!preset;
   const total = skipPick ? 2 : 3;
+  const picked = new Set();
   const wireBack = (fn) => container.querySelector('[data-guide-back]')?.addEventListener('click', fn);
   const off = onScreenShareChange(() => { if (document.contains(container)) draw(); });
   cleanupFns.push(off);
 
   function pickStep() {
-    shell(container, guideFrame({ step: 0, total, icon: '&#128250;', title: t('screen_share.simple.pick_title'), back: false,
-      body: `<div class="simple-pick">${devices.map((d) => `
-        <button type="button" class="simple-screen" data-pick="${esc(d.id)}" ${online(d) ? '' : 'disabled'}>
+    shell(container, guideFrame({ step: 0, total, icon: '&#128250;', title: t('screen_share.simple.pick_many_title'), back: false,
+      body: `<p class="simple-lead">${esc(t('screen_share.simple.pick_many_lead', { max: maxTargets }))}</p>
+        <div class="simple-pick">${devices.map((d) => `
+        <button type="button" class="simple-screen${picked.has(d.id) ? ' is-picked' : ''}" data-pick="${esc(d.id)}" aria-pressed="${picked.has(d.id) ? 'true' : 'false'}" ${online(d) ? '' : 'disabled'}
+          style="${picked.has(d.id) ? 'outline:3px solid var(--accent, #3b82f6);outline-offset:2px' : ''}">
           <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
-          <span class="simple-screen-name">${esc(d.name)}</span>
+          <span class="simple-screen-name">${picked.has(d.id) ? '&#10003; ' : ''}${esc(d.name)}</span>
           <span class="simple-screen-status ${online(d) ? 'on' : 'off'}">${esc(online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
-        </button>`).join('')}</div>` }));
+        </button>`).join('')}</div>
+        <div class="simple-done-actions"><button type="button" class="btn btn-primary simple-share-go" data-pick-next ${picked.size ? '' : 'disabled'}>${esc(t('screen_share.simple.next'))}</button></div>` }));
     container.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
-      device = devices.find((d) => d.id === b.dataset.pick);
-      draw();
+      const id = b.dataset.pick;
+      if (picked.has(id)) picked.delete(id);
+      else if (picked.size >= maxTargets) { showToast(t('screen_share.reason.too_many_targets', { max: maxTargets, count: picked.size + 1 }), 'warning'); return; }
+      else picked.add(id);
+      pickStep();
     }));
+    container.querySelector('[data-pick-next]')?.addEventListener('click', () => {
+      chosen = devices.filter((d) => picked.has(d.id));
+      if (chosen.length) draw();
+    });
   }
 
   function chooseStep() {
     const why = screenShareUnsupportedText();
-    shell(container, guideFrame({ step: skipPick ? 0 : 1, total, icon: '&#128421;&#65039;', title: t('screen_share.simple.choose_title', { name: device.name }), back: !skipPick,
+    const one = chosen.length === 1 ? chosen[0] : null;
+    const allOnline = chosen.every(online);
+    shell(container, guideFrame({ step: skipPick ? 0 : 1, total, icon: '&#128421;&#65039;',
+      title: one ? t('screen_share.simple.choose_title', { name: one.name }) : t('screen_share.simple.choose_title_n', { count: chosen.length }), back: !skipPick,
       body: `
         <p class="simple-lead">${esc(t('screen_share.simple.choose_lead'))}</p>
         ${why ? `<p class="simple-status" style="color:var(--danger)">${esc(why)}</p>` : `
         <label class="simple-share-audio"><input type="checkbox" data-share-audio> ${esc(t('screen_share.include_audio'))}</label>
-        <div class="simple-done-actions"><button type="button" class="btn btn-primary simple-share-go" data-share-go ${online(device) ? '' : 'disabled'}>${esc(t('screen_share.simple.choose_btn'))}</button></div>
-        ${online(device) ? '' : `<p class="simple-status">${esc(t('screen_share.card.offline'))}</p>`}`}` }));
-    wireBack(() => { device = null; draw(); });
+        <div class="simple-done-actions"><button type="button" class="btn btn-primary simple-share-go" data-share-go ${allOnline ? '' : 'disabled'}>${esc(t('screen_share.simple.choose_btn'))}</button></div>
+        ${allOnline ? '' : `<p class="simple-status">${esc(t('screen_share.card.offline'))}</p>`}`}` }));
+    wireBack(() => { chosen = []; draw(); });
     container.querySelector('[data-share-go]')?.addEventListener('click', async (e) => {
       e.currentTarget.disabled = true;
       const audio = !!container.querySelector('[data-share-audio]')?.checked;
-      const started = await startScreenShare(device, { audio });
+      const started = one
+        ? await startScreenShare(one, { audio })
+        : await startScreenShareTo({ deviceIds: chosen.map((d) => d.id) }, { audio });
       if (!started && document.contains(container)) draw();
     });
   }
 
   function liveStep(a) {
     const live = a.state === 'live';
-    shell(container, guideFrame({ step: total - 1, total, icon: live ? '&#128308;' : '&#9203;', title: t('screen_share.simple.live_title', { name: a.deviceName }), back: false,
+    const many = a.screens > 1;
+    const lead = many && live ? t('screen_share.state.live_n', { live: a.live, total: a.screens })
+      : t(live ? 'screen_share.state.live' : a.state === 'negotiating' ? 'screen_share.state.negotiating' : 'screen_share.state.connecting');
+    shell(container, guideFrame({ step: total - 1, total, icon: live ? '&#128308;' : '&#9203;',
+      title: many ? t('screen_share.simple.live_title_n', { count: a.screens }) : t('screen_share.simple.live_title', { name: a.deviceName }), back: false,
       body: `
-        <p class="simple-lead">${esc(t(live ? 'screen_share.state.live' : a.state === 'negotiating' ? 'screen_share.state.negotiating' : 'screen_share.state.connecting'))}</p>
+        <p class="simple-lead">${esc(lead)}</p>
         <p class="simple-muted">${esc(t('screen_share.simple.live_hint'))}</p>
         <div class="simple-done-actions"><button type="button" class="btn btn-danger simple-share-go" data-share-stop>${esc(t('screen_share.stop'))}</button></div>` }));
     container.querySelector('[data-share-stop]')?.addEventListener('click', () => stopScreenShare());
@@ -337,10 +370,10 @@ async function renderShare(container, presetId) {
         body: `<p class="simple-lead">${esc(t('screen_share.simple.done'))}</p>
           <div class="simple-done-actions"><a class="btn btn-primary" href="#/">${esc(t('screen_share.simple.home'))}</a>
           <button type="button" class="btn btn-secondary" data-share-again>${esc(t('screen_share.simple.again'))}</button></div>` }));
-      container.querySelector('[data-share-again]')?.addEventListener('click', () => { if (!skipPick) device = null; draw(); });
+      container.querySelector('[data-share-again]')?.addEventListener('click', () => { if (!skipPick) chosen = []; draw(); });
       return;
     }
-    if (!device) pickStep(); else chooseStep();
+    if (!chosen.length) pickStep(); else chooseStep();
   }
   draw();
 }

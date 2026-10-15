@@ -102,6 +102,9 @@ class MainActivity : AppCompatActivity() {
     private var audience: com.remotedisplay.player.audience.AudienceController? = null
     private lateinit var pipLayout: FrameLayout       // #109: reparented above rootView (see onCreate)
     private var talkRenderer: org.webrtc.SurfaceViewRenderer? = null   // #talk video: operator webcam overlay
+    private var screenShareOverlay: com.remotedisplay.player.remote.ScreenShareOverlay? = null   // 3.0 screen share
+    @Volatile private var talkDucked = false
+    @Volatile private var shareDucked = false
     private lateinit var captureRoot: View            // window content; capture source (includes pipLayout)
     private var currentOrientation: String? = null
 
@@ -266,6 +269,10 @@ class MainActivity : AppCompatActivity() {
         pipOverlay = PipOverlay(this, pipLayout, rootView, youtubeWebView) { level, message ->
             wsService?.sendLog("pip", level, message)
         }
+
+        // 3.0 screen share: the shared screen + its badge, and the meeting-room code, in the PiP layer
+        // (so they turn with the panel and are in the remote-view capture). remote/ScreenShareOverlay.
+        screenShareOverlay = com.remotedisplay.player.remote.ScreenShareOverlay(this, pipLayout).also { it.attach() }
 
         /*
          * Triggers. Shares the PiP layer, which draws above the playlist and inherits the
@@ -1279,10 +1286,14 @@ class MainActivity : AppCompatActivity() {
 
         // #talk: duck the playlist (mute + freeze video) while a call/PA is active, so the
         // announcement is heard; restore on stop. Same ducking the trigger overlay uses.
-        wsService?.onTalkDuck = { on ->
+        // 3.0 screen share ducks the same way; the two are OR-ed so one ending never un-ducks the other.
+        val applyDuck = {
+            val on = talkDucked || shareDucked
             try { if (::mediaPlayer.isInitialized) mediaPlayer.setTalkMute(on) } catch (e: Throwable) { }
             try { slideAudioPlayer?.setMuted(on) } catch (e: Throwable) { }
         }
+        wsService?.onTalkDuck = { on -> talkDucked = on; applyDuck() }
+        wsService?.onShareDuck = { on -> shareDucked = on; applyDuck() }
 
         // #talk video: render the operator's optional webcam fullscreen over the (paused) content.
         // The track + its EglBase context arrive from AudioTalker via TalkVideoBus; a null track
@@ -2283,6 +2294,7 @@ class MainActivity : AppCompatActivity() {
         // #talk video: drop the bus listener (it holds `this`) and release the renderer.
         try { com.remotedisplay.player.remote.TalkVideoBus.listener = null } catch (e: Throwable) { }
         try { talkRenderer?.let { pipLayout.removeView(it); it.release() }; talkRenderer = null } catch (e: Throwable) { }
+        try { screenShareOverlay?.detach(); screenShareOverlay = null } catch (e: Throwable) { }
         // Everything below this line exists for the same reason the wall/group shutdown does, and
         // was missing: these Handlers are on the MAIN LOOPER, which outlives the Activity.
         //

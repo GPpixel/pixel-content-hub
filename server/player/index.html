@@ -4971,15 +4971,19 @@
       if (window.__stHasMic) caps.push('remote.mic');
       /*
        * 3.0 screen share: this page can RECEIVE a peer-to-peer WebRTC stream and show it fullscreen
-       * (window.STScreenShare). Claimed only in a plain browser / desktop shell: inside the
-       * BrightSign, webOS, Vega and iOS shells the WebRTC receive path is unverified, and a screen
-       * that claims it and then shows nothing is a guest presenting to a blank TV. typeof-guarded
-       * throughout because the capability tests run this function on its own.
+       * (window.STScreenShare). Claimed in a plain browser / desktop shell and in the iOS app
+       * (WKWebView has RTCPeerConnection from iOS 14.3; the app needs 16 and plays inline media
+       * without a gesture). NOT inside the BrightSign, webOS or Vega shells: BrightSign gates WebRTC
+       * behind a widget flag we do not set, LG says WebRTC is for contracted partner apps only, and
+       * Vega's WebView does not document it — a screen that claims it and then shows nothing is a
+       * guest presenting to a blank TV (docs/screen-share.md, "Which screens can show a share").
+       * typeof-guarded throughout because the capability tests run this function on its own.
        */
       try {
         const SS = typeof window !== 'undefined' ? window.STScreenShare : null;
         const rtc = !!(SS && typeof SS.isSupported === 'function' && SS.isSupported());
-        const shell = (typeof ON_BRIGHTSIGN !== 'undefined' && ON_BRIGHTSIGN) || (typeof HOST !== 'undefined' && !!HOST);
+        const ios = typeof onIOS === 'function' && onIOS();
+        const shell = (typeof ON_BRIGHTSIGN !== 'undefined' && ON_BRIGHTSIGN) || (typeof HOST !== 'undefined' && !!HOST && !ios);
         if (rtc && !shell) caps.push('remote.screen_share');
       } catch (e) { /* not declared */ }
       if (typeof triggerStats === 'object' && triggerStats.listeners && triggerStats.listeners.http) {

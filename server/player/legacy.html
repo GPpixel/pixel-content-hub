@@ -787,7 +787,7 @@ function showMirrorHold(hold) {
     if (!el) {
       el = document.createElement("div");
       el.id = "st-mirror-hold";
-      el.style.cssText = "position:fixed;inset:0;z-index:2147483646;background:#111827;color:#e5e7eb;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vw;font-family:sans-serif";
+      el.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483646;background:#111827;color:#e5e7eb;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5vw;font-family:sans-serif";
       document.body.appendChild(el);
     }
     const removed = hold && hold.kind === "removed";
@@ -4189,7 +4189,8 @@ function declaredCapabilities() {
   try {
     const SS = typeof window !== "undefined" ? window.STScreenShare : null;
     const rtc = !!(SS && typeof SS.isSupported === "function" && SS.isSupported());
-    const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST;
+    const ios = typeof onIOS === "function" && onIOS();
+    const shell = typeof ON_BRIGHTSIGN !== "undefined" && ON_BRIGHTSIGN || typeof HOST !== "undefined" && !!HOST && !ios;
     if (rtc && !shell) caps.push("remote.screen_share");
   } catch (e) {
   }

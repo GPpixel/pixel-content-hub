@@ -9,6 +9,9 @@
  *   PUT    /devices/:id/guest   the meeting-room code on this screen, on/off (workspace admin)
  *   GET    /workspace/:wsId     the workspace switch, for the settings card
  *   PUT    /workspace/:wsId     turn the feature on/off for the workspace (workspace admin)
+ *   POST   /shares              multi share: one share on several screens / a group (editor+)
+ *   DELETE /shares/:shareId     stop a multi share on every screen (editor+ on all of them)
+ *   GET    /groups/:groupId     which of a group's screens can take a share, and why not
  *
  * The media never comes here: the browser and the screen connect peer to peer, and this server only
  * relays their signalling (lib/screen-share.js). Every route resolves the device's OWN workspace
@@ -57,7 +60,133 @@ router.get('/devices/:id', (req, res) => {
     guest_enabled: !!r.device.screen_share_guest,
     max_seconds: share.maxSeconds(),
     session: share.publicSession(session),
+    // Multi share: how many screens one share may reach, and what kind of player this is (the card
+    // names it when it cannot show a share: "This screen can't show a screen share (Roku)").
+    max_targets: share.maxTargets(),
+    platform: require('../lib/player-capabilities').platformFamily(r.device),
   });
+});
+
+// ------------------------------------------------------------------ multi share
+/*
+ * The caller's access to one screen, without answering: { device, ws, readOnly } or { status, error }.
+ * Same resolution as loadDevice — the screen's OWN workspace, resourceAccess on it.
+ */
+function accessFor(req, deviceId) {
+  const device = db.prepare('SELECT * FROM devices WHERE id = ?').get(String(deviceId || ''));
+  if (!device) return { status: 404, error: 'Device not found' };
+  if (!device.workspace_id) return { status: 403, error: 'Device not assigned to a workspace' };
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(device.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) return { status: 403, error: 'Access denied' };
+  return { device, ws, readOnly: !ctx.actingAs && ctx.workspaceRole === 'workspace_viewer' };
+}
+
+// A device group the caller can see, and its members in the group's own workspace.
+function loadGroupMembers(req, res, groupId) {
+  const group = db.prepare('SELECT * FROM device_groups WHERE id = ?').get(String(groupId || ''));
+  if (!group) { res.status(404).json({ error: 'Group not found' }); return null; }
+  if (!group.workspace_id) { res.status(403).json({ error: 'Group not assigned to a workspace' }); return null; }
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(group.workspace_id);
+  const ctx = ws && resourceAccess(req, ws);
+  if (!ctx) { res.status(403).json({ error: 'Access denied' }); return null; }
+  const members = db.prepare(`SELECT d.id FROM devices d JOIN device_group_members m ON m.device_id = d.id
+                              WHERE m.group_id = ? AND d.workspace_id = ? ORDER BY d.name COLLATE NOCASE`).all(group.id, group.workspace_id);
+  return { group, ws, readOnly: !ctx.actingAs && ctx.workspaceRole === 'workspace_viewer', ids: members.map((m) => m.id) };
+}
+
+// What a list of screens would do with a share: [{ id, name, ok, reason, platform }].
+function describeTargets(list) {
+  const caps = require('../lib/player-capabilities');
+  return list.map(({ device, ws }) => {
+    const a = share.availability(device, ws);
+    return { id: device.id, name: device.name || '', ok: a.ok, reason: a.ok ? null : a.reason, platform: caps.platformFamily(device) };
+  });
+}
+
+// GET /groups/:groupId — which of a group's screens can take a share right now, and why not.
+router.get('/groups/:groupId', (req, res) => {
+  const g = loadGroupMembers(req, res, req.params.groupId);
+  if (!g) return;
+  const list = g.ids.map((id) => accessFor(req, id)).filter((a) => a.device);
+  res.json({
+    feature: share.featureOn(), workspace_enabled: share.workspaceOn(g.ws), can_share: !g.readOnly,
+    max_targets: share.maxTargets(), screens: describeTargets(list),
+  });
+});
+
+/*
+ * POST /shares {device_ids?: [...], group_id?: id, audio?} — one share on several screens.
+ *
+ * Every screen the caller NAMED (directly or through the group) must be in their reach with edit
+ * rights, or the whole request is refused: a share must never half-start because one id was
+ * someone else's, and the error does not say which (no probing other tenants' ids). Screens that
+ * are reachable but cannot take a share right now (no receiver, offline, busy) are SKIPPED and
+ * listed, so the sharer is told "3 of 5 — these two can't" instead of nothing happening.
+ */
+router.post('/shares', (req, res) => {
+  const body = req.body || {};
+  let requested = Array.isArray(body.device_ids) ? body.device_ids.filter((x) => typeof x === 'string').slice(0, 500) : [];
+  if (body.group_id) {
+    const g = loadGroupMembers(req, res, body.group_id);
+    if (!g) return;
+    if (g.readOnly) return res.status(403).json({ error: 'Read-only access' });
+    requested = requested.concat(g.ids);
+  }
+  if (!requested.length) return res.status(400).json({ error: 'Choose at least one screen', reason: 'none_available' });
+  if (!share.featureOn()) return res.status(409).json({ error: 'Screen sharing is not available on this server', reason: 'disabled' });
+
+  const targets = [];
+  for (const t of share.expandShareTargets(requested)) {
+    const a = accessFor(req, t.id);
+    if (a.error || a.readOnly) {
+      if (t.via) continue;   // an added mirror the caller cannot reach is simply not included
+      return res.status(a.readOnly ? 403 : a.status).json({ error: a.readOnly ? 'Read-only access' : a.error });
+    }
+    targets.push({ device: a.device, ws: a.ws });
+  }
+  const described = describeTargets(targets);
+  const skipped = described.filter((d) => !d.ok);
+  const ok = targets.filter((t, i) => described[i].ok);
+  if (!ok.length) {
+    return res.status(409).json({ error: 'None of these screens can take a share right now', reason: skipped.length === 1 ? skipped[0].reason : 'none_available', skipped });
+  }
+  if (ok.length > share.maxTargets()) {
+    return res.status(409).json({
+      error: `One share can reach at most ${share.maxTargets()} screens: each one is a separate upload from your computer`,
+      reason: 'too_many_targets', max_targets: share.maxTargets(), screens: ok.length, skipped,
+    });
+  }
+  const name = (req.user && (req.user.name || req.user.email)) || 'Someone';
+  const out = share.createShare({
+    targets: ok.map((t) => ({ device: t.device, workspace: t.ws })),
+    sharedBy: name, userId: req.user.id, guest: false, ip: req.ip, audio: !!body.audio,
+  });
+  if (out.error) return res.status(409).json({ error: 'A screen became busy, please try again', reason: out.error === 'too_many_targets' ? 'too_many_targets' : 'busy' });
+  res.status(201).json({
+    share_id: out.shareId,
+    ws_path: '/api/screen-share/ws',
+    max_seconds: share.maxSeconds(),
+    legs: out.legs.map((l) => ({
+      device_id: l.device.id, screen_name: l.device.name || '', session_id: l.session.id,
+      ticket: l.ticket, ice_servers: share.iceServersFor(l.device.id),
+    })),
+    skipped,
+  });
+});
+
+// DELETE /shares/:shareId — stop a share on every screen it is on. Needs edit rights on all of them.
+router.delete('/shares/:shareId', (req, res) => {
+  const legs = share.sessionsForShare(String(req.params.shareId || ''));
+  if (!legs.length) return res.status(404).json({ error: 'Share not found' });
+  for (const s of legs) {
+    const a = accessFor(req, s.deviceId);
+    // Another tenant's share is "not found", never "forbidden": no confirming that an id exists.
+    if (a.error) return res.status(404).json({ error: 'Share not found' });
+    if (a.readOnly) return res.status(403).json({ error: 'Read-only access' });
+  }
+  const stopped = share.stopShare(legs[0].shareId, 'stopped_by_owner', { userId: req.user.id, ip: req.ip });
+  res.json({ stopped });
 });
 
 router.post('/devices/:id', (req, res) => {

@@ -22,17 +22,40 @@ ScreenTinker server never sees it.
 
 ## Which screens can show a share
 
-| Player | Screen share | Notes |
-|---|---|---|
-| **Web player** (`/player` in Chrome, Edge, Firefox, Safari; ChromeOS; a Raspberry Pi or PC running a browser kiosk; the desktop/Electron shell) | **Yes** | Declares `remote.screen_share` when the browser has WebRTC. Verified end to end in headless Chrome (see *Tests*). |
-| Native **Android** player (APK) | Not yet | Its native WebRTC stack (the one Talk uses to show an operator's webcam fullscreen) can do this; the receiver has not been written. The signalling protocol was shaped so it can reuse Talk's code (see *Protocol*). |
-| **BrightSign**, **LG webOS**, **Amazon Vega**, **iOS/iPadOS** app | Not yet | They run the web player inside a host shell where receiving WebRTC is unverified, so the player deliberately does **not** declare the capability there. |
-| **Samsung Tizen**, **Roku**, native **Pi / Windows / macOS** players, **e-ink** | Not yet | No WebRTC receiver. |
+| Player | Screen share | How | Remote viewer while a share is up | Verified here |
+|---|---|---|---|---|
+| **Web player** (`/player` in Chrome, Edge, Firefox, Safari; ChromeOS; a Pi or PC running a browser kiosk; the desktop/Electron shell) | **Yes** | `/player/screen-share.js` (the receiver), declared when the browser has `RTCPeerConnection` with `addTransceiver` (Chromium 69+). | The shared picture with its badge (`drawScreenShare` in the capture). | End to end in headless Chrome: guest, editor, remote-viewer screenshot, multi share. |
+| Native **Android** player (APK) | **Yes** | `ScreenShareReceiver` on the libwebrtc Talk already bundles (`io.getstream:stream-webrtc-android`); `ScreenShareOverlay` draws the share into a `TextureView` over the ducked content, with the badge and the meeting-room code + QR. Receive-only, needs no permission, so it is declared unconditionally. | The shared picture with its badge: the TextureView is readable (and turns with a portrait/wall transform, unlike Talk's SurfaceView), and the capture redraws the overlay on top so the paused content video never shows through. MediaProjection/accessibility tiers capture the display as it is. | JVM unit tests for the wire handling (`ScreenShareProtocolTest`) and a full Kotlin compile. **Not run on a device here** (no device/emulator; `assembleDebug` stops at the missing release key). |
+| Native **Raspberry Pi**, **Windows** and **macOS** players | **Yes** | They already run the server's WebRTC modules in a QtWebEngine page (Talk, live video); that page now loads `/player/screen-share.js`, so the receiver, overlay and badge are the web player's own, in Chromium. The meeting-room code is a QML badge (`ShareCode.qml`) so it never sits a web layer over a touch screen. | The shared picture: `grabWindow()` reads the WebEngine layer. | That exact page (built by the native code) run in Chromium against a real server, driven like `app.py` drives it: plays fullscreen with the badge, reports per session, stops clean. pytest for the event handling; the QML badge rendered offscreen. **Not run on a Pi/Windows/Mac here.** QtWebEngine has no H.264 in its official builds, so the share negotiates VP8/VP9 — a Pi decodes that in software (fine for slides, heavy for 1080p video). |
+| **iPad / iPhone** app (iOS 16+) | **Yes** | The web player in `WKWebView` (WebRTC since iOS 14.3; the app plays inline media without a gesture). | As the web player. | Capability unit test only. **Not run on an iPad here.** |
+| **Samsung Tizen** (TV and SSSP signage) | **Tizen 10+ only** (2026 models) | The web player's receiver copied into the .wgt (`build-wgt.sh`) + `js/screen-share-tizen.js`; declared only on Tizen ≥ 10 **and** when the receiver's probe passes. The content steps aside as for screen-off (AVPlay torn down — its plane composites above the DOM). | An honest card: *"A screen share is on screen — it can't be captured on this TV"* and the sharer's name. Tizen decodes `<video>` onto a hardware plane a canvas cannot read. | Unit tests (version gate, wiring, card). **Not run on a Samsung display here.** Tizen 9.0 is "partially" supported per Samsung and deliberately not claimed until tested. |
+| **LG webOS** (TV and signage) | No | LG: *"WebRTC is only available on contracted partner apps."* The web player withholds the capability inside the webOS shell. | — | — |
+| **BrightSign** | No | WebRTC in `roHtmlWidget` sits behind `security_params.camera_enabled`, documented for USB cameras, which the player does not set; receive-only is not documented. Withheld. | — | — |
+| **Amazon Vega** (Fire TV) | No | The Vega WebView does not document WebRTC either way. Withheld until tested on a stick. | — | — |
+| **Apple TV (tvOS)** | No | tvOS has no WebKit/WKWebView; would need a native WebRTC SDK. There is no tvOS player. | — | — |
+| **Roku** | No | Roku OS has no web engine and no WebRTC. | — | — |
+| **e-ink** | No | — | — | — |
+
+Sources (checked 2026-10): Samsung web engine specifications, "Real-time communication" —
+<https://developer.samsung.com/smarttv/develop/specifications/web-engine-specifications.html> and
+<https://developer.samsung.com/signage/develop/specifications/web-engine-specifications.html>;
+LG webOS TV web engine — <https://webostv.developer.lge.com/develop/specifications/web-api-and-web-engine>
+and the LG developer forum answer <https://forum.webostv.developer.lge.com/t/inquiry-regarding-webrtc-support-on-webos-tv/28059>;
+BrightSign `roHtmlWidget` — <https://docs.brightsign.biz/develop/rohtmlwidget>;
+Apple `WKWebView` availability — <https://developer.apple.com/documentation/webkit/wkwebview> and
+<https://webkit.org/blog/11353/mediarecorder-api/>;
+Amazon Vega WebView — <https://developer.amazon.com/docs/vega/0.24/develop-your-app-with-webview.html>;
+Qt WebEngine features — <https://doc.qt.io/qt-6/qtwebengine-features.html>;
+Roku — <https://partnersuccess.roku.com/hc/en-us/articles/360060167853-Does-Roku-support-WebRTC-and-Play-WebRTC-streams>.
 
 The dashboard only offers screens that declare `remote.screen_share` (`lib/player-capabilities.js`;
 it is in no platform baseline, so an older player is never assumed able). A screen that cannot show
-a share says so on its page instead of offering a button that would do nothing, and the meeting-room
-code is never shown on such a screen.
+a share says so on its page and in the Simple view, naming its player — *"This screen can't show a
+screen share (Roku)"*, *"… yet (Android). Update the ScreenTinker app on it and it can."*, or for
+Tizen *"It needs a Samsung display with Tizen 10 (2026 models) or newer"* — instead of offering a
+button that would do nothing, and the meeting-room code is never shown on such a screen. Every
+receiver gives up after 45 seconds without a picture and tells the sharer, so even a screen that
+claims the capability wrongly is never left black.
 
 ## Which browsers can share
 
@@ -72,6 +95,41 @@ live → Stop sharing*.
 View-only members see the card (and who is sharing) but get no Share or Stop buttons, and the server
 refuses them (403).
 
+### Several screens at once (multi share)
+
+One capture, shown on several screens at the same time — a town hall on every screen of a floor,
+the same slides in two meeting rooms:
+
+- **A screen's page:** under **Share my screen**, open **Also show on…** and tick the other screens
+  (only screens that can show a share are listed; offline ones are greyed out).
+- **A device group** (Advanced → Screens, the group's header): **Share my screen to this group**.
+- **Simple view:** the *Share my screen* task lets you tap several screens before **Next**.
+
+The bar says *"Sharing to 4 screens"* and *"Showing on 3 of 4 screens"* while they connect. Each
+screen shows the share with its own *"Shared by …"* badge, and each screen's remote viewer shows it.
+
+- Screens that **cannot** take the share right now (a player without a receiver, offline, already
+  showing someone else's share) are **skipped and named** after you pick what to share — *"Not shared
+  to Lobby TV, Kiosk 3: they can't show a screen share right now."* The rest start.
+- **Stop** on the bar ends it on every screen. A screen that disconnects drops out on its own and the
+  others keep going (you get a note). On a screen's card, another editor can **Stop on this screen**
+  or **Stop on all N screens**.
+- **Limit:** one share reaches at most `SCREEN_SHARE_MAX_TARGETS` screens (default **6**). Each screen
+  is a separate peer-to-peer upload *from the sharer's computer* (roughly 1–3 Mbit/s each for a
+  screen of slides, more for video), so the limit protects the sharer's uplink, not the server. Asking
+  for more is refused with that reason; nothing starts.
+- **Mirror displays:** a share to a display also reaches its mirrors (when the mirror-display feature
+  is present: `expandShareTargets()` in `lib/screen-share.js` is the single place that decides).
+
+#### Sharing to many screens (beyond the limit)
+
+For a whole building, one upload has to go to a **restreamer** that fans out to every screen — the
+[go2rtc](live-video.md) sidecar live video already uses. That path is **not implemented** in this
+release: it would put the media through a server (so *"the server never sees the video"*, below, no
+longer holds), needs an H.264 capture (go2rtc's WebRTC engine is H.264-only), and every
+receiver would need a pull mode. Until it lands, raise `SCREEN_SHARE_MAX_TARGETS` only for sharers on
+a wired uplink, and use several shares (or a playlist with a stream) for anything larger.
+
 ### The meeting-room code (guests)
 
 A workspace admin switches on **Meeting-room code** in the screen's *Screen sharing* card. The screen
@@ -99,6 +157,7 @@ the people in the room reach the server by different names.
 |---|---|---|
 | Server env | `SCREEN_SHARE_ENABLED=false` removes the feature from the whole server (routes 404, no buttons, codes gone). | on |
 | Server env | `SCREEN_SHARE_MAX_MINUTES` — the longest a single share may run (1–480). | `60` |
+| Server env | `SCREEN_SHARE_MAX_TARGETS` — how many screens one share may reach at once (1–50). Each is an upload from the sharer's computer. | `6` |
 | Members page (workspace admin) | **Allow screen sharing in this workspace.** Turning it off ends any share in progress and hides every code. | on |
 | A screen's page (workspace admin) | **Meeting-room code** on this screen. | **off** |
 | Admin → Organizations (platform admin) | The org's **ICE servers** (STUN/TURN) — the same per-org override live video and Talk use. | — |
@@ -141,8 +200,9 @@ does not, deliberately:
 - **NAT is the same problem either way.** go2rtc needs reachable candidates or TURN just the same; the
   org's ICE settings already exist and cover both.
 
-The trade-off: one share is seen by one screen. Showing one laptop on a whole wall of screens at once
-is a different feature (it *would* want a restreamer) and is not part of this one.
+The trade-off: every screen is its own upload from the sharer. A multi share to a handful of screens
+is still peer to peer (one RTCPeerConnection per screen, one capture); showing one laptop on a whole
+building is where a restreamer pays off — see *Sharing to many screens* above.
 
 ---
 
@@ -227,6 +287,15 @@ WS /api/screen-share/ws
 - `device:screenshare-code` `{code, url, qr, expires_at}` (or `{code: null}`) tells a screen what to
   show in its corner; `qr` is a PNG data URL.
 - A player declares `remote.screen_share` only when it implements the receiver.
+- **Multi share** changes nothing on this wire: it is N ordinary sessions with the same `share_id`,
+  one per screen, each with its own single-use ticket, sharer socket and screen leg. A screen only
+  ever sees its own session, and the relay's ticket ↔ session ↔ device binding keeps the legs apart.
+- **Reference receivers:** the web player (`server/lib/screen-share-player.js`, also copied into the
+  Tizen .wgt and loaded by the native player's QtWebEngine page) and Android
+  (`android/.../remote/ScreenShareReceiver.kt`, wire handling in `ScreenShareProtocol.kt`).
+- While a share is on screen, the player's screenshot / live-view capture must show the share (or,
+  where the platform cannot read the video back, an honest card naming the sharer), never the paused
+  content underneath.
 
 ## API
 
@@ -234,7 +303,10 @@ JWT only (`/api/screen-share`, not reachable with an API token):
 
 | Method | Path | Who | What |
 |---|---|---|---|
-| `GET` | `/api/screen-share/devices/:id` | any member | `{feature, workspace_enabled, supported, available, reason, can_share, can_admin, guest_enabled, max_seconds, session}` |
+| `GET` | `/api/screen-share/devices/:id` | any member | `{feature, workspace_enabled, supported, available, reason, can_share, can_admin, guest_enabled, max_seconds, session, max_targets, platform}`; `session` carries `share_id` and `screens` (how many screens that share is on). |
+| `POST` | `/api/screen-share/shares` | editor+ on every screen | Multi share. Body `{device_ids?, group_id?, audio}`. → `{share_id, ws_path, max_seconds, legs: [{device_id, screen_name, session_id, ticket, ice_servers}], skipped: [{id, name, reason, platform}]}`. A screen the caller cannot edit (or another tenant's) refuses the whole request (403/404) and creates nothing; screens that cannot take it are `skipped`; `409 {reason:"too_many_targets", max_targets}` above the limit; `409 {reason:"none_available", skipped}` when none can. |
+| `DELETE` | `/api/screen-share/shares/:shareId` | editor+ on every screen | Stop it everywhere. → `{stopped: n}`; 404 for an unknown share or another tenant's. |
+| `GET` | `/api/screen-share/groups/:groupId` | any member | `{feature, workspace_enabled, can_share, max_targets, screens: [{id, name, ok, reason, platform}]}` — which of a group's screens can take a share. |
 | `POST` | `/api/screen-share/devices/:id` | editor+ | Start. Body `{audio}`. → `{session_id, ticket, ws_path, ice_servers, max_seconds, screen_name}`; `409 {reason}` when `disabled`, `workspace_disabled`, `unsupported`, `offline` or `busy`. |
 | `DELETE` | `/api/screen-share/devices/:id` | editor+ | Stop whoever is sharing. → `{stopped}` |
 | `PUT` | `/api/screen-share/devices/:id/guest` | workspace admin | `{enabled}` — the meeting-room code. |
@@ -251,12 +323,14 @@ Public, rate-limited (10/min per address):
 
 ## Limits
 
-- **One screen per share**, one share per screen (see *Why peer-to-peer*).
+- One share per screen; one share reaches up to `SCREEN_SHARE_MAX_TARGETS` screens (see *Several
+  screens at once*).
 - **State is in memory** in the server process the screen is connected to. A restart ends running
   shares (both sides are told) and issues new codes. On a [scale-out](scale-out.md) replica, screens
   connect to the primary, so share from the primary's address.
 - Sharing needs HTTPS on the sharer's side (see above).
-- Screens that are not the web player: not yet (see the table).
+- LG webOS, BrightSign, Amazon Vega, tvOS, Roku and e-ink screens cannot show a share, and Samsung
+  displays need Tizen 10+ (see the table).
 
 ## Troubleshooting
 
@@ -268,7 +342,10 @@ Public, rate-limited (10/min per address):
 | *"The screen did not answer"* | The screen is offline or not connected to this server process. |
 | *"could not connect to the screen"* | No network path between the two. Same network, or add TURN. |
 | The code on the screen is not accepted | It changes after each use and every 10 minutes — use the one showing now. After 10 wrong tries wait a minute. |
-| No code on the screen | The code is off for this screen, the workspace switch is off, someone is sharing, or the player is not the web player. |
+| No code on the screen | The code is off for this screen, the workspace switch is off, someone is sharing, or the screen's player cannot show a share (see the table). |
+| *"One share can reach at most N screens"* | Pick fewer screens, or raise `SCREEN_SHARE_MAX_TARGETS` for sharers on a wired uplink. |
+| Some screens of a group were skipped | They cannot take a share now (player without a receiver, offline, busy); the toast names them. |
+| A Raspberry Pi share stutters with video | The Pi decodes the share in software (QtWebEngine has no H.264, so it is VP8/VP9). Slides are fine; share a lower resolution or a window for video. |
 | No sound | Tick **Include sound** *and* choose "Share tab audio"/"Share system audio" in the browser's picker (Chrome/Edge). |
 
 ## Tests
@@ -288,5 +365,19 @@ Public, rate-limited (10/min per address):
   --auto-select-desktop-capture-source=…`) and the real web player page. A guest reads the code off
   the player, presents through `/share`, and the test asserts the player renders a **playing,
   fullscreen `<video>` whose time advances**, with the badge; Stop removes it and a new code appears.
-  A second test does the same for an editor's API start and the owner's stop. Skips cleanly without
-  Chrome.
+  A second test does the same for an editor's API start and the owner's stop. Then: the remote
+  viewer's screenshot is the share; **multi share** — one sharer, two web-player screens (separate
+  browser contexts) both playing, stop one (the other keeps playing), stop all (capture ended); and
+  the **native player's RTC page**, generated by `native/…/ui/rtc_page.py` and run in Chromium (the
+  engine QtWebEngine embeds) the way `app.py` drives it, receiving a share. Skips cleanly without
+  Chrome (and the native test without `python3`).
+- `server/test/screen-share-multi.test.js` — multi share against the real server: one leg per screen
+  with one share id, per-leg isolation (one screen cannot attach to another's leg, tickets single-use,
+  signalling never crosses), viewers and any other-tenant id refuse the whole request with nothing
+  left behind, skipped screens named, the limit, groups, one screen disconnecting alone, stop one /
+  stop all, and the one-screen API unchanged.
+- `server/test/screen-share-players.test.js` — every other player: Tizen (receiver copy byte-identical,
+  Tizen 10+ gate, wiring, the remote-viewer card), Android and native declarations and wiring, no
+  baseline ever granting the capability, and this table's sources.
+- `android/app/src/test/.../remote/ScreenShareProtocolTest.kt` (JUnit) and
+  `native/tests/test_screen_share.py` (pytest) — each native receiver's wire handling.

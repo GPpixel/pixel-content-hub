@@ -168,6 +168,12 @@ const JWT_ONLY_ROUTERS = [
    */
   { path: '/api/trust', mod: './routes/trust', tenancy: true },
   /*
+   * 3.0 move an organization to another server (routes/org-import.js, docs/move-server.md): imports,
+   * the screen handover and the whole-server export. JWT only, for the same reason as /api/trust —
+   * it writes a whole organization and can send every screen to another address.
+   */
+  { path: '/api/org-import', mod: './routes/org-import', tenancy: true },
+  /*
    * Automation (lib/automation): inbound hook URLs are credentials that can take over screens, so
    * minting, rotating and test-firing them is a signed-in admin's act. JWT only.
    */

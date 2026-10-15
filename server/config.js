@@ -619,4 +619,10 @@ module.exports = {
   screenShareEnabled: process.env.SCREEN_SHARE_ENABLED !== 'false',
   // The longest a single share may run before the screen goes back to its content (minutes, 1-480).
   screenShareMaxMinutes: Math.min(480, Math.max(1, parseInt(process.env.SCREEN_SHARE_MAX_MINUTES) || 60)),
+  /*
+   * 3.0 multi share: how many screens one share may reach at once (1-50). Each screen is its own
+   * peer-to-peer upload from the SHARER's computer (~1-3 Mbit/s each for a screen), so the limit is
+   * the sharer's uplink, not this server. Default 6.
+   */
+  screenShareMaxTargets: Math.min(50, Math.max(1, parseInt(process.env.SCREEN_SHARE_MAX_TARGETS) || 6)),
 };
