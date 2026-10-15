@@ -2058,7 +2058,7 @@ export default {
   'screen_share.card.offline': 'Der Bildschirm ist offline. Er muss online sein, um einen geteilten Bildschirm anzuzeigen.',
   'screen_share.card.view_only': 'Sie können diesen Bildschirm ansehen, aber nicht mit ihm teilen.',
   'screen_share.guest.toggle': 'Besprechungsraum-Code',
-  'screen_share.guest.explain': 'Zeigen Sie auf diesem Bildschirm einen Code, damit alle im Raum ihren Bildschirm unter /share ohne Konto teilen können. Der Code ändert sich nach jeder Verwendung und alle 10 Minuten; es kann immer nur eine Person teilen.',
+  'screen_share.guest.explain': 'Zeigen Sie auf diesem Bildschirm einen Code, damit alle im Raum ihren Bildschirm unter /share ohne Konto teilen können. Der Code ändert sich nach jeder Verwendung und alle 10 Minuten.',
   'screen_share.guest.on_toast': 'Der Bildschirm zeigt jetzt einen Code zum Teilen.',
   'screen_share.guest.off_toast': 'Der Code zum Teilen ist auf diesem Bildschirm deaktiviert.',
   'screen_share.settings.title': 'Bildschirm teilen',

@@ -2691,7 +2691,7 @@ export default {
   'screen_share.card.offline': 'L’écran est hors ligne. Il doit être en ligne pour afficher un écran partagé.',
   'screen_share.card.view_only': 'Vous pouvez consulter cet écran, mais pas y partager votre écran.',
   'screen_share.guest.toggle': 'Code de salle de réunion',
-  'screen_share.guest.explain': 'Affichez un code sur cet écran pour que toute personne présente dans la salle puisse partager son écran sur /share, sans compte. Le code change après chaque utilisation et toutes les 10 minutes ; une seule personne peut partager à la fois.',
+  'screen_share.guest.explain': 'Affichez un code sur cet écran pour que toute personne présente dans la salle puisse partager son écran sur /share, sans compte. Le code change après chaque utilisation et toutes les 10 minutes.',
   'screen_share.guest.on_toast': 'L’écran affiche maintenant un code de partage.',
   'screen_share.guest.off_toast': 'Le code de partage est désactivé sur cet écran.',
   'screen_share.settings.title': 'Partage d’écran',

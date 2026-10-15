@@ -1933,7 +1933,7 @@ export default {
   'screen_share.card.offline': 'Lo schermo è offline. Deve essere online per mostrare uno schermo condiviso.',
   'screen_share.card.view_only': 'Puoi vedere questo schermo ma non condividerci sopra.',
   'screen_share.guest.toggle': 'Codice sala riunioni',
-  'screen_share.guest.explain': 'Mostra un codice su questo schermo, così chiunque nella sala può condividere il proprio schermo su /share senza un account. Il codice cambia dopo ogni utilizzo e ogni 10 minuti; può condividere una sola persona alla volta.',
+  'screen_share.guest.explain': 'Mostra un codice su questo schermo, così chiunque nella sala può condividere il proprio schermo su /share senza un account. Il codice cambia dopo ogni utilizzo e ogni 10 minuti.',
   'screen_share.guest.on_toast': 'Lo schermo ora mostra un codice di condivisione.',
   'screen_share.guest.off_toast': 'Il codice di condivisione è disattivato su questo schermo.',
   'screen_share.settings.title': 'Condivisione schermo',

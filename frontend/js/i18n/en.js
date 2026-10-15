@@ -5921,7 +5921,7 @@ export default {
   'screen_share.card.offline': 'The screen is offline. It needs to be online to show a shared screen.',
   'screen_share.card.view_only': 'You can view this screen but not share to it.',
   'screen_share.guest.toggle': 'Meeting-room code',
-  'screen_share.guest.explain': 'Show a code on this screen so anyone in the room can share their screen at /share without an account. The code changes after each use and every 10 minutes; only one person can share at a time.',
+  'screen_share.guest.explain': 'Show a code on this screen so anyone in the room can share their screen at /share without an account. The code changes after each use and every 10 minutes.',
   'screen_share.guest.on_toast': 'The screen now shows a sharing code.',
   'screen_share.guest.off_toast': 'The sharing code is off on this screen.',
   'screen_share.settings.title': 'Screen sharing',

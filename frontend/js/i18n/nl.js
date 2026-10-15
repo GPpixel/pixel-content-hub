@@ -3656,7 +3656,7 @@ export default {
   'screen_share.card.offline': 'Het scherm is offline. Het moet online zijn om een gedeeld scherm te tonen.',
   'screen_share.card.view_only': 'Je kunt dit scherm bekijken, maar er niet naar delen.',
   'screen_share.guest.toggle': 'Vergaderruimtecode',
-  'screen_share.guest.explain': 'Toon een code op dit scherm, zodat iedereen in de ruimte zonder account zijn scherm kan delen via /share. De code verandert na elk gebruik en elke 10 minuten; er kan maar één persoon tegelijk delen.',
+  'screen_share.guest.explain': 'Toon een code op dit scherm, zodat iedereen in de ruimte zonder account zijn scherm kan delen via /share. De code verandert na elk gebruik en elke 10 minuten.',
   'screen_share.guest.on_toast': 'Het scherm toont nu een deelcode.',
   'screen_share.guest.off_toast': 'De deelcode staat uit op dit scherm.',
   'screen_share.settings.title': 'Scherm delen',

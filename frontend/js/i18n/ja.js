@@ -2691,7 +2691,7 @@ export default {
   'screen_share.card.offline': '画面はオフラインです。共有画面を表示するには、オンラインである必要があります。',
   'screen_share.card.view_only': 'この画面は閲覧できますが、共有することはできません。',
   'screen_share.guest.toggle': '会議室コード',
-  'screen_share.guest.explain': 'この画面にコードを表示し、部屋にいる人なら誰でもアカウントなしで /share から画面を共有できるようにします。コードは使用するたびに、また 10 分ごとに変わります。一度に共有できるのは 1 人だけです。',
+  'screen_share.guest.explain': 'この画面にコードを表示し、部屋にいる人なら誰でもアカウントなしで /share から画面を共有できるようにします。コードは使用するたびに、また 10 分ごとに変わります。',
   'screen_share.guest.on_toast': '画面に共有コードが表示されるようになりました。',
   'screen_share.guest.off_toast': 'この画面の共有コードはオフになりました。',
   'screen_share.settings.title': '画面共有',

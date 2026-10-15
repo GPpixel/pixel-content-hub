@@ -1975,7 +1975,7 @@ export default {
   'screen_share.card.offline': 'A tela está offline. Ela precisa estar online para mostrar uma tela compartilhada.',
   'screen_share.card.view_only': 'Você pode ver esta tela, mas não compartilhar com ela.',
   'screen_share.guest.toggle': 'Código da sala de reunião',
-  'screen_share.guest.explain': 'Mostre um código nesta tela para que qualquer pessoa na sala compartilhe a própria tela em /share, sem conta. O código muda a cada uso e a cada 10 minutos; só uma pessoa pode compartilhar por vez.',
+  'screen_share.guest.explain': 'Mostre um código nesta tela para que qualquer pessoa na sala compartilhe a própria tela em /share, sem conta. O código muda a cada uso e a cada 10 minutos.',
   'screen_share.guest.on_toast': 'A tela agora mostra um código de compartilhamento.',
   'screen_share.guest.off_toast': 'O código de compartilhamento foi desativado nesta tela.',
   'screen_share.settings.title': 'Compartilhamento de tela',

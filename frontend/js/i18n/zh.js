@@ -1602,7 +1602,7 @@ export default {
   'screen_share.card.offline': '屏幕已离线。需要在线才能显示共享画面。',
   'screen_share.card.view_only': '您可以查看此屏幕，但不能共享到此屏幕。',
   'screen_share.guest.toggle': '会议室代码',
-  'screen_share.guest.explain': '在此屏幕上显示一个代码，会议室里的任何人无需账户即可在 /share 共享屏幕。代码在每次使用后以及每 10 分钟更换一次；同一时间只能一人共享。',
+  'screen_share.guest.explain': '在此屏幕上显示一个代码，会议室里的任何人无需账户即可在 /share 共享屏幕。代码在每次使用后以及每 10 分钟更换一次。',
   'screen_share.guest.on_toast': '屏幕现在会显示共享代码。',
   'screen_share.guest.off_toast': '此屏幕的共享代码已关闭。',
   'screen_share.settings.title': '屏幕共享',

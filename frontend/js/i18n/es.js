@@ -2009,7 +2009,7 @@ export default {
   'screen_share.card.offline': 'La pantalla está sin conexión. Debe estar en línea para mostrar una pantalla compartida.',
   'screen_share.card.view_only': 'Puedes ver esta pantalla, pero no compartir en ella.',
   'screen_share.guest.toggle': 'Código de sala de reuniones',
-  'screen_share.guest.explain': 'Muestra un código en esta pantalla para que cualquiera en la sala pueda compartir su pantalla en /share sin tener cuenta. El código cambia después de cada uso y cada 10 minutos; solo una persona puede compartir a la vez.',
+  'screen_share.guest.explain': 'Muestra un código en esta pantalla para que cualquiera en la sala pueda compartir su pantalla en /share sin tener cuenta. El código cambia después de cada uso y cada 10 minutos.',
   'screen_share.guest.on_toast': 'La pantalla ahora muestra un código para compartir.',
   'screen_share.guest.off_toast': 'El código para compartir está desactivado en esta pantalla.',
   'screen_share.settings.title': 'Compartir pantalla',

@@ -21,6 +21,13 @@ without an app update.
   - **Share → ScreenTinker Manager** ("Show on a screen") from Photos or Gallery uploads the files
     and opens "Which screens should show it?".
   - Invite links go through Android's share sheet.
+- **Share my screen** (3.0, no account needed): the phone's screen on any ScreenTinker screen, from
+  the screen's QR, the `/share` page's **Share my screen with the ScreenTinker app**, the first
+  screen's **Share my screen to a meeting-room screen**, or the launcher shortcut — or, signed in,
+  from the Simple view's **Share my screen**. It shows *"Share your screen to <host>?"* before
+  Android's capture prompt, runs in a foreground service with a Stop notification, and needs
+  Android 8+. Native (MediaProjection + libwebrtc), because a WebView cannot capture the screen.
+  Details: [screen-share.md](screen-share.md#phones-camera-and-the-android-app).
 - **Opens in the browser instead:** Advanced, Admin and Account settings open in a Custom Tab (the
   phone's browser), as do links to other sites. Advanced turns on the Advanced view for that account
   in the browser (`#/switch-advanced`).
@@ -84,8 +91,16 @@ MANAGER_KEY_ALIAS=upload MANAGER_KEY_PASSWORD=… \
 - **Icons:** `android-admin/store/icon-512.png` is the store icon. The launcher icons are generated
   in `res/mipmap-*`. They use the player's TV plus a green edit badge, so the two apps are told apart.
 - **Data safety:** the app sends the user's sign-in and the photos and videos they choose to the
-  server they chose. Nothing goes to a third party. No ads, no analytics SDK.
-- **Permissions:** `INTERNET` only.
+  server they chose, and, while the person shares their screen, the screen's picture peer to peer to
+  the ScreenTinker screen they confirmed (never stored, never through a third party). The code
+  scanner is Google Play services' (it returns only the scanned text). No ads, no analytics SDK.
+- **Permissions:** `INTERNET`, and for **Share my screen**: `FOREGROUND_SERVICE`,
+  `FOREGROUND_SERVICE_MEDIA_PROJECTION` (Play Console asks for a declaration and a short video of
+  the feature: start a share from a screen's QR, show it on the screen, stop it from the
+  notification), `POST_NOTIFICATIONS`, `MODIFY_AUDIO_SETTINGS` and `ACCESS_NETWORK_STATE` (libwebrtc).
+  No camera or microphone permission.
+- **Size:** libwebrtc makes the universal APK ~44 MB; the Play bundle splits it per CPU, so a phone
+  downloads roughly a quarter of that.
 - **Cleartext traffic:** allowed for user-entered servers (self-hosted on a LAN is often
   `http://192.168…`), and forbidden for screentinker.com (`res/xml/network_security_config.xml`).
 - **Sign-in:** email and password, plus every single sign-on provider the server offers (Google,
