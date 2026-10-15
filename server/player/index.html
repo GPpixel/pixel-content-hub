@@ -678,6 +678,8 @@
     }
     function enterMirrorHold(hold) {
       mirrorHold = hold;
+      // A held mirror is not showing the display any more: drop its share code and any live share.
+      try { if (window.STScreenShare) { window.STScreenShare.showCode({ code: null }); window.STScreenShare.stop(null, 'unpaired'); } } catch (e) {}
       console.warn('[mirror] holding: ' + hold.kind + (hold.error ? ' — ' + hold.error : ''));
       try { if (socket) { socket.io.reconnection(false); socket.disconnect(); } } catch (e) {}
       try { stopReconnectSupervisor(); } catch (e) {}
@@ -3419,7 +3421,8 @@
         }
 
         if (!config.paired) {
-          // Show pairing code
+          // Show pairing code. Nothing of a display's screen share belongs on a pairing screen.
+          clearShareForUnpaired();
           document.getElementById('urlForm').style.display = 'none';
           document.getElementById('setupSpinner').style.display = 'none';
           document.getElementById('pairingSection').style.display = 'block';
@@ -3480,7 +3483,24 @@
       // typing that cannot happen, and hides the one thing that would rescue it. Recovery
       // then needed a physical reload. The Android player already does this correctly
       // (ProvisioningActivity "repair mode"); this brings the web player in line.
+      /*
+       * A screen that is no longer this display (re-pairing, a removed or refused mirror, a pairing
+       * code on screen) must not keep the display's meeting-room code or a live share: the code would
+       * let anyone in front of THIS screen present to the display it used to be. The server only
+       * sends codes to the display's own sockets, but the badge is drawn once and stays, and the old
+       * socket lives on through the reconnect countdown.
+       */
+      function clearShareForUnpaired() {
+        try {
+          if (window.STScreenShare) {
+            window.STScreenShare.showCode({ code: null });
+            window.STScreenShare.stop(null, 'unpaired');
+          }
+        } catch (e) { /* the share module is optional */ }
+      }
+
       function enterRepairMode(message) {
+        clearShareForUnpaired();
         delete config.deviceId;
         delete config.deviceToken;
         config.paired = false;

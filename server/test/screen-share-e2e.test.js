@@ -455,3 +455,38 @@ test('the native player\'s RTC page receives a share: plays fullscreen with the 
   link.close();
   await nb.close();
 });
+
+/*
+ * A screen that stops being the display (here: the display is deleted, so the player goes back to a
+ * pairing code) must not keep the display's meeting-room code on screen — anyone in front of it could
+ * otherwise present to the display it used to be. Reported from a browser showing a pairing code and
+ * another display's "Share your screen here" code side by side.
+ */
+test('a screen that goes back to a pairing code drops the display\'s share code', { skip: SKIP, timeout: 120000 }, async () => {
+  const dev2 = crypto.randomUUID();
+  const tok2 = 'devtok_' + crypto.randomBytes(16).toString('hex');
+  run("INSERT INTO devices (id, user_id, workspace_id, name, pairing_code, status, device_token, screen_share_guest) VALUES (?, ?, ?, 'Lobby TV', ?, 'offline', ?, 1)",
+    dev2, owner.id, owner.ws, crypto.randomUUID().slice(0, 6), tok2);
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
+  await page.evaluateOnNewDocument((cfg) => {
+    try { localStorage.setItem('rd_web_player', JSON.stringify(cfg)); } catch (_) { /* */ }
+  }, { serverUrl: BASE, deviceId: dev2, deviceToken: tok2, paired: true });
+  await page.goto(BASE + '/player', { waitUntil: 'domcontentloaded' });
+  const codeShown = () => page.evaluate(() => {
+    const el = document.getElementById('st-share-code');
+    return !!(el && el.style.display !== 'none' && el.getBoundingClientRect().width > 0);
+  });
+  await waitFor(codeShown, 30000, 'the meeting-room code on the screen');
+
+  const del = await fetch(`${BASE}/api/devices/${dev2}`, { method: 'DELETE', headers: { Authorization: `Bearer ${owner.token}`, 'X-Workspace-Id': owner.ws } });
+  assert.ok(del.status < 300, 'display deleted: ' + del.status);
+  await waitFor(() => page.evaluate(() => {
+    const p = document.getElementById('pairingSection');
+    const s = document.getElementById('setupScreen');
+    return (p && p.style.display !== 'none') || (s && s.style.display !== 'none');
+  }), 30000, 'the player back on its setup / pairing screen');
+  await sleep(1500);
+  assert.equal(await codeShown(), false, 'the old display\'s share code is gone');
+  await page.close();
+});

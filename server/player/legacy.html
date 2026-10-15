@@ -817,6 +817,13 @@ function showMirrorHold(hold) {
 }
 function enterMirrorHold(hold) {
   mirrorHold = hold;
+  try {
+    if (window.STScreenShare) {
+      window.STScreenShare.showCode({ code: null });
+      window.STScreenShare.stop(null, "unpaired");
+    }
+  } catch (e) {
+  }
   console.warn("[mirror] holding: " + hold.kind + (hold.error ? " \u2014 " + hold.error : ""));
   try {
     if (socket) {
@@ -2965,6 +2972,7 @@ function connect(serverUrl) {
       linkLostDuringGap = false;
     }
     if (!config.paired) {
+      clearShareForUnpaired();
       document.getElementById("urlForm").style.display = "none";
       document.getElementById("setupSpinner").style.display = "none";
       document.getElementById("pairingSection").style.display = "block";
@@ -2994,7 +3002,17 @@ function connect(serverUrl) {
     const showIdle = PMH && typeof PMH.shouldShowIdle === "function" ? PMH.shouldShowIdle({ isPlaying, hasContent: playlist.length > 0 }) : !isPlaying;
     if (showIdle) showStatus("Waiting for content...");
   });
+  function clearShareForUnpaired() {
+    try {
+      if (window.STScreenShare) {
+        window.STScreenShare.showCode({ code: null });
+        window.STScreenShare.stop(null, "unpaired");
+      }
+    } catch (e) {
+    }
+  }
   function enterRepairMode(message) {
+    clearShareForUnpaired();
     delete config.deviceId;
     delete config.deviceToken;
     config.paired = false;
