@@ -4,8 +4,9 @@
  * sharing a screen is a person at a browser, never an API token.
  *
  *   GET    /devices/:id         what the dashboard shows: can this screen be shared to, who is sharing
- *   POST   /devices/:id         start a share (editor+) -> a single-use ticket for the signalling socket
- *   DELETE /devices/:id         stop whoever is sharing (editor+) — the owner's "kick"
+ *   POST   /devices/:id         start a share (editor+) -> a single-use ticket for the signalling socket,
+ *                               plus one leg per mirror of the display (its link open elsewhere)
+ *   DELETE /devices/:id         stop whoever is sharing (editor+) — the owner's "kick", mirrors included
  *   PUT    /devices/:id/guest   the meeting-room code on this screen, on/off (workspace admin)
  *   GET    /workspace/:wsId     the workspace switch, for the settings card
  *   PUT    /workspace/:wsId     turn the feature on/off for the workspace (workspace admin)
@@ -44,6 +45,12 @@ function denyIfReadOnly(r, res) {
   return false;
 }
 
+function guestSwitch(device) {
+  if (!device.mirror_of) return device.screen_share_guest;
+  const src = db.prepare('SELECT screen_share_guest FROM devices WHERE id = ? AND workspace_id IS ?').get(device.mirror_of, device.workspace_id);
+  return src ? src.screen_share_guest : 0;
+}
+
 router.get('/devices/:id', (req, res) => {
   const r = loadDevice(req, res);
   if (!r) return;
@@ -57,7 +64,9 @@ router.get('/devices/:id', (req, res) => {
     reason: avail.ok ? null : avail.reason,
     can_share: !r.readOnly,
     can_admin: canAdminWorkspace(db, req.user, r.ws),
-    guest_enabled: !!r.device.screen_share_guest,
+    // A mirror shows its display's meeting-room code, so it reports the display's switch.
+    guest_enabled: !!guestSwitch(r.device),
+    mirror_of: r.device.mirror_of || null,
     max_seconds: share.maxSeconds(),
     session: share.publicSession(session),
     // Multi share: how many screens one share may reach, and what kind of player this is (the card
@@ -196,26 +205,24 @@ router.post('/devices/:id', (req, res) => {
   const avail = share.availability(r.device, r.ws);
   if (!avail.ok) return res.status(409).json({ error: 'Screen sharing is not available on this screen', reason: avail.reason });
   const name = (req.user && (req.user.name || req.user.email)) || 'Someone';
-  const out = share.createSession({
-    device: r.device, workspace: r.ws, sharedBy: name, userId: req.user.id,
-    guest: false, ip: req.ip, audio: !!(req.body && req.body.audio),
+  // The display's mirrors (its link open somewhere else) show what it shows, a share included:
+  // best-effort, so a mirror that is offline or cannot show a share never refuses the share.
+  const plan = share.withMirrors(r.device, r.ws, {
+    reachable: (m) => { const a = accessFor(req, m.id); return !a.error && !a.readOnly; },
   });
-  if (out.error) return res.status(409).json({ error: 'Someone is already sharing to this screen', reason: out.error });
-  res.status(201).json({
-    session_id: out.session.id,
-    ticket: out.ticket,
-    ws_path: '/api/screen-share/ws',
-    ice_servers: share.iceServersFor(r.device.id),
-    max_seconds: share.maxSeconds(),
-    screen_name: r.device.name || '',
+  const { out, skipped } = share.createDisplayShare(plan, {
+    sharedBy: name, userId: req.user.id, guest: false, ip: req.ip, audio: !!(req.body && req.body.audio),
   });
+  if (out.error) return res.status(409).json({ error: 'Someone is already sharing to this screen', reason: 'busy' });
+  res.status(201).json(share.displayShareBody(out, skipped));
 });
 
 router.delete('/devices/:id', (req, res) => {
   const r = loadDevice(req, res);
   if (!r) return;
   if (denyIfReadOnly(r, res)) return;
-  const stopped = share.stopForDevice(r.device.id, 'stopped_by_owner', { userId: req.user.id, ip: req.ip });
+  // A display's mirrors showing the same share stop with it (lib/screen-share.js stopForDisplay).
+  const stopped = share.stopForDisplay(r.device.id, 'stopped_by_owner', { userId: req.user.id, ip: req.ip });
   res.json({ stopped });
 });
 
@@ -224,6 +231,8 @@ router.put('/devices/:id/guest', (req, res) => {
   if (!r) return;
   if (denyIfReadOnly(r, res)) return;
   if (!canAdminWorkspace(db, req.user, r.ws)) return res.status(403).json({ error: 'Only workspace admins can change meeting-room sharing' });
+  // A mirror shows its display's code; the switch lives on the display.
+  if (r.device.mirror_of) return res.status(409).json({ error: 'This screen is a mirror: it shows the meeting-room code of the display it mirrors. Change the setting on that display.', reason: 'mirror' });
   const enabled = !!(req.body && req.body.enabled);
   db.prepare('UPDATE devices SET screen_share_guest = ? WHERE id = ?').run(enabled ? 1 : 0, r.device.id);
   audit('screen_share.guest_toggle', {

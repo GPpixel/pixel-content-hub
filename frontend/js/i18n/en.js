@@ -8064,4 +8064,8 @@ export default {
   'campaign.forecast_steps': 'Layouts and items, in order',
   'campaign.forecast_fallback_items': 'Simplified version (older players)',
   'campaign.forecast_fallback': 'This screen\'s player cannot switch layouts, so it plays the simplified version of this playlist: the full-screen items and each layout\'s main zone, full screen.',
+  // 3.0: screen share on display-link mirrors
+  'device.mirror.now_playing': 'Mirroring {source}: playing {playlist}',
+  'device.mirror.now_playing_item': 'Mirroring {source}: playing {playlist} (now: {item})',
+  'device.mirror.now_nothing': 'Mirroring {source}: nothing is assigned to it yet',
 };

@@ -4,6 +4,8 @@
  * types the code the screen is showing (or scans its QR) on /share and presents their laptop.
  *
  *   POST /api/share/join  { code, name?, audio? }  -> a single-use ticket, exactly like a signed-in start
+ *                                                    (plus `legs`/`share_id` when the display has mirrors:
+ *                                                    the code shows on them too, and the share reaches them)
  *
  * What stops this being an open door onto every screen (docs/screen-share.md, "Abuse"):
  *   - the code exists only on the screen itself and in this process's memory — no API returns it,
@@ -35,19 +37,20 @@ router.post('/join', express.json({ limit: '4kb' }), (req, res) => {
   if (!device || !ws || !device.screen_share_guest) return answer(404, { error: 'That code is not valid. Check the code on the screen and try again.', reason: 'invalid_code' });
   const avail = share.availability(device, ws);
   if (!avail.ok) return answer(409, { error: 'This screen cannot take a share right now', reason: avail.reason });
-  const out = share.createSession({
-    device, workspace: ws, sharedBy: share.cleanName(body.name, 'Guest'), userId: null,
-    guest: true, ip: req.ip, audio: !!body.audio,
+  // The code is the display's, shown on its mirrors too: whichever of them the guest read it from,
+  // the share goes to the display and every mirror that can take it (lib/screen-share.js
+  // withMirrors — same workspace only, best-effort, never a reason to refuse).
+  const plan = share.withMirrors(device, ws);
+  const { out } = share.createDisplayShare(plan, {
+    sharedBy: share.cleanName(body.name, 'Guest'), userId: null, guest: true, ip: req.ip, audio: !!body.audio,
   });
-  if (out.error) return answer(409, { error: 'Someone is already sharing to this screen', reason: out.error });
-  res.status(201).json({
-    session_id: out.session.id,
-    ticket: out.ticket,
-    ws_path: '/api/screen-share/ws',
-    ice_servers: share.iceServersFor(device.id),
-    max_seconds: share.maxSeconds(),
-    screen_name: device.name || '',
-  });
+  if (out.error) return answer(409, { error: 'Someone is already sharing to this screen', reason: 'busy' });
+  // A guest has no account in the workspace: the legs carry no device ids, and which mirrors were
+  // left out (and why) is not theirs to know. The page keys legs by session id.
+  const b = share.displayShareBody(out, []);
+  b.legs = b.legs.map(({ device_id: _omit, ...leg }) => leg);
+  delete b.skipped;
+  res.status(201).json(b);
 });
 
 module.exports = router;

@@ -95,7 +95,14 @@ export async function startScreenShare(device, { audio = false, also = [] } = {}
     showToast((e && e.body && e.body.reason) ? screenShareReasonText(e.body.reason) : (e.message || t('screen_share.reason.generic')), 'error', 7000);
     return false;
   }
-  const me = { deviceIds: [device.id], deviceName: device.name || start.screen_name || '', state: 'connecting', sender: null, shareId: start.session_id, screens: 1, live: 0 };
+  // The display's mirrors (its link open somewhere else) come back as extra legs: the same one
+  // capture goes to each, exactly like a multi share. Mirrors left out (offline, say) are not
+  // worth a warning here: the person asked for this display, and it is getting the share.
+  if (Array.isArray(start.legs) && start.legs.length > 1) {
+    runMulti(start, stream, device.name || start.screen_name || '');
+    return true;
+  }
+  const me = { deviceIds: [device.id], deviceName: device.name || start.screen_name || '', state: 'connecting', sender: null, shareId: start.share_id || start.session_id, screens: 1, live: 0 };
   active = me;
   me.sender = new ScreenShareSender({
     ticket: start.ticket, wsPath: start.ws_path, iceServers: start.ice_servers, stream,
@@ -144,11 +151,18 @@ export async function startScreenShareTo({ deviceIds = [], groupId = null, label
     showToast(msg, 'error', 9000);
     return false;
   }
-  const legs = Array.isArray(start.legs) ? start.legs : [];
   if (Array.isArray(start.skipped) && start.skipped.length) {
     showToast(t('screen_share.multi.skipped', { names: start.skipped.map((s) => s.name).filter(Boolean).join(', ') }), 'warning', 9000);
   }
-  const name = legs.length === 1 ? (legs[0].screen_name || label) : label;
+  const legs = Array.isArray(start.legs) ? start.legs : [];
+  runMulti(start, stream, legs.length === 1 ? (legs[0].screen_name || label) : label);
+  return true;
+}
+
+// One capture on every leg the server handed back ({ share_id, ws_path, legs }): the live bar,
+// per-screen drop-outs, and the end.
+function runMulti(start, stream, name) {
+  const legs = Array.isArray(start.legs) ? start.legs : [];
   const me = { deviceIds: legs.map((l) => l.device_id), deviceName: name, state: 'connecting', sender: null, shareId: start.share_id, screens: legs.length, live: 0 };
   active = me;
   me.sender = new MultiShareSender({
@@ -325,7 +339,8 @@ export function renderScreenShareCard(host, device, opts = {}) {
             ${alsoOpen ? alsoHtml() : ''}
           </details>` : ''}` : ''}
         ${note ? `<p style="font-size:13px;margin:10px 0 0;color:var(--text-muted)">${esc(note)}</p>` : ''}
-        ${status.can_admin && status.supported ? `
+        ${/* A mirror shows its display's code: the switch is on the display (the mirror banner links it). */
+          status.can_admin && status.supported && !status.mirror_of ? `
           <label style="display:flex;align-items:flex-start;gap:10px;margin-top:14px;cursor:pointer">
             <input type="checkbox" data-share-guest ${status.guest_enabled ? 'checked' : ''} ${status.workspace_enabled ? '' : 'disabled'} style="margin-top:3px">
             <span><strong style="font-size:14px">${esc(t('screen_share.guest.toggle'))}</strong><br>

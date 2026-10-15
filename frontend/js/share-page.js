@@ -7,7 +7,7 @@
  * All text goes in with textContent; nothing from the server or the URL is parsed as HTML.
  */
 import { t } from './i18n.js';
-import { ScreenShareSender, pickScreen, shareUnsupportedReason, stopStream } from './lib/screen-share-client.js';
+import { ScreenShareSender, MultiShareSender, pickScreen, shareUnsupportedReason, stopStream } from './lib/screen-share-client.js';
 
 const $ = (id) => document.getElementById(id);
 const NAME_KEY = 'st_share_name';
@@ -102,15 +102,27 @@ $('shareJoin').addEventListener('submit', async (e) => {
   }
   const screenName = join.screen_name || '';
   showLive(screenName, 'connecting');
-  sender = new ScreenShareSender({
-    ticket: join.ticket, wsPath: join.ws_path, iceServers: join.ice_servers, stream,
-    onState: (st) => showLive(screenName, st),
-    onEnded: (reason) => {
-      sender = null;
-      showForm(reason === 'stopped_by_sharer' ? t('screen_share.stopped') : reasonText(reason),
-        !['stopped_by_sharer', 'stopped_by_owner', 'max_duration'].includes(reason));
-    },
-  });
+  const onEnded = (reason) => {
+    sender = null;
+    showForm(reason === 'stopped_by_sharer' ? t('screen_share.stopped') : reasonText(reason),
+      !['stopped_by_sharer', 'stopped_by_owner', 'max_duration'].includes(reason));
+  };
+  // The code is the display's and shows on its mirrors too (its link open somewhere else): the
+  // join hands back one leg per place, and the one capture goes to all of them. To the guest it is
+  // still one screen, named after the display.
+  if (Array.isArray(join.legs) && join.legs.length > 1) {
+    sender = new MultiShareSender({
+      legs: join.legs, wsPath: join.ws_path, stream,
+      onState: (sum) => showLive(screenName, sum.state),
+      onEnded,
+    });
+  } else {
+    sender = new ScreenShareSender({
+      ticket: join.ticket, wsPath: join.ws_path, iceServers: join.ice_servers, stream,
+      onState: (st) => showLive(screenName, st),
+      onEnded,
+    });
+  }
   sender.start();
 });
 

@@ -1537,6 +1537,25 @@ function persistIdentity(deviceId, data) {
  */
 let _dashboardNsRef = null;
 let _deviceNsRef = null;   // same idea, for the offline applier's wall re-push
+
+// The one row per screen in `screenshots`, and its file. Never throws.
+const SCREENSHOT_PERSIST_MS = 5 * 60 * 1000;
+const screenshotPersistedAt = new Map();   // deviceId -> ms of the last disk write (bounded: deleted on offline)
+function persistScreenshot(deviceId, imageB64) {
+  try {
+    const filename = `${deviceId}_latest.jpg`;
+    fs.writeFileSync(path.join(config.screenshotsDir, filename), Buffer.from(imageB64, 'base64'));
+    const existing = db.prepare('SELECT id FROM screenshots WHERE device_id = ?').get(deviceId);
+    if (existing) {
+      db.prepare('UPDATE screenshots SET filepath = ?, captured_at = strftime(\'%s\',\'now\') WHERE device_id = ?').run(filename, deviceId);
+    } else {
+      db.prepare('INSERT INTO screenshots (device_id, filepath) VALUES (?, ?)').run(deviceId, filename);
+    }
+  } catch (e) {
+    console.error('Failed to save screenshot:', e.message);
+  }
+}
+
 function ingestScreenshot(deviceId, imageB64) {
   if (!deviceId || !imageB64) return false;
   // Same cap as the socket path enforced: max 2MB base64 (~1.5MB image).
@@ -1545,6 +1564,19 @@ function ingestScreenshot(deviceId, imageB64) {
 
   if (!lastScreenshots) lastScreenshots = {};
   lastScreenshots[deviceId] = imageB64;
+  /*
+   * 3.0: also keep it on disk now and then while the screen is ONLINE. It used to be written only
+   * when the screen went offline, so a screen that had never disconnected — a new display-link
+   * mirror above all, which runs for days — had no `screenshots` row: the card said "No preview
+   * available" and the list carried no screenshot_at until it next dropped off. The first frame is
+   * kept at once, then at most one write per SCREENSHOT_PERSIST_MS (the 1 fps live view must not
+   * become a disk write a second).
+   */
+  const last = screenshotPersistedAt.get(deviceId) || 0;
+  if (Date.now() - last >= SCREENSHOT_PERSIST_MS) {
+    screenshotPersistedAt.set(deviceId, Date.now());
+    persistScreenshot(deviceId, imageB64);
+  }
 
   try {
     emitToDeviceWorkspace(_dashboardNsRef, deviceId, 'dashboard:screenshot-ready', {
@@ -2208,21 +2240,10 @@ const EVENT_APPLIERS = Object.freeze({
     // Save last screenshot to disk as offline snapshot
     const lastB64 = lastScreenshots[deviceId];
     if (lastB64) {
-      try {
-        const filename = `${deviceId}_latest.jpg`;
-        const buffer = Buffer.from(lastB64, 'base64');
-        fs.writeFileSync(path.join(config.screenshotsDir, filename), buffer);
-        const existing = db.prepare('SELECT id FROM screenshots WHERE device_id = ?').get(deviceId);
-        if (existing) {
-          db.prepare('UPDATE screenshots SET filepath = ?, captured_at = strftime(\'%s\',\'now\') WHERE device_id = ?').run(filename, deviceId);
-        } else {
-          db.prepare('INSERT INTO screenshots (device_id, filepath) VALUES (?, ?)').run(deviceId, filename);
-        }
-      } catch (e) {
-        console.error('Failed to save offline screenshot:', e.message);
-      }
+      persistScreenshot(deviceId, lastB64);
       delete lastScreenshots[deviceId];
     }
+    screenshotPersistedAt.delete(deviceId);
   },
 
   /*

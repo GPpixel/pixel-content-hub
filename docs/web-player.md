@@ -65,7 +65,11 @@ Every other place that opens the link while the display is on becomes a **mirror
 - It is a screen of its own for everything about the physical screen: online/offline status,
   screenshots and the live view, screen verification, proof-of-play (reports show where content
   actually played), energy. It is named "*Display* (mirror 1)", shows where it is open
-  ("Chrome on Windows · 10.0.0.5"), and can be renamed.
+  ("Chrome on Windows · 10.0.0.5"), and can be renamed. Its preview is stored like any screen's
+  (the first frame at once, then every few minutes while it is online), and its **Now playing**
+  says "Mirroring *Display*: playing *playlist*" (and the item, from its own play reports).
+- A [screen share](screen-share.md) to the display, and the display's meeting-room code, show on
+  every mirror too.
 - The original's **Web player** tab lists its mirrors (status, where, last seen, **Remove**). Screen
   cards show "+2 mirrors"; the Simple view lists them under their display.
 - **It counts as a screen** on your plan. If the plan has no screen to spare, the new place shows

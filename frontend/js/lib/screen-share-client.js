@@ -154,7 +154,8 @@ export class ScreenShareSender {
  * 3.0 multi share: ONE capture on several screens. One ScreenShareSender (its own ticket, signalling
  * socket and RTCPeerConnection) per screen, all fed the same tracks — the capture is never repeated.
  *
- *   legs: [{ ticket, ice_servers, device_id, screen_name }]   (POST /api/screen-share/shares)
+ *   legs: [{ ticket, ice_servers, device_id, screen_name }]   (POST /api/screen-share/shares, and the
+ *         one-display start / guest join when the display has mirrors)
  *   onState({ state, live, active, total })   aggregate: 'live' once any screen plays
  *   onLegEnded({ deviceId, name }, reason)    one screen dropped out; the others carry on
  *   onEnded(reason)                           once, when the last screen ended or the person stopped
@@ -167,14 +168,18 @@ export class MultiShareSender {
     this.onEnded = onEnded || (() => {});
     this.ended = false;
     this.finished = false;
-    this.legs = (legs || []).map((l) => ({
-      deviceId: l.device_id, name: l.screen_name || '', state: 'connecting', done: false, reason: null,
-      sender: new ScreenShareSender({
-        ticket: l.ticket, wsPath, iceServers: l.ice_servers, stream, ownsStream: false,
-        onState: (st) => this.legState(l.device_id, st),
-        onEnded: (reason) => this.legEnded(l.device_id, reason),
-      }),
-    }));
+    // A guest's legs (POST /api/share/join) carry no device ids: they are told apart by session id.
+    this.legs = (legs || []).map((l) => {
+      const key = l.device_id || l.session_id;
+      return {
+        deviceId: key, name: l.screen_name || '', state: 'connecting', done: false, reason: null,
+        sender: new ScreenShareSender({
+          ticket: l.ticket, wsPath, iceServers: l.ice_servers, stream, ownsStream: false,
+          onState: (st) => this.legState(key, st),
+          onEnded: (reason) => this.legEnded(key, reason),
+        }),
+      };
+    });
   }
 
   leg(deviceId) { return this.legs.find((l) => l.deviceId === deviceId); }
