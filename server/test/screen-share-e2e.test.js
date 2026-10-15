@@ -189,6 +189,14 @@ test('a guest presents with the code on the screen; the screen plays it; Stop pu
 test('an editor\'s share (API start + the dashboard client) plays; the owner\'s stop ends it on the screen', { skip: SKIP, timeout: 120000 }, async () => {
   const player = await openPlayer();
   await waitFor(() => player.evaluate(() => !!document.getElementById('st-share-code') && document.getElementById('st-share-code').style.display !== 'none'), 30000, 'player registered');
+  // The meeting-room code on screen before the share; it must not survive the share.
+  const codeOnScreen = () => player.evaluate(() => {
+    const el = document.querySelector('#st-share-code [data-share-code]');
+    const box = document.getElementById('st-share-code');
+    return box && box.style.display !== 'none' && el ? el.textContent.trim() : null;
+  });
+  const codeBefore = await codeOnScreen();
+  assert.ok(codeBefore, 'a code is on screen before the share');
   const start = await fetch(`${BASE}/api/screen-share/devices/${DEV}`, {
     method: 'POST', headers: { Authorization: `Bearer ${owner.token}`, 'X-Workspace-Id': owner.ws, 'Content-Type': 'application/json' }, body: '{}',
   });
@@ -220,6 +228,9 @@ test('an editor\'s share (API start + the dashboard client) plays; the owner\'s 
   assert.deepEqual(await del.json(), { stopped: true });
   await waitFor(async () => (await videoState(player)) === null, 10000, 'the overlay to leave the screen');
   assert.equal(await waitFor(() => sharer.evaluate(() => window.__ended), 5000, 'sender ended'), 'stopped_by_owner');
+  // Ended → a fresh code, never the one shown before the share (no reuse of a code seen in the room).
+  const codeAfter = await waitFor(codeOnScreen, 10000, 'a code back on screen after the share');
+  assert.notEqual(codeAfter, codeBefore, 'the share ended with a NEW meeting-room code');
   const tracksLive = await sharer.evaluate(() => window.__sender.stream.getTracks().some((t) => t.readyState === 'live'));
   assert.equal(tracksLive, false, 'the capture is stopped when the share ends');
   await sharer.close();
