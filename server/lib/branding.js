@@ -8,7 +8,7 @@
 //   1. the current workspace's row        (per-workspace override; unchanged)
 //   2. a custom-domain match              (public/pre-login white-label hosts)
 //   3. the platform-default row           (instance default, #15)
-//   4. hardcoded ScreenTinker fallback
+//   4. hardcoded Pixel Content Hub fallback
 //
 // The platform-default row is identified by a FIXED id (not "workspace_id IS
 // NULL"): legacy pre-multitenancy white_labels rows can also have a null
@@ -21,12 +21,12 @@
 const PLATFORM_DEFAULT_ID = 'platform-default';
 
 const HARDCODED_BRANDING = {
-  brand_name: 'ScreenTinker',
+  brand_name: 'Pixel Content Hub',
   logo_url: null,
   favicon_url: null,
-  primary_color: '#3B82F6',
-  secondary_color: '#1E293B',
-  bg_color: '#111827',
+  primary_color: '#C0394B',
+  secondary_color: '#2B2B2B',
+  bg_color: '#232323',
   custom_css: null,
   hide_branding: 0,
 };

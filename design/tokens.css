@@ -1,0 +1,85 @@
+/* Pixel design language - tokens and base.
+   Load fonts.css first (or the Google Fonts link in DESIGN_LANGUAGE.md),
+   then this, then pixel-ui.css. Frosted-glass theme (grey and crimson), adopted 25 Sep 2026.
+   The previous flat violet values are in reference/portal-style.css. */
+
+:root {
+  /* Page and surfaces. Surfaces are translucent "glass" over the page
+     background, so they only look right on --bg with its backdrop washes. */
+  --bg: #232323;
+  --bg-solid: #2b2b2b;          /* opaque stand-in for glass where blur can't be used */
+  --bg-panel: rgba(255,255,255,.07);
+  --bg-panel-alt: rgba(255,255,255,.08);
+  --bg-inner: rgba(255,255,255,.06);  /* rows and tiles inside a glass card */
+  --bg-hover: rgba(255,255,255,.12);
+  --border: rgba(255,255,255,.14);
+  --divider: rgba(255,255,255,.07);
+  --text-primary: #f2f2f2;
+  --text-secondary: rgba(228,228,228,.78);
+  --text-muted: rgba(228,228,228,.6);
+  /* Accent: Pixel Inspiration crimson. Primary actions, links, focus, the
+     brand dot. Selected states (active nav, chips, avatars) are neutral
+     white glass, not crimson - see --selected. */
+  --accent: #c0394b;
+  --accent-hover: #a8303f;
+  --accent-bright: #dd5a6e;
+  --accent-soft: rgba(192,57,75,.22);
+  --accent-link: #ec8f9c;
+  --accent-gradient: linear-gradient(180deg, #cc4659, #b8364a);
+  --selected: rgba(255,255,255,.16);
+  --on-selected: #ffffff;
+  --green: #22c55e;
+  --green-soft: rgba(34, 197, 94, 0.15);
+  --amber: #f5a623;
+  --amber-soft: rgba(245, 166, 35, 0.16);
+  --red: #ef4444;
+  --red-soft: rgba(239, 68, 68, 0.15);
+  /* Text on the status tints. */
+  --on-green: #6ee7a0;
+  --on-amber: #f5c26b;
+  --on-red: #ff9c9c;
+  /* Shape */
+  --radius: 22px;       /* glass cards, panels, dialogs */
+  --radius-lg: 24px;    /* the floating sidebar */
+  --radius-inner: 16px; /* rows and tiles inside a card */
+  --radius-sm: 12px;    /* inputs, menus, inset boxes */
+  --radius-pill: 999px; /* buttons, nav items, chips, badges, search */
+  /* Glass */
+  --glass-blur: blur(28px) saturate(170%);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.22);
+  --glass-shadow: 0 10px 36px rgba(0,0,0,.3);
+  --font: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  /* Headings only - see the font links in base.html. Falls back to the
+     body face (and then the system stack) if Cal Sans doesn't load. */
+  --font-heading: "Cal Sans", "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+/* Cal Sans for headings. The weight
+   is pinned rather than inherited from the browser's bold default so the
+   single-weight face is never faked into a synthetic bold. */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+/* The page background carries three soft washes for the glass to blur.
+   Fixed, so they stay put while content scrolls over them. */
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 8% 0%, rgba(150,150,150,.30), rgba(150,150,150,0) 38%),
+    radial-gradient(circle at 96% 100%, rgba(120,120,120,.26), rgba(120,120,120,0) 36%),
+    radial-gradient(circle at 55% 45%, rgba(192,57,75,.10), rgba(192,57,75,0) 30%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+a { color: inherit; }

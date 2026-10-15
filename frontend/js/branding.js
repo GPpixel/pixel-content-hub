@@ -35,10 +35,12 @@ export async function applyBranding() {
 
   const root = document.documentElement;
   applyAccent(root, wl.primary_color);
-  if (wl.bg_color) {
+  if (wl.bg_color && !DEFAULT_BGS.includes(String(wl.bg_color).trim().toLowerCase())) {
     root.style.setProperty('--bg-primary', wl.bg_color);
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', wl.bg_color);
+  } else {
+    root.style.removeProperty('--bg-primary');
   }
 
   if (wl.brand_name) {
@@ -73,17 +75,20 @@ export function resetBranding() {
 }
 
 /*
- * Apply a brand's primary colour. The server returns the DEFAULT colour (#3B82F6) for every account
+ * Apply a brand's primary colour. The server returns the DEFAULT colour (#C0394B) for every account
  * that never customised anything, so only a colour that differs from it counts as a brand: then all
- * three accents take it and the gradients go solid in the customer's colour. Otherwise the release
- * palette (--accent-2 violet, --accent-3 green, css/variables.css) stays, and any override left by a
- * previous brand is cleared.
+ * three accents take it and the gradients go solid in the customer's colour. Otherwise the Pixel
+ * palette (css/variables.css) stays, and any override left by a previous brand is cleared.
  */
 export function applyAccent(root, color) {
   if (!color) return;
-  root.style.setProperty('--accent', color);
-  const custom = String(color).trim().toLowerCase() !== '#3b82f6';
-  for (const v of ['--accent-2', '--accent-3']) {
+  const custom = !DEFAULT_ACCENTS.includes(String(color).trim().toLowerCase());
+  for (const v of ['--accent', '--accent-2', '--accent-3']) {
     if (custom) root.style.setProperty(v, color); else root.style.removeProperty(v);
   }
 }
+
+// The Pixel default and the ScreenTinker one it replaced. Neither is a brand, so neither overrides
+// the Pixel palette in css/variables.css. Same for the background colours.
+const DEFAULT_ACCENTS = ['#c0394b', '#3b82f6'];
+export const DEFAULT_BGS = ['#232323', '#111827'];

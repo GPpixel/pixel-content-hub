@@ -1,0 +1,123 @@
+/* Pixel design language for the dashboard. Loaded after main.css and library.css.
+   variables.css already maps the dashboard's tokens to Pixel colours; this file adds what tokens
+   alone can't: the fonts, the page washes, glass surfaces, pill buttons and neutral selected
+   states. Shapes and effects only, no layout or copy changes. See "Design language" in CLAUDE.md. */
+
+/* Fonts are served from this instance (assets/fonts/pixel, OFL): the dashboard CSP only allows
+   same-origin fonts, and a Pi on a LAN may have no internet. */
+@font-face {
+  font-family: "Figtree"; font-style: normal; font-display: swap; font-weight: 300 900;
+  src: url(/assets/fonts/pixel/figtree-latin-wght-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Figtree"; font-style: normal; font-display: swap; font-weight: 300 900;
+  src: url(/assets/fonts/pixel/figtree-latin-ext-wght-normal.woff2) format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "Cal Sans"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(/assets/fonts/pixel/cal-sans-latin-400-normal.woff2) format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Cal Sans"; font-style: normal; font-display: swap; font-weight: 400;
+  src: url(/assets/fonts/pixel/cal-sans-latin-ext-400-normal.woff2) format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+/* Type and page */
+html, body { font-family: var(--px-font); }
+h1, h2, h3, h4, h5, h6,
+.page-header h1, .modal-header h3, .settings-section h3, .logo {
+  font-family: var(--px-font-heading);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+
+/* The three soft washes behind the glass (tokens.css `body`). */
+body {
+  background-color: var(--bg-primary);
+  background-image:
+    radial-gradient(circle at 8% 0%, rgba(150,150,150,.30), rgba(150,150,150,0) 38%),
+    radial-gradient(circle at 96% 100%, rgba(120,120,120,.26), rgba(120,120,120,0) 36%),
+    radial-gradient(circle at 55% 45%, rgba(192,57,75,.10), rgba(192,57,75,0) 30%);
+  background-attachment: fixed;
+}
+
+/* Glass surfaces. Browsers without backdrop-filter keep the solid tokens from variables.css,
+   which is the design language's own fallback. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .sidebar,
+  .settings-section,
+  .info-card,
+  .device-card,
+  .modal {
+    background: var(--px-bg-panel);
+    border-color: var(--px-border);
+    -webkit-backdrop-filter: var(--px-glass-blur);
+    backdrop-filter: var(--px-glass-blur);
+    box-shadow: var(--px-glass-highlight), var(--shadow);
+  }
+  /* The modal sits over a dimmed page, so it keeps a solid base under the glass. */
+  .modal { background: color-mix(in srgb, var(--bg-secondary) 88%, transparent); }
+}
+.sidebar { border-right-color: var(--px-border); }
+.settings-section, .info-card { border-radius: var(--radius-lg); }
+.device-card:hover { border-color: var(--px-border); transform: translateY(-2px); }
+
+/* Pixel cards carry no coloured top bar or title rule. */
+.settings-section::before, .info-card::before, .modal::before { content: none; }
+.page-header h1 { padding-bottom: 0; }
+.page-header h1::after { content: none; }
+.settings-section:hover { border-color: var(--px-border); }
+.info-card:hover { border-color: var(--px-border); }
+.info-card-label { color: var(--text-muted); font-weight: 600; }
+
+/* Navigation: pill items; the active one is neutral white glass, not crimson. */
+.nav-link { border-radius: var(--px-radius-pill); }
+.nav-link:hover, .nav-group-toggle:hover { background: var(--px-bg-hover); }
+.nav-link.active {
+  background: var(--px-selected);
+  color: #fff;
+  box-shadow: var(--px-glass-highlight);
+}
+.nav-group-toggle { border-radius: var(--px-radius-pill); }
+.nav-group.collapsed.has-active .nav-group-toggle { color: var(--text-primary); box-shadow: inset 3px 0 0 var(--accent); }
+
+/* Buttons: pills. Primary is the crimson gradient with a soft glow. */
+.btn { border-radius: var(--px-radius-pill); padding: 8px 18px; }
+.btn-sm { padding: 5px 12px; }
+.btn-primary {
+  background: var(--grad-accent);
+  border: 1px solid var(--accent-2);
+  box-shadow: var(--px-glass-highlight), 0 4px 14px var(--px-accent-soft);
+}
+.btn-primary:hover { background: var(--grad-accent); filter: brightness(1.08); }
+.btn-secondary {
+  background: var(--px-bg-inner);
+  border-color: var(--px-border);
+  box-shadow: var(--px-glass-highlight);
+}
+.btn-secondary:hover { background: var(--px-bg-hover); }
+.btn-danger { background: rgba(239,68,68,.15); color: var(--px-on-red); }
+
+/* Fields: rounded (--radius-sm), not pills. Focus is the accent-soft ring. */
+.input, .pairing-input { border-radius: var(--radius); }
+.input:focus, select.input:focus, textarea.input:focus {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 3px var(--px-accent-soft);
+}
+:focus-visible { outline-color: var(--accent-2); }
+
+/* Tabs and links */
+.tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }
+.members-tab.active, .platform-tab.active { background: var(--px-selected); color: #fff; }
+.empty-state svg { color: var(--accent-2); }
+.att-go { color: var(--accent-3); }
+
+/* Status text on tints uses the Pixel "on" colours. */
+.nav-new-pill { background: var(--px-accent-soft); color: var(--accent-3); border-color: rgba(221,90,110,.45); }
+
+/* Segmented switches: the chosen option is neutral white glass, like the active nav item. */
+.ui-mode-switch button[aria-checked="true"] { background: var(--px-selected); color: #fff; box-shadow: var(--px-glass-highlight); }

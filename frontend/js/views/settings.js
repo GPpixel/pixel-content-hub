@@ -312,10 +312,10 @@ export async function render(container) {
       <div id="whiteLabelForm">
         <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px">${t('settings.white_label_desc')}</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="form-group"><label>${t('settings.brand_name')}</label><input type="text" id="wlBrandName" class="input" placeholder="ScreenTinker"></div>
+          <div class="form-group"><label>${t('settings.brand_name')}</label><input type="text" id="wlBrandName" class="input" placeholder="Pixel Content Hub"></div>
           <div class="form-group"><label>${t('settings.logo_url')}</label><input type="text" id="wlLogoUrl" class="input" placeholder="https://..."></div>
-          <div class="form-group"><label>${t('settings.primary_color')}</label><input type="color" id="wlPrimaryColor" class="input" value="#3B82F6"></div>
-          <div class="form-group"><label>${t('settings.bg_color')}</label><input type="color" id="wlBgColor" class="input" value="#111827"></div>
+          <div class="form-group"><label>${t('settings.primary_color')}</label><input type="color" id="wlPrimaryColor" class="input" value="#C0394B"></div>
+          <div class="form-group"><label>${t('settings.bg_color')}</label><input type="color" id="wlBgColor" class="input" value="#232323"></div>
           <div class="form-group"><label>${t('settings.custom_domain')}</label><input type="text" id="wlDomain" class="input" placeholder="signage.yourcompany.com"></div>
           <div class="form-group"><label>${t('settings.favicon_url')}</label><input type="text" id="wlFavicon" class="input" placeholder="https://..."></div>
         </div>
@@ -402,7 +402,7 @@ export async function render(container) {
     <div class="settings-section">
       <h3>${t('settings.about')}</h3>
       <div style="color:var(--text-secondary);font-size:13px">
-        <p><strong>${esc(window.__ST_BRAND_NAME || 'ScreenTinker')}</strong>${appVersion ? ` v${esc(appVersion)}` : ''}</p>
+        <p><strong>${esc(window.__ST_BRAND_NAME || 'Pixel Content Hub')}</strong>${appVersion ? ` v${esc(appVersion)}` : ''}</p>
         <p style="margin-top:4px">${t('settings.about_tagline')}</p>
         ${user.self_hosted ? `<p style="margin-top:8px"><a href="${SPONSOR_URL}" target="_blank" rel="noopener" style="color:var(--accent)">&#9829; ${t('sponsor.about_link')}</a></p>` : ''}
         <!-- The permanent home for the release notes the dashboard panel links to. Populated

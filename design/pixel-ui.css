@@ -1,0 +1,1215 @@
+/* Pixel design language - components.
+   Class names are unchanged from the Pixel Staff Portal. The frosted-glass
+   theme (25 Sep 2026) is applied by the "Glass theme" block at the end of
+   this file, which overrides shape and surface rules above it, so the screenshots, DESIGN_LANGUAGE.md and
+   this file all describe the same thing. Needs tokens.css first.
+   The portal-specific pieces (Company Tree canvas, bookmarks, budgets,
+   asset pickers and so on) are left out; the full original is in
+   reference/portal-style.css. */
+
+/* =====================================================================
+   Top-level navigation pills (the in-section bar uses these) and a small dropdown
+   ===================================================================== */
+.nav-link {
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 13px;
+}
+.nav-link:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-link.active { background: var(--selected); color: var(--on-selected); box-shadow: inset 0 1px 0 rgba(255,255,255,.3); }
+
+/* A small "Manage ▾" style dropdown for grouping secondary admin links
+   (e.g. IT Budget's Cost Categories / Vendors) under one nav item instead
+   of spelling each one out. Plain <details>/<summary> - no JS needed, and
+   it degrades to a normal expand/collapse if styling somehow fails to load. */
+.nav-dropdown { position: relative; display: inline-block; }
+.nav-dropdown > summary { cursor: pointer; list-style: none; }
+.nav-dropdown > summary::-webkit-details-marker { display: none; }
+.nav-dropdown[open] > summary { background: var(--bg-hover); color: var(--text-primary); }
+.nav-dropdown-menu {
+  position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 30;
+  background: var(--bg-panel-alt); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  min-width: 180px; padding: 4px; display: flex; flex-direction: column;
+}
+.nav-dropdown-menu a {
+  padding: 8px 10px; border-radius: var(--radius-sm); text-decoration: none;
+  color: var(--text-secondary); font-weight: 600; font-size: 13px;
+}
+.nav-dropdown-menu a:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+
+
+/* =====================================================================
+   App shell: sidebar, section bar, mobile drawer
+   ===================================================================== */
+/* =====================================================================
+   App shell - persistent sidebar + content area
+   ===================================================================== */
+.app-shell { display: flex; min-height: 100vh; align-items: stretch; }
+
+.sidebar {
+  width: 240px;
+  flex: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 14px 14px;
+  gap: 14px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+.sidebar-brand {
+  display: flex; align-items: center; gap: 9px;
+  font-family: var(--font-heading); font-weight: 400; font-size: 15.5px;
+  text-decoration: none; color: var(--text-primary);
+  padding: 0 8px;
+}
+.sidebar-brand .dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.sidebar-search { position: relative; }
+.sidebar-search input {
+  width: 100%;
+  padding: 8px 42px 8px 32px;
+  background-color: var(--bg-panel-alt);
+  /* A magnifier, so it reads as search before you've read the placeholder.
+     Inline SVG rather than an icon font or an image request. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 11px 50%;
+}
+.sidebar-search kbd {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px; color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+  pointer-events: none;
+}
+
+.sidebar-nav { display: flex; flex-direction: column; gap: 1px; flex: 1; }
+.sidebar-group-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 16px 8px 5px;
+}
+.sidebar-link {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px; border-radius: var(--radius-sm);
+  text-decoration: none; color: var(--text-secondary);
+  font-size: 12.5px; font-weight: 500;
+}
+.sidebar-link:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-link.active { background: var(--selected); color: var(--on-selected); font-weight: 600; box-shadow: inset 0 1px 0 rgba(255,255,255,.3); }
+.sidebar-icon { flex: none; font-size: 13.5px; line-height: 1; width: 17px; text-align: center; }
+.sidebar-ext { margin-left: auto; font-size: 10px; color: var(--text-muted); }
+
+/* The user block at the foot of the sidebar, and the menu of personal
+   views behind it (My Portal - see my_portal() in app/routes.py).
+
+   The menu opens upward, because this sits at the bottom of the screen,
+   and on :hover, :focus-within and :active-within so it's reachable by
+   mouse, keyboard and touch alike. It's positioned relative to the block
+   rather than the viewport so it travels with the sidebar's own scroll. */
+.sidebar-user {
+  position: relative;
+  border-top: 1px solid var(--border); padding: 12px 0 0; margin-top: 4px;
+}
+.sidebar-user-trigger {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: var(--radius-sm);
+  text-decoration: none; color: inherit;
+}
+.sidebar-user-trigger:hover { background: var(--bg-hover); }
+.sidebar-user-sub { font-size: 11.5px; color: var(--text-muted); }
+.sidebar-user-caret {
+  margin-left: auto; font-size: 9px; color: var(--text-muted); flex: none;
+}
+.sidebar-user-menu {
+  position: absolute; bottom: calc(100% - 4px); left: 0; right: 0; z-index: 40;
+  display: none; flex-direction: column; gap: 1px;
+  background: var(--bg-panel-alt); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: 0 10px 28px rgba(0,0,0,.45);
+  padding: 4px;
+}
+.sidebar-user:hover .sidebar-user-menu,
+.sidebar-user:focus-within .sidebar-user-menu { display: flex; }
+.sidebar-user-menu a {
+  padding: 7px 10px; border-radius: var(--radius-sm); text-decoration: none;
+  color: var(--text-secondary); font-size: 12.5px; font-weight: 600;
+}
+.sidebar-user-menu a:hover,
+.sidebar-user-menu a:focus { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-user-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+/* "Report a problem", under the name: always on show, quiet until hovered. */
+.sidebar-report-link {
+  display: block; margin: 2px 0 0; padding: 5px 8px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px; font-weight: 600; color: var(--text-muted);
+  text-decoration: none;
+}
+.sidebar-report-link:hover, .sidebar-report-link:focus { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex: none;
+  background: var(--selected); color: var(--on-selected);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11.5px; font-weight: 700;
+}
+.sidebar-user-text { display: flex; flex-direction: column; min-width: 0; }
+.sidebar-user-text strong {
+  font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-user-text a { font-size: 11.5px; color: var(--text-muted); text-decoration: none; }
+.sidebar-user-text a:hover { color: var(--text-primary); }
+
+.app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* The in-section bar. Reuses .nav-link so every section's existing links
+   carry over unchanged - only their home is different. */
+.section-bar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: 9px 28px;
+}
+.section-bar nav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+/* Sidebar as a drawer on narrow screens. */
+.sidebar-toggle {
+  display: none; position: fixed; top: 12px; left: 12px; z-index: 70;
+  width: 38px; height: 38px; border-radius: var(--radius-sm);
+  background: var(--bg-panel); border: 1px solid var(--border);
+  color: var(--text-primary); font-size: 16px; cursor: pointer;
+}
+.sidebar-scrim {
+  display: none; position: fixed; inset: 0; z-index: 55;
+  background: rgba(0,0,0,.5);
+}
+@media (max-width: 1100px) {
+  .sidebar {
+    position: fixed; left: 0; top: 0; z-index: 60;
+    transform: translateX(-100%); transition: transform .18s ease, visibility .18s;
+    /* Hidden, not merely pushed off-screen: a closed drawer shouldn't be
+       reachable by Tab or read out by a screen reader. */
+    visibility: hidden;
+  }
+  .sidebar.is-open { transform: translateX(0); visibility: visible; }
+  .sidebar-toggle { display: block; }
+  .sidebar-scrim:not([hidden]) { display: block; }
+  .section-bar { padding-left: 62px; }
+  /* The menu button is fixed at the top left, so whatever is first on
+     the page has to leave room for it: the section bar (above), the
+     announcement banner when there's no section bar, or the page itself
+     when there's neither. With the drawer open it would sit over the
+     product name, so the drawer starts below it too. */
+  .app-main > .announce-bar:first-child .announce-inner { padding-left: 62px; }
+  .app-main > .container:first-child { padding-top: 62px; }
+  .sidebar { padding-top: 62px; }
+  .app-shell > .app-main { width: 100%; }
+}
+
+
+
+/* =====================================================================
+   Page container, flash messages, stat cards
+   ===================================================================== */
+/* `width: 100%` isn't redundant here. .container is a flex item of
+   .app-main (a column flex container), and an `auto` inline margin on a
+   flex item overrides the default stretch - so without an explicit width
+   the column shrank to fit its own content and sat centred in the page,
+   whatever room it actually had. That arrived with the sidebar and made
+   every page narrower than it should be; the dashboard was using about
+   830px of a 1200px column. */
+.container { width: 100%; max-width: 1400px; margin: 0 auto; padding: 24px 28px 64px; }
+.container-signed-out { max-width: 520px; padding-top: 72px; }
+/* Canvas pages (IT Infrastructure, Company Tree) - see base.html's
+   container_class block. The content column is already the right width and
+   in the right place next to the sidebar; all these pages need is
+   permission to use all of it. */
+.container-wide { max-width: none; }
+
+.flash {
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+}
+.flash-success { background: var(--green-soft); color: var(--on-green); border-color: rgba(34,197,94,.3); }
+.flash-error { background: var(--red-soft); color: var(--on-red); border-color: rgba(239,68,68,.3); }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+/* Four across ran off the side of a phone. */
+@media (max-width: 720px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+}
+
+.stat-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.stat-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.stat-value { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+.stat-value.red { color: var(--red); }
+.stat-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+
+/* =====================================================================
+   Section tiles (an overview page of places to go)
+   ===================================================================== */
+.section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+  margin-top: 8px;
+}
+.section-tile {
+  display: block;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px 22px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color .15s, transform .15s, background .15s;
+}
+.section-tile:hover {
+  border-color: rgba(255,255,255,.28);
+  background: var(--bg-panel-alt);
+  transform: translateY(-2px);
+}
+.section-tile-icon { font-size: 30px; margin-bottom: 14px; line-height: 1; }
+.section-tile-label { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.section-tile-desc { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
+.section-tile-badge {
+  display: inline-block; margin-top: 12px; font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--on-selected);
+  background: var(--selected); border-radius: 999px; padding: 3px 9px;
+}
+.empty-grid-state {
+  padding: 60px 20px; text-align: center; color: var(--text-muted); font-size: 13.5px;
+  background: var(--bg-panel); border: 1px dashed var(--border); border-radius: var(--radius);
+}
+
+
+
+/* =====================================================================
+   Label / value detail grid
+   ===================================================================== */
+/* Asset Management detail page, and anywhere else a plain label/value grid
+   is useful (kept generic on purpose). */
+.detail-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px 24px;
+}
+.detail-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-muted); font-weight: 700; margin-bottom: 4px;
+}
+
+
+
+/* =====================================================================
+   Layout, panels, toolbars, inputs, chips, list rows, badges, buttons
+   ===================================================================== */
+.layout { display: grid; grid-template-columns: 1fr 360px; gap: 20px; align-items: start; }
+@media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.panel-header h2 { margin: 0; font-size: 16px; }
+.panel-eyebrow {
+  text-transform: uppercase; letter-spacing: .06em; font-size: 11px;
+  color: var(--text-muted); font-weight: 700;
+}
+/* Horizontal padding is NOT optional here, though it used to be missing.
+   Most pages papered over that with an inline `style="padding: 12px 20px"`
+   and the ones that didn't - Email Signature Generator, the IT Operations
+   form landing pages, Bookmarks - had their labels and inputs flush
+   against the border.
+
+   20px matches .panel-header and .toolbar, so a panel's header, body and
+   rows all line up down the left edge. A body whose children pad
+   themselves (.item-row, a table) sets .panel-body-flush instead of
+   fighting this, or the two add up to a 40px trench. */
+.panel-body { padding: 8px 20px; }
+.panel-body-flush { padding: 8px 0; }
+
+.toolbar {
+  display: flex; gap: 10px; align-items: center; padding: 14px 20px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+/* Every text-like input in the app, themed. An input type that isn't in
+   this list renders as the browser's own control - a light-grey bevelled
+   box with square corners and BLACK text, which on this dark theme means
+   you can't see what you've typed. That's happened three times now: time
+   inputs, then search, password and url (the sidebar search is on every
+   page, so it was the most visible). tests/test_input_theming.py fails if
+   a template uses an input type that's neither in here nor on its list of
+   deliberately-native controls. */
+.toolbar input[type="text"], .toolbar select, select, input[type="text"], input[type="date"],
+input[type="time"], input[type="email"], input[type="tel"], input[type="number"],
+input[type="search"], input[type="password"], input[type="url"], textarea {
+  background: var(--bg-panel-alt);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-family: var(--font);
+  font-size: 13px;
+}
+input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1; }
+/* A focus ring on the text-like controls only - checkboxes, radios and
+   colour swatches keep the browser's own, which suits their shape. :where()
+   keeps this at element specificity so any component that styles its own
+   focus state still wins. */
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]), select, textarea):focus {
+  outline: none;
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* type="search" carries its own WebKit chrome - a rounded "search field"
+   appearance and a clear-button x - that fights everything above. */
+input[type="search"] { -webkit-appearance: none; appearance: none; }
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+/* File pickers can't be restyled wholesale, but their button can. Left
+   alone it's a light native button sitting in a dark form. */
+input[type="file"] { color: var(--text-secondary); font-family: var(--font); font-size: 13px; }
+input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-alt);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { background: var(--bg-hover); }
+.toolbar input[type="text"] { flex: 1; min-width: 160px; }
+/* Ticked checkboxes and radios in the accent, not the browser's own blue. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+
+.filter-chip {
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg-panel-alt); color: var(--text-secondary); font-weight: 600;
+  font-size: 12.5px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+.filter-chip.active { background: var(--selected); color: var(--on-selected); border-color: rgba(255,255,255,.24); }
+.filter-chip .count { opacity: .75; }
+
+.item-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+}
+.item-row:last-child { border-bottom: none; }
+.item-row:hover { background: var(--bg-panel-alt); }
+
+.item-main { flex: 1; min-width: 0; }
+.item-action { font-weight: 700; font-size: 14px; }
+.item-sub { color: var(--text-secondary); font-size: 12.5px; margin-top: 2px; }
+
+.item-due { width: 140px; font-size: 12.5px; color: var(--text-secondary); text-align: right; }
+
+.badge {
+  display: inline-flex; align-items: center; padding: 4px 11px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
+}
+.badge-overdue { background: var(--red-soft); color: var(--on-red); }
+.badge-due_soon { background: var(--amber-soft); color: var(--amber); }
+.badge-compliant { background: var(--green-soft); color: var(--on-green); }
+
+.item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+/* On a phone a row with a due date and two buttons ran off the side. The
+   title takes the full width; the date and the buttons share the line
+   under it. */
+@media (max-width: 720px) {
+  .item-row { flex-wrap: wrap; row-gap: 8px; }
+  .item-main { flex-basis: 100%; }
+  .item-due { width: auto; text-align: left; }
+  .item-actions { margin-left: auto; }
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--bg-panel-alt);
+  color: var(--text-primary);
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font);
+}
+.btn:hover { background: var(--bg-hover); }
+.btn-primary {
+  background: var(--accent-gradient); border-color: transparent; color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 6px 18px rgba(192,57,75,.4);
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-icon { width: 30px; height: 30px; padding: 0; justify-content: center; border-radius: 999px; }
+
+.problem-card {
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+}
+.problem-card.overdue { border-left-color: var(--red); }
+.problem-card.due_soon { border-left-color: var(--amber); }
+.problem-card .badge { margin-bottom: 8px; }
+.problem-title { font-weight: 700; font-size: 13.5px; }
+.problem-sub { color: var(--text-secondary); font-size: 12px; margin-top: 3px; }
+
+.empty-state { padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+.group-toolbar { row-gap: 8px; }
+.toolbar-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-muted); margin-right: 2px;
+}
+.toolbar-divider { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+
+.pagination {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 20px; border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+.pagination-summary { font-size: 12.5px; color: var(--text-muted); }
+.pagination-links { display: flex; gap: 6px; flex-wrap: wrap; }
+
+
+
+/* =====================================================================
+   Forms
+   ===================================================================== */
+/* forms */
+.form-card { background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 640px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-weight: 700; font-size: 12.5px; margin-bottom: 6px; color: var(--text-secondary); }
+.form-group input, .form-group select, .form-group textarea { width: 100%; }
+.form-group textarea { min-height: 90px; resize: vertical; }
+
+/* Date and time fields size to their content rather than stretching the
+   whole form, and their picker button sits at the left-hand edge, right
+   under the label. Stretched full width, the calendar and clock buttons
+   ended up at the far right of a wide form - a long mouse journey for a
+   field you open, click twice and leave. */
+.form-group input[type="date"] { width: auto; min-width: 178px; }
+.form-group input[type="time"] { width: auto; min-width: 142px; }
+
+/* Moving the native button to the inline-start is Chromium/WebKit-only
+   (Firefox's indicator isn't addressable), so the padding that makes room
+   for it is behind the same feature test - otherwise Firefox would show a
+   38px gap with nothing in it and the button still on the right. There,
+   the narrower field alone does the job. */
+@supports selector(::-webkit-calendar-picker-indicator) {
+  .form-group input[type="date"],
+  .form-group input[type="time"] { position: relative; padding-left: 38px; }
+  .form-group input[type="date"]::-webkit-calendar-picker-indicator,
+  .form-group input[type="time"]::-webkit-calendar-picker-indicator {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+    padding: 2px;
+    cursor: pointer;
+    border-radius: 4px;
+    /* The stock icon is near-black; invert it for the dark theme. */
+    filter: invert(0.75);
+  }
+  .form-group input[type="date"]::-webkit-calendar-picker-indicator:hover,
+  .form-group input[type="time"]::-webkit-calendar-picker-indicator:hover {
+    background: var(--bg-hover);
+    filter: invert(1);
+  }
+}
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* Two fields side by side is too tight on a phone: every two-column form
+   stacks. (This used to be the config backup form's alone.) */
+@media (max-width: 720px) {
+  .form-row { grid-template-columns: 1fr; gap: 0; }
+}
+.form-hint { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+.form-actions { display: flex; gap: 10px; margin-top: 8px; }
+
+.upload-zone {
+  border: 1px dashed var(--border); border-radius: var(--radius-sm);
+  padding: 14px; background: var(--bg-panel-alt);
+}
+.upload-zone.config { border-color: rgba(245,166,35,.4); }
+
+
+
+/* =====================================================================
+   Detail header and history list
+   ===================================================================== */
+/* item detail */
+.detail-header {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 20px;
+  margin-bottom: 20px; flex-wrap: wrap;
+}
+.detail-title { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+.detail-sub { color: var(--text-secondary); font-size: 13px; margin-top: 6px; }
+
+.history-item { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.history-item:last-child { border-bottom: none; }
+.history-date { font-weight: 700; font-size: 13px; }
+.history-meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.history-notes { margin-top: 10px; background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; white-space: pre-wrap; }
+
+.attachment-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.attachment-thumb { width: 140px; }
+.attachment-thumb img { width: 100%; height: 100px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.attachment-file {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 12.5px; text-decoration: none;
+}
+.attachment-name { font-size: 11.5px; margin-top: 4px; color: var(--text-secondary); word-break: break-all; }
+.config-tag { display:inline-block; margin-top:4px; font-size: 10.5px; font-weight:700; color: var(--amber); text-transform: uppercase; letter-spacing:.04em; }
+
+.instructions-box {
+  background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 14px 16px; font-size: 13px; white-space: pre-wrap; margin-top: 10px;
+}
+
+
+
+/* =====================================================================
+   Sign-in page, tabs, tables
+   ===================================================================== */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+/* The small way-in-without-Microsoft link, top right of the sign-in page. */
+.login-corner { position: fixed; top: 16px; right: 20px; z-index: 5; }
+.login-corner a { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 6px 10px; border-radius: var(--radius-sm); }
+.login-corner a:hover, .login-corner a:focus { color: var(--text-primary); background: var(--bg-hover); }
+.login-card { width: 340px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; }
+.login-card h1 { font-size: 18px; margin: 0 0 4px; }
+.login-card p { color: var(--text-secondary); font-size: 13px; margin-top: 0; }
+
+.tabs { display: flex; gap: 4px; padding: 10px 20px; }
+.tab-btn {
+  padding: 7px 14px; border-radius: var(--radius-sm); background: transparent; border: none;
+  color: var(--text-secondary); font-weight: 700; font-size: 12.5px; cursor: pointer;
+}
+.tab-btn.active { background: var(--bg-panel-alt); color: var(--text-primary); }
+
+table.simple-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.simple-table th { text-align: left; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: .05em; padding: 10px 20px; border-bottom: 1px solid var(--border); }
+table.simple-table td { padding: 12px 20px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.simple-table tr:last-child td { border-bottom: none; }
+
+/* Lets a wide table scroll sideways within its panel on a narrow window
+   rather than overflowing the panel's rounded edge. */
+.table-scroll { overflow-x: auto; }
+
+
+
+/* =====================================================================
+   Small pieces: hidden, chips, checkbox lists, dropzone
+   ===================================================================== */
+.hidden { display: none !important; }
+
+.party-chip {
+  display: inline-block; margin-left: 6px; padding: 2px 9px; border-radius: 999px;
+  background: var(--selected); color: var(--on-selected); font-size: 11.5px; font-weight: 600;
+}
+.completed-by-pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 12px;
+  background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
+}
+.checkbox-list {
+  max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-panel-alt); padding: 6px 4px;
+}
+.checkbox-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 13px;
+  border-radius: 6px; cursor: pointer;
+}
+.checkbox-row:hover { background: var(--bg-hover); }
+.checkbox-row input { width: auto; }
+
+.dropzone {
+  border: 2px dashed var(--border); border-radius: var(--radius); padding: 36px 20px;
+  text-align: center; color: var(--text-muted); cursor: pointer; transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.dragover {
+  border-color: var(--accent); background: var(--accent-soft); color: var(--text-primary);
+}
+
+
+/* =====================================================================
+   Home dashboard: header, summary boxes, cards, rows with a tone bar
+   ===================================================================== */
+/* =====================================================================
+   Dashboard (home)
+   ===================================================================== */
+.dash-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 20px; flex-wrap: wrap; margin-bottom: 22px;
+}
+.dash-header h2 { font-size: 24px; margin: 0; }
+.dash-subhead { color: var(--text-secondary); font-size: 13.5px; margin-top: 4px; }
+.dash-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.dash-grid { display: grid; grid-template-columns: 1fr 320px; gap: 18px; align-items: start; }
+.dash-col, .dash-side { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+@media (max-width: 1100px) { .dash-grid { grid-template-columns: 1fr; } }
+
+/* IT Operations at a glance (home page, IT only): a row of summary
+   boxes, one per part of the cluster - see home.html. */
+.dash-ops { margin-bottom: 18px; }
+.dash-ops-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.dash-ops-head h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+.dash-ops-head a { font-size: 12.5px; color: var(--accent-link); text-decoration: none; }
+.dash-ops-head a:hover { text-decoration: underline; }
+.dash-ops-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 12px; }
+.dash-ops-box {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px 12px;
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius);
+  color: inherit; text-decoration: none; min-width: 0;
+  transition: border-color .15s ease, background .15s ease;
+}
+.dash-ops-box:hover { border-color: var(--accent); background: var(--bg-hover); }
+.dash-ops-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 700; }
+.dash-ops-icon { font-size: 16px; }
+.dash-ops-stats { display: flex; gap: 14px; flex-wrap: wrap; }
+.dash-ops-stat { display: flex; flex-direction: column; min-width: 0; }
+.dash-ops-stat strong { font-size: 22px; line-height: 1.1; font-weight: 800; letter-spacing: -.01em; }
+.dash-ops-stat span { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.dash-ops-stat.is-bad strong { color: var(--on-red); }
+.dash-ops-stat.is-warn strong { color: var(--on-amber); }
+.dash-ops-stat.is-ok strong { color: var(--on-green); }
+.dash-ops-note { font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.dash-card { padding: 0; overflow: hidden; }
+.dash-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.dash-card-head h3 { margin: 0; font-size: 15px; }
+.dash-card-head a { font-size: 12.5px; color: var(--accent-link); text-decoration: none; }
+.dash-card-head a:hover { text-decoration: underline; }
+
+.dash-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 16px; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.dash-row:last-child { border-bottom: 0; }
+.dash-tone { width: 3px; align-self: stretch; border-radius: 2px; flex: none; background: var(--text-muted); }
+.dash-tone-approval { background: var(--amber); }
+/* A document past its review date, and one coming up to it. Red is doing
+   real work here: it's the only row in Needs you that's already late. */
+.dash-tone-overdue { background: var(--red); }
+.dash-tone-review { background: var(--amber); }
+.dash-tone-draft { background: rgba(255,255,255,.28); }
+.dash-row-main { flex: 1; min-width: 0; }
+.dash-row-title { font-weight: 600; font-size: 13.5px; }
+.dash-row-meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+
+
+
+/* =====================================================================
+   Danger button (soft)
+   ===================================================================== */
+/* IT orders: delivery status panel on an IT Procurement Request */
+.btn-danger-soft { background: var(--red-soft); color: var(--on-red); border: 1px solid rgba(239,68,68,.35); }
+.btn-danger-soft:hover { background: rgba(239,68,68,.24); }
+
+
+/* =====================================================================
+   Announcement banner
+   ===================================================================== */
+/* ---------- announcements banner ----------
+   A single-line rotating notice that sits directly under the top bar on
+   every page. The viewport is a fixed-height window with each item
+   absolutely positioned inside it, so one can slide out while the next
+   slides in without the bar changing height (which would shove the whole
+   page down mid-animation). The timer that runs across the bottom is the
+   width of .announce-progress-fill, driven from the JS in base.html.
+
+   Red, and built around a solid left edge rather than a wash of colour -
+   it has to read as "the portal is telling you something" at a glance,
+   from the corner of your eye, without competing with the page. The date
+   lives inside the sentence rather than out at the right-hand margin; see
+   the note in base.html for why. */
+.announce-bar {
+  position: relative;
+  background:
+    linear-gradient(90deg, rgba(239,68,68,.15) 0%, rgba(239,68,68,.06) 45%, rgba(239,68,68,.03) 100%);
+  border-bottom: 1px solid rgba(239,68,68,.26);
+  /* The tell. A solid edge reads as a notice; a tinted strip alone reads
+     as decoration. */
+  box-shadow: inset 3px 0 0 var(--red);
+  overflow: hidden;
+}
+.announce-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.announce-icon {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  font-weight: 700;
+  color: #ffd4d4;
+  background: rgba(239,68,68,.22);
+  border: 1px solid rgba(239,68,68,.45);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.announce-icon-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: var(--red);
+  box-shadow: 0 0 0 3px rgba(239,68,68,.22);
+}
+.announce-viewport {
+  position: relative;
+  flex: 1;
+  height: 46px;
+  overflow: hidden;
+}
+.announce-item {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Parked below the window until it's this item's turn. */
+  transform: translateY(100%);
+  opacity: 0;
+  transition: transform .55s cubic-bezier(.22,.61,.36,1), opacity .35s ease;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+.announce-item.is-current { transform: translateY(0); opacity: 1; pointer-events: auto; }
+/* Entering from below (normal forward rotation) / from above (stepping back). */
+.announce-item.is-entering { transform: translateY(100%); opacity: 0; }
+.announce-item.is-entering-down { transform: translateY(-100%); opacity: 0; }
+.announce-item.is-leaving { transform: translateY(-100%); opacity: 0; }
+.announce-item.is-leaving-down { transform: translateY(100%); opacity: 0; }
+/* prefers-reduced-motion: swap instantly instead of sliding. */
+.announce-no-motion .announce-item { transition: opacity .2s ease; transform: none !important; }
+.announce-title {
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex: none;
+}
+/* Posted-on date. Sits between the title and the body, so it can only be
+   read as this notice's date. Pinned to the right-hand edge - where it
+   used to be - it read as a clock showing today. Deliberately NOT
+   flex:auto or margin-left:auto; if it ever drifts back to the edge, that
+   bug comes back with it. */
+.announce-date {
+  flex: none;
+  font-size: 11px;
+  color: #ffb4b4;
+  background: rgba(239,68,68,.13);
+  border: 1px solid rgba(239,68,68,.22);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+}
+.announce-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  /* Takes the leftover room and trails off rather than wrapping - the bar
+     is a fixed-height single line. */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.announce-dots { display: flex; gap: 6px; flex: none; align-items: center; margin-left: auto; }
+/* The x. Sits after the dots, quiet until you go near it - it's an escape
+   hatch, not something to draw the eye away from the notice itself. */
+.announce-dismiss-form { flex: none; display: flex; margin-left: 4px; }
+.announce-dismiss {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 17px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.announce-dismiss:hover,
+.announce-dismiss:focus-visible { background: rgba(239,68,68,.18); color: #ffd4d4; }
+/* Nothing else in .announce-dots has margin-left:auto to fall back on, so
+   when there's only one notice (no dots at all) the x still needs pushing
+   to the right-hand end itself. */
+.announce-dots + .announce-dismiss-form { margin-left: 4px; }
+.announce-viewport + .announce-dismiss-form { margin-left: auto; }
+.announce-dot {
+  width: 7px; height: 7px;
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(239,68,68,.3);
+  cursor: pointer;
+  transition: background .2s ease, transform .2s ease;
+}
+.announce-dot:hover { background: rgba(239,68,68,.65); transform: scale(1.2); }
+.announce-dot.is-current { background: var(--red); }
+.announce-progress {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 2px;
+  background: rgba(239,68,68,.12);
+}
+.announce-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--red);
+  /* Matches the JS tick so the bar creeps smoothly rather than stepping. */
+  transition: width .05s linear;
+}
+/* Paused on hover - the timer visibly stops with it. */
+.announce-bar.is-paused .announce-progress-fill { background: #ff9c9c; }
+@media (max-width: 720px) {
+  .announce-inner { padding: 0 16px; gap: 10px; }
+  /* The body is the first thing to go; the date stays, because on a narrow
+     screen a bare headline with no date is exactly the ambiguity this
+     layout exists to remove. */
+  .announce-body { display: none; }
+}
+
+
+
+/* =====================================================================
+   Portal dialogs: confirm / notice box and the please-wait overlay
+   ===================================================================== */
+/* ---------- portal dialogs ----------
+   The portal's own confirm / notice box and its "please wait" overlay
+   (app/static/js/app.js: portalConfirm, portalNotice, portalBusy). They
+   replace the browser's confirm() and alert(), which look nothing like
+   the portal, and give a long request (a Microsoft 365 sync) something
+   on screen while it runs. Any form or link can use them without
+   script: data-confirm="..." on a form or link asks first,
+   data-busy="..." on a form (or on one of its submit buttons) shows the
+   overlay from the moment it's submitted until the next page arrives. */
+.portal-dialog, .portal-busy {
+  position: fixed; inset: 0; z-index: 1200;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  background: rgba(6, 7, 12, .62);
+  backdrop-filter: blur(2px);
+  animation: portal-fade-in .12s ease-out;
+}
+.portal-dialog[hidden], .portal-busy[hidden] { display: none; }
+.portal-dialog-box, .portal-busy-box {
+  width: 100%; max-width: 440px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  padding: 22px 24px 18px;
+  animation: portal-rise .14s ease-out;
+}
+.portal-dialog-title { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+.portal-dialog-body { font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); white-space: pre-line; }
+.portal-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.portal-dialog-box.is-danger .portal-dialog-ok { background: #dc2626; border-color: #dc2626; color: #fff; }
+.portal-dialog-box.is-danger .portal-dialog-ok:hover { background: #b91c1c; }
+.portal-busy-box { max-width: 380px; text-align: center; padding: 28px 24px 24px; }
+.portal-busy-title { font-size: 15px; font-weight: 700; margin-top: 14px; }
+.portal-busy-sub { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.5; }
+.portal-spinner {
+  width: 36px; height: 36px; margin: 0 auto;
+  border-radius: 50%;
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: portal-spin .8s linear infinite;
+}
+@keyframes portal-spin { to { transform: rotate(360deg); } }
+@keyframes portal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes portal-rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+
+/* =====================================================================
+   Grouped, collapsible list (one row per group, its members underneath)
+   ===================================================================== */
+/* Infosec Compliance dashboard: actions grouped by type (dashboard.html,
+   _compliance_groups() in app/routes.py). A plain <details> per type, its
+   systems underneath. */
+.ctype-list { padding: 0; }
+.ctype { border-bottom: 1px solid var(--border); border-left: 3px solid transparent; }
+.ctype:last-child { border-bottom: none; }
+.ctype.ctype-overdue { border-left-color: var(--red); }
+.ctype.ctype-due_soon { border-left-color: var(--amber); }
+.ctype.ctype-compliant { border-left-color: var(--green); }
+.ctype-head {
+  display: flex; align-items: center; gap: 14px; padding: 13px 20px 13px 17px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.ctype-head::-webkit-details-marker { display: none; }
+.ctype-head:hover { background: var(--bg-panel-alt); }
+.ctype[open] > .ctype-head { background: var(--bg-panel-alt); border-bottom: 1px solid var(--border); }
+.ctype-caret {
+  width: 8px; height: 8px; flex-shrink: 0; margin: 0 2px;
+  border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted);
+  transform: rotate(-45deg); transition: transform .15s ease;
+}
+.ctype[open] > .ctype-head .ctype-caret { transform: rotate(45deg); }
+.ctype-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ctype-name { font-weight: 700; font-size: 14px; }
+.ctype-sub { color: var(--text-secondary); font-size: 12.5px; }
+.ctype-bar {
+  display: flex; width: 120px; height: 6px; border-radius: 999px; overflow: hidden;
+  background: var(--bg-hover); flex-shrink: 0; gap: 2px;
+}
+.ctype-bar > span { display: block; flex-basis: 0; min-width: 4px; }
+.ctype-bar-overdue { background: var(--red); }
+.ctype-bar-due_soon { background: var(--amber); }
+.ctype-bar-compliant { background: var(--green); }
+.ctype-counts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: 0 1 auto; max-width: 270px; }
+
+.ctype-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 14px;
+  padding: 9px 20px 9px 44px; border-bottom: 1px solid var(--border);
+}
+.ctype-row:hover { background: var(--bg-panel-alt); }
+.ctype-system { min-width: 0; }
+.ctype-system a { color: var(--text-primary); font-weight: 600; font-size: 13.5px; text-decoration: none; }
+.ctype-system a:hover { color: var(--accent-link); text-decoration: underline; }
+.ctype-rec {
+  display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; white-space: nowrap;
+}
+.ctype-last { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.ctype-due { display: flex; align-items: center; justify-content: flex-end; gap: 8px; font-size: 12.5px; color: var(--text-secondary); }
+.ctype-due-date { white-space: nowrap; }
+.ctype-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 20px 12px 44px; font-size: 12.5px; color: var(--text-muted);
+}
+.ctype-add { color: var(--accent-link); text-decoration: none; font-weight: 600; }
+.ctype-add:hover { text-decoration: underline; }
+
+/* The bar only earns its space on a wide screen; below that the counts
+   say the same thing. */
+@media (max-width: 1599px) {
+  .ctype-bar { display: none; }
+}
+@media (max-width: 900px) {
+  .ctype-head { flex-wrap: wrap; }
+  .ctype-counts { width: auto; justify-content: flex-start; padding-left: 24px; }
+  .ctype-row { grid-template-columns: minmax(0, 1fr) auto; padding-left: 20px; row-gap: 6px; }
+  .ctype-system { grid-column: 1 / -1; }
+  .ctype-due { justify-content: flex-start; }
+  .ctype-row .item-actions { justify-content: flex-end; }
+  .ctype-foot { padding-left: 20px; }
+}
+
+
+/* =====================================================================
+   Form section divider (called config-backup-section in the portal)
+   ===================================================================== */
+.form-section, .config-backup-section {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted); margin: 18px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.form-section:first-of-type, .config-backup-section:first-of-type { margin-top: 4px; }
+
+
+/* =====================================================================
+   Glass theme (25 Sep 2026)
+   Frosted, translucent surfaces over the page washes, a floating sidebar,
+   pill-shaped controls and a crimson accent. Kept as one block so the
+   whole look can be read, or reverted, in one place.
+   ===================================================================== */
+
+/* Every floating surface is glass. */
+.panel, .stat-card, .section-tile, .form-card, .dash-ops-box, .login-card,
+.empty-grid-state, .section-bar, .portal-dialog-box, .portal-busy-box {
+  background: var(--bg-panel);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+.empty-grid-state { border-style: dashed; }
+.portal-dialog-box, .portal-busy-box { background: rgba(50,50,50,.72); box-shadow: var(--glass-highlight), 0 24px 60px rgba(0,0,0,.55); }
+.section-tile:hover { background: var(--bg-hover); }
+
+/* Menus float too, but need to stay readable over anything. */
+.nav-dropdown-menu, .sidebar-user-menu {
+  background: rgba(50,50,50,.86);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-inner);
+}
+
+/* Without backdrop-filter, glass is unreadable: fall back to solid. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .panel, .stat-card, .section-tile, .form-card, .dash-ops-box, .login-card,
+  .section-bar, .portal-dialog-box, .portal-busy-box, .sidebar,
+  .nav-dropdown-menu, .sidebar-user-menu, .announce-bar { background: var(--bg-solid); }
+}
+
+/* App shell: the page gets a 16px frame, the sidebar floats inside it. */
+.app-shell { padding: 16px; gap: 16px; box-sizing: border-box; }
+.sidebar {
+  top: 16px;
+  height: calc(100vh - 32px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-highlight), 0 10px 40px rgba(0,0,0,.35);
+  width: 250px;
+}
+.sidebar-brand .dot { background: var(--accent-bright); box-shadow: 0 0 12px var(--accent-bright); }
+.sidebar-search input { border-radius: var(--radius-pill); background-color: var(--bg-panel-alt); }
+.sidebar-link, .nav-link, .tab-btn { border-radius: var(--radius-pill); white-space: nowrap; }
+.sidebar-link { padding: 8px 12px; }
+.sidebar-user { border-top: 0; padding: 0; }
+.sidebar-user-trigger { background: var(--bg-panel-alt); border: 1px solid var(--border); border-radius: 18px; padding: 9px 11px; }
+.sidebar-avatar { background: rgba(255,255,255,.18); }
+.app-main { gap: 16px; }
+.section-bar { padding: 6px; border-radius: var(--radius-pill); }
+.container { padding: 8px 6px 48px; }
+
+@media (max-width: 1100px) {
+  .app-shell { padding: 12px; }
+  .sidebar {
+    top: 12px; left: 12px; height: calc(100vh - 24px);
+    background: rgba(40,40,40,.88);
+    transform: translateX(calc(-100% - 24px));
+  }
+  .sidebar-toggle { border-radius: var(--radius-pill); background: var(--bg-panel); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
+  .section-bar { padding-left: 56px; }
+}
+
+/* Controls are pills. */
+.btn { border-radius: var(--radius-pill); padding: 8px 15px; box-shadow: inset 0 1px 0 rgba(255,255,255,.18); }
+.btn-sm { padding: 6px 12px; }
+.btn:not(.btn-primary):not(.btn-danger-soft) { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18); }
+.btn:not(.btn-primary):not(.btn-danger-soft):hover { background: var(--bg-hover); }
+.portal-dialog-box.is-danger .portal-dialog-ok { background: #dc2626; box-shadow: none; }
+
+/* Inputs: rounded, not pills (textareas and selects would look wrong). */
+input[type="text"], input[type="date"], input[type="time"], input[type="email"], input[type="tel"],
+input[type="number"], input[type="password"], input[type="url"], select, textarea {
+  background: var(--bg-inner);
+}
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="range"]), select, textarea):focus {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+input[type="file"]::file-selector-button { border-radius: var(--radius-pill); }
+
+/* Panels: header without a rule, rows as inner tiles. */
+.panel-header, .dash-card-head { border-bottom: 0; }
+.dash-card-head { padding: 16px 18px 10px; }
+.dash-card .dash-row, .panel-body-flush > .item-row {
+  margin: 0 8px 6px;
+  border-bottom: 0;
+  border-radius: var(--radius-inner);
+  background: var(--bg-inner);
+  padding: 13px 14px;
+}
+.dash-card .dash-row:last-child, .panel-body-flush > .item-row:last-child { margin-bottom: 8px; }
+.item-row:hover, .ctype-row:hover, .ctype-head:hover { background: rgba(255,255,255,.09); }
+.history-notes, .instructions-box, .upload-zone, .checkbox-list, .completed-by-pill, .attachment-file {
+  background: var(--bg-inner); border-radius: var(--radius-sm);
+}
+table.simple-table th, table.simple-table td, .toolbar, .pagination, .ctype, .ctype-row, .history-item, .problem-card {
+  border-color: var(--divider);
+}
+
+/* Status tone: a small glowing dot instead of a 3px bar. */
+.dash-tone {
+  --tone: var(--text-muted);
+  width: 8px; height: 8px; align-self: center; border-radius: 50%;
+  background: var(--tone); box-shadow: 0 0 10px var(--tone);
+}
+.dash-tone-approval, .dash-tone-review { --tone: var(--amber); }
+.dash-tone-overdue { --tone: var(--red); }
+.dash-tone-draft { --tone: rgba(255,255,255,.45); box-shadow: none; }
+
+/* Announcement banner: a grey glass pill with a crimson NOTICE dot. */
+.announce-bar {
+  background: rgba(255,255,255,.08);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--glass-highlight);
+}
+.announce-inner { padding: 0 10px 0 8px; }
+.announce-icon { color: #fff; background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.2); }
+.announce-icon-dot { background: var(--accent-bright); box-shadow: 0 0 8px var(--accent-bright); }
+.announce-date { color: var(--text-secondary); background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); }
+.announce-dismiss:hover, .announce-dismiss:focus-visible { background: var(--bg-hover); color: #fff; }
+.announce-dot { background: rgba(255,255,255,.3); }
+.announce-dot:hover { background: rgba(255,255,255,.6); }
+.announce-dot.is-current { background: var(--accent-bright); }
+.announce-progress { left: 24px; right: 24px; background: rgba(255,255,255,.08); }
+.announce-progress-fill { background: var(--accent-bright); }
+.announce-bar.is-paused .announce-progress-fill { background: rgba(255,255,255,.6); }
+@media (max-width: 1100px) {
+  .app-main > .announce-bar:first-child .announce-inner { padding-left: 50px; }
+}
+
+/* Spinner and dropzone in the accent. */
+.portal-spinner { border-color: rgba(255,255,255,.14); border-top-color: var(--accent-bright); }
+.dropzone:hover, .dropzone.dragover { border-color: var(--accent-bright); background: var(--accent-soft); }
+
+@media (prefers-reduced-transparency: reduce) {
+  .panel, .stat-card, .section-tile, .form-card, .dash-ops-box, .login-card, .section-bar,
+  .portal-dialog-box, .portal-busy-box, .sidebar, .announce-bar, .nav-dropdown-menu, .sidebar-user-menu {
+    background: var(--bg-solid); -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+}

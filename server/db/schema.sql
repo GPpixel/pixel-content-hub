@@ -268,7 +268,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     recurrence_end  TEXT,
     priority        INTEGER NOT NULL DEFAULT 0,
     enabled         INTEGER NOT NULL DEFAULT 1,
-    color           TEXT DEFAULT '#3B82F6',
+    color           TEXT DEFAULT '#C0394B',
     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     updated_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     -- A schedule targets exactly one of: a screen, a group, a video wall (whole wall, so it never tears).
@@ -389,7 +389,7 @@ CREATE TABLE IF NOT EXISTS device_groups (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id),
     name            TEXT NOT NULL,
-    color           TEXT DEFAULT '#3B82F6',
+    color           TEXT DEFAULT '#C0394B',
     playlist_id     TEXT REFERENCES playlists(id) ON DELETE SET NULL,
     created_at      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
@@ -494,12 +494,12 @@ CREATE INDEX IF NOT EXISTS idx_activity_log_user ON activity_log(user_id, create
 CREATE TABLE IF NOT EXISTS white_labels (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id),
-    brand_name      TEXT NOT NULL DEFAULT 'ScreenTinker',
+    brand_name      TEXT NOT NULL DEFAULT 'Pixel Content Hub',
     logo_url        TEXT,
     favicon_url     TEXT,
-    primary_color   TEXT DEFAULT '#3B82F6',
-    secondary_color TEXT DEFAULT '#1E293B',
-    bg_color        TEXT DEFAULT '#111827',
+    primary_color   TEXT DEFAULT '#C0394B',
+    secondary_color TEXT DEFAULT '#2B2B2B',
+    bg_color        TEXT DEFAULT '#232323',
     custom_domain   TEXT,
     custom_css      TEXT,
     hide_branding   INTEGER DEFAULT 0,

@@ -2,7 +2,7 @@ import { showToast } from '../components/toast.js';
 import { loginFormState } from '../lib/login-form-state.js';
 import { t } from '../i18n.js';
 import { esc, inManagerApp } from '../utils.js';
-import { applyAccent } from '../branding.js';
+import { applyAccent, DEFAULT_BGS } from '../branding.js';
 import { passkeysUsableHere, conditionalMediationAvailable, getPasskey, isUserCancel } from '../lib/passkeys.js';
 
 
@@ -64,7 +64,7 @@ function brandEsc(s) {
 function applyLoginBrandingDoc(b) {
   const root = document.documentElement;
   applyAccent(root, b.primary_color);
-  if (b.bg_color) root.style.setProperty('--bg-primary', b.bg_color);
+  if (b.bg_color && !DEFAULT_BGS.includes(String(b.bg_color).trim().toLowerCase())) root.style.setProperty('--bg-primary', b.bg_color);
   if (b.brand_name) document.title = b.brand_name;
   if (b.favicon_url) {
     document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]').forEach(l => l.setAttribute('href', b.favicon_url));

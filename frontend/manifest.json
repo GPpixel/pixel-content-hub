@@ -1,11 +1,11 @@
 {
-  "name": "ScreenTinker",
-  "short_name": "ScreenTinker",
+  "name": "Pixel Content Hub",
+  "short_name": "Pixel Hub",
   "description": "Digital Signage Management",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#111827",
-  "theme_color": "#3B82F6",
+  "background_color": "#232323",
+  "theme_color": "#C0394B",
   "orientation": "any",
   "icons": [
     {

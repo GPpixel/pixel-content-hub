@@ -41,8 +41,8 @@ function lookup(key) {
 function brandName() {
   try {
     const n = typeof window !== 'undefined' && window.__ST_BRAND_NAME;
-    return (typeof n === 'string' && n.trim()) ? n.trim() : 'ScreenTinker';
-  } catch (e) { return 'ScreenTinker'; }
+    return (typeof n === 'string' && n.trim()) ? n.trim() : 'Pixel Content Hub';
+  } catch (e) { return 'Pixel Content Hub'; }
 }
 
 function format(s, vars) {
