@@ -23,6 +23,19 @@ Pixel's digital signage server: a dashboard to manage screens, upload content, b
 - **The player has a generated copy.** After editing `server/player/index.html`, run `cd server && npm run build:legacy-player` to regenerate `server/player/legacy.html`.
 - **Don't use the in-app "Update Now".** It upgrades to upstream ScreenTinker releases and would replace the Pixel changes. Bring upstream changes in with a git merge instead.
 
+## Bringing in ScreenTinker updates
+
+ScreenTinker's history is part of this repo's history (ScreenTinker 3.0.0 is a merge parent of `main`), so its later releases merge in normally:
+
+```bash
+git remote add upstream https://github.com/screentinker/screentinker.git   # once
+git fetch upstream --tags
+git checkout -b upstream-sync main
+git merge v3.0.1          # the release tag to bring in
+```
+
+Conflicts can come up wherever Pixel changed a file: the styles, the branding defaults, a few dashboard views and the player. Keep the Pixel side of each, re-run `npm run build:legacy-player` if the player changed, run the tests, and open a pull request into `main`.
+
 ## Writing docs
 
 - **Describe the project as it is.** Don't narrate how it got there or who changed it ("Claude added…", "we moved…"). That history belongs in commit messages and pull requests.
@@ -77,6 +90,14 @@ Figtree for body text and Cal Sans for headings, self-hosted from `frontend/asse
 ### Branding defaults
 
 An unbranded workspace is "Pixel Content Hub" with the Pixel accent and background. The defaults live in `server/lib/branding.js` (`HARDCODED_BRANDING`), the `white_labels` table defaults in `server/db/schema.sql`, and the white-label routes. `frontend/js/branding.js` and `brand-prime.js` treat the Pixel default and the old ScreenTinker default colours as "not a brand", so they never override the Pixel palette. A real white-label colour still replaces the accent.
+
+### Icon
+
+`frontend/assets/icon.svg` is the app icon (crimson tile with a white screen) used for the sidebar logo and the favicon. `icon-192.png` and `icon-512.png` are rendered from it for the web app manifest and home-screen icons. Replace all three together.
+
+### Usage statistics prompt
+
+The dashboard doesn't show upstream's "Help show how widely ScreenTinker is deployed?" prompt (`PIXEL_HIDE_STATS_PROMPT` in `frontend/js/views/dashboard.js`), because those statistics go to ScreenTinker. Nothing is sent unless a platform admin turns sharing on in Settings. Upstream's sponsor request is turned off with `ST_HIDE_SPONSOR=true` in `server/.env`.
 
 ### Known fallbacks
 

@@ -544,12 +544,17 @@ function renderSelectionBar(scope, groupId = null) {
   `;
 }
 
+const PIXEL_HIDE_STATS_PROMPT = true;
+
 /*
  * Asks, once, whether this install will share its screen count. Only a platform admin sees it,
  * and only while the decision is genuinely unmade — BOTH answers persist, so it never returns
  * after an update. Re-prompting is how telemetry earns its reputation and gets patched out.
  */
 export async function renderStatsPrompt(container) {
+  // Pixel Content Hub doesn't ask: the statistics go to ScreenTinker, not Pixel. Nothing is sent
+  // unless sharing is switched on in Settings, and an unanswered install counts as off.
+  if (PIXEL_HIDE_STATS_PROMPT) return;
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   if (!isPlatformAdmin(user)) return;
 
@@ -1329,7 +1334,7 @@ async function loadDashboard() {
     if ((walls || []).length > 0) {
       html += `
         <div class="wall-section" style="margin-bottom:24px">
-          <div style="display:flex;align-items:center;margin-bottom:10px;padding:8px 12px;background:var(--bg-secondary);border-radius:8px;border-left:4px solid #8b5cf6">
+          <div style="display:flex;align-items:center;margin-bottom:10px;padding:8px 12px;background:var(--bg-secondary);border-radius:8px;border-left:4px solid var(--accent-2)">
             <strong style="font-size:15px">Video Walls</strong>
             <span style="color:var(--text-muted);font-size:12px;margin-left:10px">${walls.length} wall${walls.length === 1 ? '' : 's'}</span>
           </div>

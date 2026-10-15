@@ -815,7 +815,7 @@ body {
   width: 10px;
   height: 10px;
   background: #fff;
-  border: 1px solid #1d4ed8;
+  border: 1px solid var(--accent);
   border-radius: 2px;
   z-index: 4;
 }

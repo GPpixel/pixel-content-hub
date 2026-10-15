@@ -106,7 +106,7 @@ function renderLayoutCard(layout, isTemplate) {
         <div style="position:absolute;inset:8px;border:1px solid var(--border)">
           ${(layout.zones || []).map(z => `
             <div style="position:absolute;left:${z.x_percent}%;top:${z.y_percent}%;width:${z.width_percent}%;height:${z.height_percent}%;
-              background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.4);display:flex;align-items:center;justify-content:center;
+              background:rgba(192,57,75,0.15);border:1px solid rgba(192,57,75,0.4);display:flex;align-items:center;justify-content:center;
               font-size:9px;color:var(--text-muted);overflow:hidden">${esc(z.name)}</div>
           `).join('')}
         </div>
@@ -394,8 +394,8 @@ async function renderEditor(container, layoutId, wallId = null) {
       el.className = 'zone-el';
       el.dataset.index = i;
       el.style.cssText = `position:absolute;left:${z.x_percent}%;top:${z.y_percent}%;width:${z.width_percent}%;height:${z.height_percent}%;
-        background:${selectedZone === i ? 'rgba(59,130,246,0.3)' : 'rgba(59,130,246,0.1)'};
-        border:2px solid ${selectedZone === i ? 'var(--accent)' : 'rgba(59,130,246,0.4)'};
+        background:${selectedZone === i ? 'rgba(192,57,75,0.3)' : 'rgba(192,57,75,0.1)'};
+        border:2px solid ${selectedZone === i ? 'var(--accent)' : 'rgba(192,57,75,0.4)'};
         cursor:move;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text-secondary);
         user-select:none;z-index:${z.z_index || 0}`;
       el.textContent = z.name;

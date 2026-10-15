@@ -3320,7 +3320,7 @@ function setupRemote(device) {
   const feedback = (cx, cy) => {
     const ctx = canvas.getContext('2d');
     ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.5)'; ctx.fill();
+    ctx.fillStyle = 'rgba(192, 57, 75, 0.5)'; ctx.fill();
   };
   canvas?.addEventListener('pointerdown', (e) => {
     if (!remoteActive) return;
@@ -3337,7 +3337,7 @@ function setupRemote(device) {
     if (dist > 0.02) {
       sendSwipe(device.id, drag.x, drag.y, p.x, p.y, dur);   // drag → scroll
       const ctx = canvas.getContext('2d');
-      ctx.strokeStyle = 'rgba(59,130,246,0.6)'; ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(192,57,75,0.6)'; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.moveTo(drag.cx, drag.cy); ctx.lineTo(p.cx, p.cy); ctx.stroke();
     } else {
       sendTouch(device.id, drag.x, drag.y, 'tap');
