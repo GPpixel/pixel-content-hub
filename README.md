@@ -2,7 +2,7 @@
 
 Pixel's digital signage server: manage screens, upload content, and build playlists and schedules from one dashboard, styled in the Pixel design language.
 
-- **Install on a Raspberry Pi:** [`docs/pixel-pi-install.md`](docs/pixel-pi-install.md) (runs on port 3002, next to an existing ScreenTinker install).
+- **Install on a Raspberry Pi:** [`docs/pixel-pi-install.md`](docs/pixel-pi-install.md) (runs on port 2004, next to an existing ScreenTinker install).
 - **Changing it:** read [`CLAUDE.md`](CLAUDE.md) first. The design language is in [`design/`](design/).
 
 Pixel Content Hub is built on [ScreenTinker](https://github.com/screentinker/screentinker), open-source digital signage software by ScreenTinker, used under the MIT licence ([`LICENSE`](LICENSE)). The rest of this README is ScreenTinker's own and describes the upstream product.

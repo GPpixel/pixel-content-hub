@@ -285,7 +285,7 @@ function renderPage(state = {}, base = '') {
 <title>Download a ScreenTinker player</title>
 <meta name="robots" content="noindex">
 <style>
-:root{--bg:#111827;--card:#1e293b;--border:#334155;--text:#f1f5f9;--muted:#94a3b8;--accent:#3b82f6}
+:root{--bg:#232323;--card:#2b2b2b;--border:#494949;--text:#f2f2f2;--muted:#bbbbbb;--accent:#c0394b}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;line-height:1.6}
 .wrap{max-width:820px;margin:0 auto;padding:48px 20px 80px}

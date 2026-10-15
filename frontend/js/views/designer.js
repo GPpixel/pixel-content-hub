@@ -454,7 +454,7 @@ function redraw() {
   // Elements
   elements.forEach((el, i) => {
     const selected = i === selectedIdx;
-    const border = selected ? 'outline:2px solid #3b82f6;outline-offset:2px;' : '';
+    const border = selected ? 'outline:2px solid var(--accent-2);outline-offset:2px;' : '';
     const cursor = 'cursor:move;';
 
     switch (el.type) {

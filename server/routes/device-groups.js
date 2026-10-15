@@ -118,7 +118,7 @@ router.post('/', (req, res) => {
   const id = uuidv4();
   const insert = () => {
     db.prepare('INSERT INTO device_groups (id, user_id, workspace_id, name, color, rules) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, req.user.id, req.workspaceId, name, color || '#3B82F6', rules ? JSON.stringify(rules) : null);
+      .run(id, req.user.id, req.workspaceId, name, color || '#C0394B', rules ? JSON.stringify(rules) : null);
     return true;
   };
   if (!rules) {

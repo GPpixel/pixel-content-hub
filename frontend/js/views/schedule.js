@@ -365,7 +365,7 @@ export async function render(container) {
           </div>
           <div id="schedRepeatSummary" style="font-size:12px;color:var(--text-secondary);margin:-6px 0 12px"></div>
           <div class="form-group"><label>${t('schedule.priority')}</label><input type="number" id="schedPriority" class="input" value="0" min="0" max="100"></div>
-          <div class="form-group"><label>${t('schedule.color')}</label><input type="color" id="schedColor" value="#3B82F6" style="width:60px;height:32px;border:none;cursor:pointer"></div>
+          <div class="form-group"><label>${t('schedule.color')}</label><input type="color" id="schedColor" value="#C0394B" style="width:60px;height:32px;border:none;cursor:pointer"></div>
         </div>
         <div class="modal-footer" style="display:flex;justify-content:space-between;gap:8px">
           <button class="btn btn-danger" id="deleteScheduleBtn" style="display:none">${t('common.delete')}</button>
@@ -997,7 +997,7 @@ export async function render(container) {
       const data = {
         title: f.title, playlist_id: f.playlistId || null,
         start_time: toLocalStamp(dayDate, f.startMin), end_time: toLocalStamp(dayDate, f.endMin),
-        recurrence: null, recurrence_end: null, priority: 0, color: '#3B82F6',
+        recurrence: null, recurrence_end: null, priority: 0, color: '#C0394B',
       };
       if (f.isWall) data.wall_id = f.targetId; else if (f.isGroup) data.group_id = f.targetId; else data.device_id = f.targetId;
       try {
@@ -1268,7 +1268,7 @@ export async function render(container) {
         device_id: ev.device_id || null, group_id: ev.group_id || null, ...(ev.wall_id ? { wall_id: ev.wall_id } : {}),
         content_id: ev.content_id || null, playlist_id: ev.playlist_id || null, layout_id: ev.layout_id || null,
         title: ev.title ? `${ev.title} (copy)` : null, start_time: ev.start_time, end_time: ev.end_time,
-        recurrence: ev.recurrence || null, recurrence_end: ev.recurrence_end || null, priority: ev.priority || 0, color: ev.color || '#3B82F6',
+        recurrence: ev.recurrence || null, recurrence_end: ev.recurrence_end || null, priority: ev.priority || 0, color: ev.color || '#C0394B',
       }) });
       showToast(t('schedule.toast.saved'), 'success');
     } catch (err) { showToast(err.message, 'error'); }
@@ -1318,7 +1318,7 @@ export async function render(container) {
     if (endEl) endEl.value = (ev.recurrence_end || '').slice(0, 10);
     applyRecurrence(ev.recurrence);
     document.getElementById('schedPriority').value = ev.priority || 0;
-    document.getElementById('schedColor').value = ev.color || '#3B82F6';
+    document.getElementById('schedColor').value = ev.color || '#C0394B';
     if (ev.wall_id) { wallRadio.checked = true; wallSelect.value = ev.wall_id; }
     else if (ev.group_id) { groupRadio.checked = true; groupSelect.value = ev.group_id; }
     else { deviceRadio.checked = true; deviceSelect.value = ev.device_id || (devices[0] && devices[0].id) || ''; }

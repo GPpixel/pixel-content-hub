@@ -121,3 +121,8 @@ body {
 
 /* Segmented switches: the chosen option is neutral white glass, like the active nav item. */
 .ui-mode-switch button[aria-checked="true"] { background: var(--px-selected); color: #fff; box-shadow: var(--px-glass-highlight); }
+.lib-viewtoggle [aria-pressed="true"],
+.sched-views button.active,
+.stock-toggle button[aria-checked="true"],
+.sign-aspect button[aria-pressed="true"] { background: var(--px-selected); color: #fff; }
+.logo { color: var(--text-primary); }

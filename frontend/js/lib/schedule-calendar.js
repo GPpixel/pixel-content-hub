@@ -228,7 +228,7 @@ export function planOccurrenceEdit(ev, occurrenceDate, edited) {
   const base = {
     device_id: ev.device_id || null, group_id: ev.group_id || null, zone_id: ev.zone_id || null,
     content_id: ev.content_id || null, playlist_id: ev.playlist_id || null, layout_id: ev.layout_id || null,
-    widget_id: ev.widget_id || null, title: ev.title || '', priority: ev.priority || 0, color: ev.color || '#3B82F6',
+    widget_id: ev.widget_id || null, title: ev.title || '', priority: ev.priority || 0, color: ev.color || '#C0394B',
   };
   const editedDate = edited.date ? startOfDay(edited.date) : occ;
   const single = { ...base, start_time: stamp(editedDate, edited.startMin), end_time: stamp(editedDate, edited.endMin), recurrence: null, recurrence_end: null };

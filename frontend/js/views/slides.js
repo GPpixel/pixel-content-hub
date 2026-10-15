@@ -191,7 +191,7 @@ function ensureEditorStyles() {
     @media (pointer:coarse) { .sl-handle { width:20px; height:20px; margin:-10px 0 0 -10px; border-radius:50%; } }
     .sl-groupbox { position:absolute; border:1px dashed var(--primary); }
     .sl-guide { position:absolute; }
-    .sl-marquee { position:absolute; border:1px dashed var(--primary); background:rgba(59,130,246,.12); }
+    .sl-marquee { position:absolute; border:1px dashed var(--primary); background:rgba(192,57,75,.12); }
     .sl-arrange { display:flex; flex-wrap:wrap; align-items:center; gap:2px; margin-bottom:8px; }
     .sl-tool { display:grid; place-items:center; width:28px; height:26px; padding:0; border:1px solid transparent;
       border-radius:5px; background:none; color:var(--text-primary, inherit); cursor:pointer; }

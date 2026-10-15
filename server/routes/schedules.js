@@ -480,7 +480,7 @@ router.post('/', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${wall_id ? ', ?' : ''})
   `).run(id, req.user.id, targetWorkspaceId, device_id || null, group_id || null, zone_id || null, content_id || null, widget_id || null,
     layout_id || null, effectivePlaylistId, title || '', startTime, endTime, timezone || targetTz || 'UTC',
-    recurrence || null, recurrence_end || null, priority || 0, color || '#3B82F6', ...(wall_id ? [wall_id] : []));
+    recurrence || null, recurrence_end || null, priority || 0, color || '#C0394B', ...(wall_id ? [wall_id] : []));
 
   const schedule = db.prepare('SELECT * FROM schedules WHERE id = ?').get(id);
   res.status(201).json(shadowedDevices ? { ...schedule, shadowed_devices: shadowedDevices } : schedule);
