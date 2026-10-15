@@ -719,8 +719,8 @@ export async function render(container) {
           <div class="form-group"><label>${t('news.field.layout')}</label><select id="wNewsLayout" class="input" style="background:var(--bg-input)">
             <option value="ticker" ${config.layout !== 'headlines' ? 'selected' : ''}>${t('news.layout.ticker')}</option>
             <option value="headlines" ${config.layout === 'headlines' ? 'selected' : ''}>${t('news.layout.headlines')}</option></select></div>
-          <div class="form-group"><label>${t('widget.field.scroll_speed_seconds')}</label><input type="number" id="wScrollSpeed" class="input" value="${escAttr(config.scroll_speed || 30)}"></div>
-          <div class="form-group"><label>${t('news.field.interval')}</label><input type="number" id="wNewsInterval" class="input" min="3" max="300" value="${escAttr(config.interval_sec || 10)}"></div>
+          <div class="form-group" data-news-look="ticker"><label>${t('widget.field.scroll_speed_seconds')}</label><input type="number" id="wScrollSpeed" class="input" value="${escAttr(config.scroll_speed || 30)}"></div>
+          <div class="form-group" data-news-look="headlines"><label>${t('news.field.interval')}</label><input type="number" id="wNewsInterval" class="input" min="3" max="300" value="${escAttr(config.interval_sec || 10)}"></div>
           <div class="form-group"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="wNewsImages" ${config.show_images === false ? '' : 'checked'}> ${t('news.field.show_images')}</label></div>
           <div class="form-group"><label>${t('widget.field.max_items')}</label><input type="number" id="wMaxItems" class="input" value="${escAttr(config.max_items || 10)}"></div>
           <div class="form-group"><label>${t('widget.field.font_size')}</label><input type="number" id="wFontSize" class="input" value="${escAttr(config.font_size || 24)}"></div>
@@ -953,6 +953,13 @@ export async function render(container) {
     if (type === 'menu-board') mountMenuEditor(document.getElementById('wMenuEditor'), config, { apiGet: (u) => API(u) });
     if (type === 'cloud-doc') initCloudDocForm();
     if (type === 'rss') mountFeedPicker(document.getElementById('wFeedPicker'), { url: config.feed_url || '', mode: config.feed_mode });
+    // Show only the settings of the chosen look (scroll speed for the ticker, seconds per headline for headlines).
+    const newsLook = document.getElementById('wNewsLayout');
+    if (newsLook) {
+      const syncLook = () => document.querySelectorAll('[data-news-look]').forEach((el) => { el.style.display = el.dataset.newsLook === newsLook.value ? '' : 'none'; });
+      newsLook.addEventListener('change', syncLook);
+      syncLook();
+    }
     if (type === 'bi-dashboard') mountBiEditor(document.getElementById('wBiEditor'), config, { apiGet: (u) => API(u) });
     if (type === 'social') mountSocialEditor(document.getElementById('wSocialEditor'), config, { apiGet: (u) => API(u) });
     if (type === 'room-display') mountRoomEditor(document.getElementById('wRoomEditor'), config, {

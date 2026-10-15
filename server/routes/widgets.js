@@ -1249,7 +1249,9 @@ function rssCsp(origin) {
 function renderRSS(c, opts = {}) {
   const news = require('../lib/news-feed');
   const r = rssConfig(c || {});
-  const images = r.layout === 'headlines' && r.showImages;
+  // Pictures: on by default for the headlines look; the ticker shows small ones beside each headline
+  // only when asked (show_images: true), so tickers saved before 3.0 stay text-only.
+  const images = r.layout === 'headlines' ? r.showImages : c && c.show_images === true;
   // Relative: the page is served by this server, and a moved server must not leave cached pages
   // pointing at the old address. The embedded renderer sets a <base>, so it resolves there too.
   const itemsUrl = r.feedUrl ? news.itemsPath(r.feedUrl, r.mode) : '';
@@ -1257,7 +1259,7 @@ function renderRSS(c, opts = {}) {
   const seed = seedData ? news.screenPayload(seedData, { max: r.maxItems, images }) : null;
   const cfg = {
     url: itemsUrl ? `${itemsUrl}&n=${r.maxItems}` : '',
-    layout: r.layout, speed: r.scrollSpeedSec, interval: r.intervalSec * 1000, images,
+    layout: r.layout, speed: r.scrollSpeedSec, interval: r.intervalSec * 1000, images, font: r.fontSize,
     seed: seed ? seed.items : null,
   };
   const fg = safeCss(c.color, '#FFF');
@@ -1267,6 +1269,8 @@ function renderRSS(c, opts = {}) {
   .ticker { display:flex; align-items:center; height:100%; white-space:nowrap; position:relative; will-change:transform; }
   .item { display:inline-block; padding:0 40px; font-size:${r.fontSize}px; color:${fg}; }
   .item .title { font-weight:600; }
+  #root { position:relative; height:100%; }
+  .item .tp { display:inline-block; vertical-align:middle; margin-right:14px; border-radius:4px; background:#111 center/cover no-repeat; }
   .item.sep { padding:0 20px; opacity:0.3; }
   .msg { display:flex; align-items:center; justify-content:center; height:100%; font-size:${r.fontSize}px; opacity:.7; }
   .hl { position:absolute; top:0; right:0; bottom:0; left:0; display:flex; align-items:stretch; opacity:0; transition:opacity .8s ease; }
@@ -1299,7 +1303,14 @@ function renderRSS(c, opts = {}) {
     root.innerHTML = '';
     var strip = el('div', 'ticker');
     for (var i = 0; i < items.length; i++) {
-      var it = el('div', 'item'); it.appendChild(el('span', 'title', items[i].title)); strip.appendChild(it);
+      var it = el('div', 'item');
+      if (cfg.images && items[i].image) {
+        var tp = el('span', 'tp'); var th = Math.round(cfg.font * 1.7);
+        tp.style.height = th + 'px'; tp.style.width = Math.round(th * 16 / 9) + 'px';
+        tp.style.backgroundImage = 'url("' + String(items[i].image).replace(/["\\\\\\n]/g, '') + '")';
+        it.appendChild(tp);
+      }
+      it.appendChild(el('span', 'title', items[i].title)); strip.appendChild(it);
       strip.appendChild(el('div', 'item sep', '\\u2022'));
     }
     root.appendChild(strip);
