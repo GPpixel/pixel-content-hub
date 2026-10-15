@@ -662,6 +662,8 @@ export function render(container, deviceId) {
 
   playbackHandler = (data) => {
     if (data.device_id !== deviceId) return;
+    // A mirror's line names its original and playlist; a bare content id would replace it with less.
+    if (currentDevice && currentDevice.mirror_source) return;
     const el = document.getElementById('nowPlayingInfo');
     if (el && data.current_content_id) {
       el.textContent = t('device.now_playing_id', { id: data.current_content_id });
@@ -688,6 +690,19 @@ export function render(container, deviceId) {
   on('screenshot-ready', screenshotHandler);
   on('playback-state', playbackHandler);
   on('device-log', logHandler);
+}
+
+/*
+ * 3.0 display-link mirrors: a mirror has no playlist of its own (it plays its original's), so its
+ * "Now playing" line names the original and what that resolves to (routes/devices.js mirrorPlaying).
+ * Plain text: callers escape it.
+ */
+function mirrorPlayingText(device) {
+  const source = (device.mirror_source && device.mirror_source.name) || '';
+  const p = device.mirror_playing;
+  if (!p || !p.playlist_name) return t('device.mirror.now_nothing', { source });
+  if (p.now && p.now.name) return t('device.mirror.now_playing_item', { source, playlist: p.playlist_name, item: p.now.name });
+  return t('device.mirror.now_playing', { source, playlist: p.playlist_name });
 }
 
 async function loadDevice(deviceId, activeTab = null) {
@@ -847,7 +862,8 @@ async function loadDevice(deviceId, activeTab = null) {
           }
         </div>
         <p id="nowPlayingInfo" style="color:var(--text-secondary);font-size:13px;">
-          ${device.assignments?.length ? tn('device.playlist_count', device.assignments.length) : t('device.no_content_assigned')}
+          ${device.mirror_source ? esc(mirrorPlayingText(device))
+            : device.assignments?.length ? tn('device.playlist_count', device.assignments.length) : t('device.no_content_assigned')}
         </p>
         <div id="screenShareCard"></div>
       </div>

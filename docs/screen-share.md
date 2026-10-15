@@ -118,8 +118,34 @@ screen shows the share with its own *"Shared by …"* badge, and each screen's r
   is a separate peer-to-peer upload *from the sharer's computer* (roughly 1–3 Mbit/s each for a
   screen of slides, more for video), so the limit protects the sharer's uplink, not the server. Asking
   for more is refused with that reason; nothing starts.
-- **Mirror displays:** a share to a display also reaches its mirrors (when the mirror-display feature
-  is present: `expandShareTargets()` in `lib/screen-share.js` is the single place that decides).
+- **Mirror displays** (the same display link open in another place, [web-player.md](web-player.md)):
+  every way of sharing to a display also reaches its mirrors: **Share my screen** on the display's
+  page, its screen card or the Simple view, a multi share naming it, and a guest's meeting-room code.
+  The one-screen start (`POST /api/screen-share/devices/:id`) and the guest join (`POST
+  /api/share/join`) answer with the display's own leg in their usual fields plus, added, `share_id`
+  and `legs` (display first, then each mirror; the sharer's page sends the one capture to each) and,
+  for the signed-in start only, `skipped`. A mirror that is offline, busy, cannot show a share or is
+  past the target limit is left out, never a reason to refuse; the display itself unavailable refuses
+  as before. **Stop** on the display (sharer or owner) ends it on its mirrors; a mirror that drops
+  off or is removed loses only its own leg. The card counts the display once ("+ mirrors" apart).
+  Mirrors are never a choice: the card says "Also shows on its mirrors (n): …", and **Also show
+  on…** offers displays only (picking one brings its mirrors).
+- **A mirror that appears during a share joins it.** When a mirror of a display being shared to
+  connects (opened for the first time, or back after a drop), the server mints a leg for it in the
+  same share and hands it to the sharer's page over a signalling socket that page already has open
+  (`{type:'add_leg', share_id, leg}`; a guest's leg carries no device id). The page sends the same
+  capture to it, and the bar updates ("Showing on 3 of 3 screens"). Only the server chooses: a
+  mirror of a display the share was started for, in its workspace, that can take a share; nothing
+  the sharer sends can add a screen. The target limit holds: a full share skips the mirror and the
+  sharer is told (`{type:'leg_skipped', screen_name, reason}`). A sharer page from before this
+  ignores the message; the unused leg expires after a minute.
+  `withMirrors()` / `expandShareTargets()` in `lib/screen-share.js` decide.
+- **The meeting-room code on mirrors:** the code belongs to the display; its mirrors show the same
+  code (a mirror that connects while it is live gets it at once) and a guest who types it at a
+  mirror presents to the display and all its mirrors. Redeeming it spends it everywhere; no screen of
+  the family shows a code while the display is busy (nor a mirror busy with its own share); when the
+  share ends they all get the same new code. A share to one mirror alone replaces the display's code
+  when it starts and again when it ends. The switch is on the display (a mirror's page has none).
 
 #### Sharing to many screens (beyond the limit)
 

@@ -542,12 +542,38 @@ function mirrorFields(device) {
   const mirrorsLib = require('../lib/mirrors');
   if (device.mirror_of) {
     const src = db.prepare('SELECT id, name, status FROM devices WHERE id = ? AND workspace_id IS ?').get(device.mirror_of, device.workspace_id);
-    return { mirror_source: src || null, mirrors: [] };
+    return { mirror_source: src || null, mirrors: [], mirror_playing: src ? mirrorPlaying(device, src) : null };
   }
   const list = mirrorsLib.mirrorsOf(device.id).map((m) => ({
     id: m.id, name: m.name, status: m.status, last_heartbeat: m.last_heartbeat, location: m.mirror_location || null, created_at: m.created_at,
   }));
   return { mirror_source: null, mirrors: list };
+}
+
+/*
+ * What a mirror is playing. Its own row has no playlist (it follows its original at payload time,
+ * ws/deviceSocket.js buildPlaylistPayload), so "Now playing" read "No content assigned" on a screen
+ * that was plainly playing. Resolved from the ORIGINAL exactly as the payload is (the resolved
+ * playlist: schedule, wall, group, own), and the item from the mirror's OWN play_start reports
+ * (lib/now-playing.js, attributed to the mirror's id by its socket), else the original's.
+ * { playlist_id, playlist_name, items, now: { content_id, widget_id, name } | null }
+ */
+function mirrorPlaying(mirror, src) {
+  try {
+    const playlistId = require('../lib/resolve-device-playlist').resolveDevicePlaylistId(src.id);
+    const pl = playlistId ? db.prepare('SELECT id, name FROM playlists WHERE id = ?').get(playlistId) : null;
+    const items = pl ? db.prepare('SELECT COUNT(*) AS n FROM playlist_items WHERE playlist_id = ?').get(pl.id).n : 0;
+    const np = require('../lib/now-playing');
+    const cur = np.forDevice(mirror.id)[0] || np.forDevice(src.id)[0] || null;
+    let now = null;
+    if (cur && (cur.content_id || cur.widget_id)) {
+      const row = cur.content_id
+        ? db.prepare('SELECT filename AS name FROM content WHERE id = ? AND workspace_id IS ?').get(cur.content_id, mirror.workspace_id)
+        : db.prepare('SELECT name FROM widgets WHERE id = ? AND workspace_id IS ?').get(cur.widget_id, mirror.workspace_id);
+      now = { content_id: cur.content_id || null, widget_id: cur.widget_id || null, name: row ? row.name : null };
+    }
+    return { playlist_id: pl ? pl.id : null, playlist_name: pl ? pl.name : null, items, now };
+  } catch (e) { return null; }
 }
 
 function checkDeviceOwnership(req, res) {
@@ -1493,6 +1519,9 @@ router.delete('/:id', (req, res) => {
   const removed = [req.params.id, ...(device.mirror_of ? [] : require('../lib/mirrors').mirrorsOf(req.params.id).map((m) => m.id))];
   const io = req.app.get('io');
   for (const id of removed) {
+    // 3.0 screen share: a removed screen's leg of a share ends now (a removed mirror drops out of
+    // its display's share; the display and its other mirrors carry on), and its code goes.
+    try { require('../lib/screen-share').deviceGone(id); } catch (_) { /* never block a delete */ }
     // Clean up related data (playlist is NOT deleted — may be shared with other devices)
     db.prepare('DELETE FROM schedules WHERE device_id = ?').run(id);
     // Head office mandates / slot content / emergency scopes naming this screen (no FK cascades them).

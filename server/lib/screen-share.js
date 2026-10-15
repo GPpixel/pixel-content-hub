@@ -73,6 +73,9 @@ const byDevice = new Map();    // device id  -> session (one share per screen)
 const codes = new Map();       // device id  -> { code, expiresAt }
 const codeIndex = new Map();   // code       -> device id
 const origins = new Map();     // device id  -> the origin that screen reaches us on (for its QR)
+// share id -> the DISPLAYS (never mirrors) the share was started for. What lets a mirror that
+// connects mid-share join it (joinLiveShare): only a mirror of one of these displays may.
+const shareDisplays = new Map();
 let deviceNs = null;
 let sweepTimer = null;
 
@@ -172,6 +175,10 @@ function createSession(opts) {
   };
   sessions.set(s.id, s);
   byDevice.set(device.id, s);
+  if (!mirrorsLib().sourceOf(device.id)) {
+    if (!shareDisplays.has(s.shareId)) shareDisplays.set(s.shareId, new Set());
+    shareDisplays.get(s.shareId).add(device.id);
+  }
   s.timers.ticket = setTimeout(() => endSession(s, 'not_connected'), TICKET_TTL_MS);
   unrefTimer(s.timers.ticket);
   audit(s.guest ? 'screen_share.guest_join' : 'screen_share.start', {
@@ -179,9 +186,21 @@ function createSession(opts) {
     details: { session_id: s.id, share_id: s.shareId, shared_by: s.sharedBy, guest: s.guest, audio: s.audio },
   });
   // The badge on the screen must not offer a code while it is busy.
-  if (s.guest || codes.has(device.id)) pushCode(device.id);
+  /*
+   * A code must never outlive a share it could have been seen next to. A share on the display drops
+   * the code for the display and all its mirrors (currentCode: busy -> none) and a NEW one is minted
+   * when it ends. A share on one MIRROR alone leaves the display free, so the family keeps offering a
+   * code — but a fresh one, minted now, and again when that share ends (endSession).
+   */
+  const src = codeSource(device.id);
+  s.onMirrorAlone = src !== device.id && !byDevice.has(src) && !(shareDisplays.get(s.shareId) || new Set()).has(src);
+  if (s.onMirrorAlone) dropCode(src);
+  if (s.guest || codes.has(src) || src !== device.id) pushCode(device.id);
   return { session: s, ticket };
 }
+
+// Lazy, like every other cross-module require here: keeps the load order free of cycles.
+function mirrorsLib() { return require('./mirrors'); }
 
 function unrefTimer(t) { try { if (t && t.unref) t.unref(); } catch (_) {} }
 
@@ -203,6 +222,7 @@ function endSession(s, reason, by) {
   try { if (s.sharer) s.sharer.close(1000, 'ended'); } catch (_) {}
   try { if (s.device) s.device.close(1000, 'ended'); } catch (_) {}
   sessions.delete(s.id);
+  if (!sessionsForShare(s.shareId).length) shareDisplays.delete(s.shareId);
   if (byDevice.get(s.deviceId) === s) byDevice.delete(s.deviceId);
   if (deviceNs) { try { deviceNs.to(s.deviceId).emit('device:screenshare-stop', { session_id: s.id, reason }); } catch (_) {} }
   audit('screen_share.stop', {
@@ -212,7 +232,10 @@ function endSession(s, reason, by) {
       seconds: s.startedAt ? Math.round((Date.now() - s.startedAt) / 1000) : 0,
     },
   });
-  if (codes.has(s.deviceId) || guestEnabled(s.deviceId)) pushCode(s.deviceId);
+  const src = codeSource(s.deviceId);
+  // A share that ran on a mirror alone (the display free, so it kept a code): fresh code now too.
+  if (s.onMirrorAlone && !byDevice.has(src)) dropCode(src);
+  if (codes.has(src) || guestEnabled(src)) pushCode(s.deviceId);
 }
 
 function sessionForDevice(deviceId) { return byDevice.get(deviceId) || null; }
@@ -224,14 +247,44 @@ function publicSession(s) {
     session_id: s.id, shared_by: s.sharedBy, guest: s.guest, audio: s.audio, live: s.live,
     started_at: s.startedAt || s.createdAt, max_seconds: maxSeconds(),
     // Multi share: which share this screen is part of, and how many screens it is on right now.
-    share_id: s.shareId, screens: sessionsForShare(s.shareId).length || 1,
+    // A display's mirrors (the same display link open somewhere else) ride along with it and are
+    // counted apart, so a one-display share with its mirrors still reads as one screen to stop.
+    share_id: s.shareId, ...shareCounts(s.shareId),
   };
+}
+
+// { screens, mirrors }: legs of a share, with mirrors of a display that is itself in the share
+// counted apart.
+function shareCounts(shareId) {
+  const legs = sessionsForShare(shareId);
+  const ids = new Set(legs.map((l) => l.deviceId));
+  let mirrorLegs = 0;
+  for (const l of legs) { const src = mirrorsLib().sourceOf(l.deviceId); if (src && ids.has(src)) mirrorLegs++; }
+  return { screens: Math.max(1, legs.length - mirrorLegs), mirrors: mirrorLegs };
 }
 
 function stopForDevice(deviceId, reason, by) {
   const s = byDevice.get(deviceId);
   if (!s) return false;
   endSession(s, reason, by);
+  return true;
+}
+
+/*
+ * The owner's "stop" on a display: its own session AND its mirrors' legs of the same share. The
+ * mirrors are that display shown somewhere else, so a share kicked off the display must not keep
+ * playing on them. A different share running on a mirror alone is left alone. On a mirror (which
+ * has no mirrors) this is stopForDevice.
+ */
+function stopForDisplay(deviceId, reason, by) {
+  const s = byDevice.get(deviceId);
+  if (!s) return false;
+  const shareId = s.shareId;
+  endSession(s, reason, by);
+  for (const m of mirrorsLib().mirrorsOf(deviceId)) {
+    const ms = byDevice.get(m.id);
+    if (ms && ms.shareId === shareId) endSession(ms, reason, by);
+  }
   return true;
 }
 
@@ -276,10 +329,77 @@ function expandShareTargets(deviceIds) {
   const add = (id, via) => { const k = String(id || ''); if (k && !seen.has(k)) { seen.add(k); out.push({ id: k, via }); } };
   for (const id of deviceIds || []) {
     add(id, null);
-    const mirrors = require('./mirrors').mirrorsOf(id);
+    const mirrors = mirrorsLib().mirrorsOf(id);
     for (const m of mirrors) add(m && m.id ? m.id : m, 'mirror');
   }
   return out;
+}
+
+/*
+ * A share to ONE display (the dashboard's "Share my screen", a guest's meeting-room code): the
+ * display itself, then each of its mirrors that can take it. The caller has already checked access
+ * to and availability of the display. A mirror is best-effort: one in another workspace (cannot
+ * happen through the socket, but a row could say so) or one `reachable(row)` refuses is left out
+ * silently; one that cannot show a share right now (offline, no receiver, busy, past the target
+ * limit) is listed in `skipped`. Neither ever refuses the share to the display.
+ * returns { targets: [{ device, workspace }], skipped: [{ id, name, ok, reason, platform, mirror }] }
+ */
+function withMirrors(device, workspace, { reachable } = {}) {
+  const targets = [{ device, workspace }];
+  const skipped = [];
+  for (const t of expandShareTargets([device.id])) {
+    if (!t.via) continue;
+    const m = db.prepare('SELECT * FROM devices WHERE id = ?').get(t.id);
+    if (!m || m.workspace_id !== device.workspace_id) continue;
+    if (reachable && !reachable(m)) continue;
+    let a = availability(m, workspace);
+    if (a.ok && targets.length >= maxTargets()) a = { ok: false, reason: 'too_many_targets' };
+    if (!a.ok) {
+      skipped.push({ id: m.id, name: m.name || '', ok: false, reason: a.reason, platform: playerCapabilities.platformFamily(m), mirror: true });
+      continue;
+    }
+    targets.push({ device: m, workspace });
+  }
+  return { targets, skipped };
+}
+
+/*
+ * The answer to a one-display start (POST /api/screen-share/devices/:id and the guest join): the
+ * display's own leg in the top-level fields every caller has always read, plus (additive) the share
+ * id, every leg (the display first, then its mirrors) and the mirrors left out. A caller that only
+ * knows the top-level ticket still shares to the display exactly as before; the mirror legs it never
+ * opens expire unused after TICKET_TTL_MS.
+ */
+/*
+ * Mint the share for a withMirrors() plan. A mirror that turned busy between the plan and now (a
+ * race with someone else's start) costs only that mirror: the share goes ahead on the display alone.
+ * returns { out: createShare's result, skipped }
+ */
+function createDisplayShare(plan, opts) {
+  const out = createShare({ ...opts, targets: plan.targets });
+  const display = plan.targets[0].device;
+  if (!out.error || !out.device_id || out.device_id === display.id || plan.targets.length < 2) return { out, skipped: plan.skipped };
+  const rest = plan.targets.slice(1).map((t) => ({ id: t.device.id, name: t.device.name || '', ok: false, reason: 'busy', platform: playerCapabilities.platformFamily(t.device), mirror: true }));
+  return { out: createShare({ ...opts, targets: [plan.targets[0]] }), skipped: plan.skipped.concat(rest) };
+}
+
+function displayShareBody(out, skipped) {
+  const legs = out.legs.map((l) => ({
+    device_id: l.device.id, screen_name: l.device.name || '', session_id: l.session.id,
+    ticket: l.ticket, ice_servers: iceServersFor(l.device.id),
+  }));
+  const main = legs[0];
+  return {
+    session_id: main.session_id,
+    ticket: main.ticket,
+    ws_path: '/api/screen-share/ws',
+    ice_servers: main.ice_servers,
+    max_seconds: maxSeconds(),
+    screen_name: main.screen_name,
+    share_id: out.shareId,
+    legs,
+    skipped: skipped || [],
+  };
 }
 
 /*
@@ -293,10 +413,13 @@ function createShare(opts) {
   if (targets.length > maxTargets()) return { error: 'too_many_targets' };
   const busy = targets.find((t) => byDevice.has(t.device.id));
   if (busy) return { error: 'busy', device_id: busy.device.id };
-  const shareId = crypto.randomUUID();
+  // The share id is its FIRST leg's session id, so a share that reached one screen has the shape a
+  // one-screen share always had (share_id === session_id), whether or not mirrors joined it.
+  let shareId = null;
   const legs = [];
   for (const t of targets) {
-    const out = createSession({ ...opts, device: t.device, workspace: t.workspace, shareId });
+    const out = createSession({ ...opts, device: t.device, workspace: t.workspace, shareId: shareId || undefined });
+    if (!out.error && !shareId) shareId = out.session.id;
     if (out.error) {
       for (const l of legs) endSession(l.session, 'not_connected');
       return { error: out.error, device_id: t.device.id };
@@ -316,7 +439,11 @@ function stopShare(shareId, reason, by) {
 // The screen dropped off Socket.IO: its share cannot continue and its code means nothing now.
 function deviceGone(deviceId) {
   stopForDevice(deviceId, 'screen_offline');
-  dropCode(deviceId);
+  if (codes.has(deviceId)) {
+    dropCode(deviceId);
+    // The code was this display's: its mirrors stop offering one nobody can use now.
+    emitCode(mirrorsLib().mirrorsOf(deviceId).map((m) => m.id), { code: null });
+  }
 }
 
 // A workspace switched the feature off: end everything running in it.
@@ -400,29 +527,58 @@ function redeemCode(raw) {
 
 function formatCode(code) { return code ? `${code.slice(0, 4)}-${code.slice(4)}` : null; }
 
-// Tell one screen what to show in its corner: the code, the address, and a QR for the address with
-// the code in the FRAGMENT (never sent to any server, so it stays out of access logs).
+function emitCode(ids, payload) {
+  if (!deviceNs) return;
+  for (const id of ids) { try { deviceNs.to(id).emit('device:screenshare-code', payload); } catch (_) {} }
+}
+
+// Whose code a screen shows: a mirror shows its display's (lib/mirrors.js); codes are keyed by
+// the display only.
+function codeSource(deviceId) { return mirrorsLib().sourceOf(deviceId) || deviceId; }
+
+// A mirror shows its display's code unless it is busy with a share of its own, its player cannot
+// show a share, or it is (impossibly) in another workspace than the display.
+function mirrorShowsCode(mirrorId, srcWorkspaceId) {
+  if (byDevice.has(mirrorId)) return false;
+  try {
+    const m = db.prepare('SELECT * FROM devices WHERE id = ?').get(mirrorId);
+    return !!(m && m.workspace_id && m.workspace_id === srcWorkspaceId && playerCapabilities.supports(m, CAP));
+  } catch (_) { return false; }
+}
+
+/*
+ * Tell a display AND every mirror of it what to show in the corner: the code, the address, and a QR
+ * for the address with the code in the FRAGMENT (never sent to any server, so it stays out of access
+ * logs). `deviceId` may be the display or one of its mirrors; either way the whole family is told.
+ * The code is the display's: a guest standing at a mirror who types it presents to the display and
+ * all its mirrors (routes/screen-share-guest.js), exactly as from the display itself.
+ */
 async function pushCode(deviceId) {
   if (!deviceNs) return;
-  const c = currentCode(deviceId);
-  if (!c) { try { deviceNs.to(deviceId).emit('device:screenshare-code', { code: null }); } catch (_) {} return; }
-  const origin = origins.get(deviceId) || '';
-  const url = origin ? `${origin}/share` : '/share';
-  // Cached on the code entry: a web player re-registers every minute or so, and the image only
-  // changes when the code (or the address) does.
-  let qr = c.qrFor === url ? c.qr : null;
-  if (origin && !qr) {
-    try { qr = await require('qrcode').toDataURL(`${url}#${c.code}`, { margin: 1, width: 220, errorCorrectionLevel: 'M' }); } catch (_) { qr = null; }
-    if (qr) { c.qr = qr; c.qrFor = url; }
+  const src = codeSource(deviceId);
+  const family = [src, ...mirrorsLib().mirrorsOf(src).map((m) => m.id)];
+  const c = currentCode(src);
+  if (!c) { emitCode(family, { code: null }); return; }
+  let srcWs = null;
+  try { const r = db.prepare('SELECT workspace_id FROM devices WHERE id = ?').get(src); srcWs = r ? r.workspace_id : null; } catch (_) { /* no mirror shows it */ }
+  if (!c.qrs) c.qrs = new Map();
+  for (const id of family) {
+    if (id !== src && !mirrorShowsCode(id, srcWs)) { emitCode([id], { code: null }); continue; }
+    // Each screen's own address (the one people in ITS room are most likely to reach), else the display's.
+    const origin = origins.get(id) || origins.get(src) || '';
+    const url = origin ? `${origin}/share` : '/share';
+    // Cached on the code entry per address: a web player re-registers every minute or so, and the
+    // image only changes when the code (or the address) does.
+    let qr = c.qrs.get(url) || null;
+    if (origin && !qr) {
+      try { qr = await require('qrcode').toDataURL(`${url}#${c.code}`, { margin: 1, width: 220, errorCorrectionLevel: 'M' }); } catch (_) { qr = null; }
+      if (qr && c.qrs.size < 16) c.qrs.set(url, qr);
+    }
+    // Re-check after the await: the code may have rotated or been redeemed meanwhile.
+    const now = codes.get(src);
+    if (!now || now.code !== c.code) return;
+    emitCode([id], { code: formatCode(c.code), url, qr, expires_at: c.expiresAt });
   }
-  // Re-check after the await: the code may have rotated or been redeemed meanwhile.
-  const now = codes.get(deviceId);
-  if (!now || now.code !== c.code) return;
-  try {
-    deviceNs.to(deviceId).emit('device:screenshare-code', {
-      code: formatCode(c.code), url, qr, expires_at: c.expiresAt,
-    });
-  } catch (_) {}
 }
 
 /*
@@ -437,7 +593,65 @@ function onDeviceRegistered(deviceId, handshake) {
     const fakeReq = { get: (n) => h[String(n).toLowerCase()], protocol: (handshake && handshake.secure) || fwd === 'https' ? 'https' : 'http' };
     origins.set(deviceId, publicOrigin(fakeReq));
   } catch (_) { /* the badge can show the path alone */ }
-  if (guestEnabled(deviceId) || codes.has(deviceId)) pushCode(deviceId);
+  // A mirror that connects while its display is being shared to joins that share (before the code:
+  // a screen in a share shows none).
+  try { joinLiveShare(deviceId); } catch (_) { /* never block register */ }
+  // A mirror shows its display's code from the moment it connects, not from the next rotation.
+  const src = codeSource(deviceId);
+  if (guestEnabled(src) || codes.has(src)) pushCode(deviceId);
+}
+
+/*
+ * A MIRROR that connects (is created, or comes back after a drop) while a share to its display is
+ * live joins that share: one more leg, minted here, and handed to the sharer over a signalling
+ * socket the sharer already has open for this share ({type:'add_leg', leg}). The sharer's page
+ * (MultiShareSender) opens one more peer connection from the same capture, and the new leg goes
+ * through the ordinary ticket handshake: nothing about the relay changes.
+ *
+ * Who may be added is decided HERE and nowhere else: a screen whose lib/mirrors.js original is a
+ * display the share was started for (shareDisplays), in that display's workspace, that can take a
+ * share right now. The sharer never names a screen — nothing it sends can add one. The target limit
+ * holds: a full share skips the mirror and tells the sharer ({type:'leg_skipped'}).
+ * Returns the new session, or null.
+ */
+function joinLiveShare(deviceId) {
+  const src = mirrorsLib().sourceOf(deviceId);
+  if (!src || byDevice.has(deviceId)) return null;
+  let shareId = null;
+  const own = byDevice.get(src);
+  if (own && (shareDisplays.get(own.shareId) || new Set()).has(src)) shareId = own.shareId;
+  else for (const [id, set] of shareDisplays) { if (set.has(src) && sessionsForShare(id).length) { shareId = id; break; } }
+  if (!shareId) return null;
+  const legs = sessionsForShare(shareId);
+  // Someone to tell: a leg whose sharer socket is open. Without one the leg could never be used.
+  const via = legs.find((l) => l.deviceId === src && l.sharer && l.sharer.readyState === WebSocket.OPEN)
+    || legs.find((l) => l.sharer && l.sharer.readyState === WebSocket.OPEN);
+  if (!via) return null;
+  const mirror = db.prepare('SELECT * FROM devices WHERE id = ?').get(deviceId);
+  const display = db.prepare('SELECT workspace_id FROM devices WHERE id = ?').get(src);
+  if (!mirror || !display || !mirror.workspace_id || mirror.workspace_id !== display.workspace_id) return null;
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(mirror.workspace_id);
+  if (!ws) return null;
+  const name = mirror.name || '';
+  const a = availability(mirror, ws);
+  if (!a.ok) {
+    // Offline is a register that raced its own disconnect; busy is its own share. Neither is news.
+    if (a.reason !== 'offline' && a.reason !== 'busy') send(via.sharer, { type: 'leg_skipped', screen_name: name, reason: a.reason });
+    return null;
+  }
+  if (legs.length >= maxTargets()) {
+    send(via.sharer, { type: 'leg_skipped', screen_name: name, reason: 'too_many_targets', max_targets: maxTargets() });
+    return null;
+  }
+  const out = createSession({
+    device: mirror, workspace: ws, shareId, sharedBy: via.sharedBy, userId: via.userId,
+    guest: via.guest, ip: via.ip, audio: via.audio,
+  });
+  if (out.error) return null;
+  const leg = { session_id: out.session.id, ticket: out.ticket, screen_name: name, ice_servers: iceServersFor(mirror.id) };
+  if (!via.guest) leg.device_id = mirror.id;   // a guest is told no device ids (routes/screen-share-guest.js)
+  send(via.sharer, { type: 'add_leg', share_id: shareId, leg });
+  return out.session;
 }
 
 /*
@@ -632,15 +846,15 @@ function init(io) {
 
 function _reset() {
   for (const s of [...sessions.values()]) { s.ended = true; for (const t of Object.values(s.timers)) { try { clearTimeout(t); clearInterval(t); } catch (_) {} } }
-  sessions.clear(); byDevice.clear(); codes.clear(); codeIndex.clear(); origins.clear();
+  sessions.clear(); byDevice.clear(); codes.clear(); codeIndex.clear(); origins.clear(); shareDisplays.clear();
 }
 
 module.exports = {
   CAP, CODE_TTL_MS, TICKET_TTL_MS,
   init, attach,
   featureOn, workspaceOn, availability, isOnline, maxSeconds, iceServersFor, cleanName,
-  createSession, endSession, stopForDevice, stopWorkspace, sessionForDevice, publicSession, deviceGone,
-  maxTargets, expandShareTargets, createShare, stopShare, sessionsForShare,
-  guestEnabled, currentCode, rotateCode, redeemCode, normaliseCode, formatCode, pushCode, dropCode, onDeviceRegistered,
+  createSession, endSession, stopForDevice, stopForDisplay, stopWorkspace, sessionForDevice, publicSession, deviceGone,
+  maxTargets, expandShareTargets, withMirrors, createDisplayShare, displayShareBody, createShare, stopShare, sessionsForShare,
+  guestEnabled, currentCode, rotateCode, redeemCode, normaliseCode, formatCode, pushCode, dropCode, onDeviceRegistered, codeSource, joinLiveShare,
   _reset, _sessions: sessions, _codes: codes, _sweep: sweep,
 };
