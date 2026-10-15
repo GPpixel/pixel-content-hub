@@ -329,12 +329,12 @@ test('3. whole server: a platform admin exports both organizations; a fresh serv
   assert.equal(j.result.failed, 0, JSON.stringify(j.result));
   let dbh = DST2.db();
   try {
-    const orgs = j.result.organizations.map((o) => o.organization_id);
-    assert.equal(new Set(orgs).size, 2);
-    for (const [file, oid] of [['a.png', orgs[0]], ['b.png', orgs[1]]]) {
-      const rows = dbh.prepare('SELECT c.filename FROM content c JOIN workspaces w ON w.id = c.workspace_id WHERE w.organization_id = ?').all(oid);
-      assert.deepEqual(rows.map((r) => r.filename), [file], 'each organization has its own content and nothing of the other');
-    }
+    const ids = j.result.organizations.map((o) => o.organization_id);
+    assert.equal(new Set(ids).size, 2);
+    const filesOf = (oid) => dbh.prepare('SELECT c.filename FROM content c JOIN workspaces w ON w.id = c.workspace_id WHERE w.organization_id = ?').all(oid).map((r) => r.filename);
+    // Each organization has its own content and nothing of the other's.
+    assert.deepEqual(ids.map(filesOf).sort((x, y) => String(x).localeCompare(String(y))), [['a.png'], ['b.png']]);
+    const orgs = [ids.find((oid) => filesOf(oid)[0] === 'a.png'), ids.find((oid) => filesOf(oid)[0] === 'b.png')];
     // Accounts recreated, platform role carried, no password (set one through a link).
     const rootOld = dbh.prepare("SELECT * FROM users WHERE email = 'root@two.test'").get();
     assert.equal(rootOld.role, 'platform_admin');

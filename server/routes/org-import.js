@@ -277,7 +277,9 @@ router.get('/jobs/:id/handover', (req, res) => {
 router.post('/jobs/:id/screens/:deviceId/pair', (req, res) => {
   const job = loadJob(req, res);
   if (!job) return;
-  if (denyNotAdmin(req, res)) return;
+  // An owner or admin of the organization the screen was imported into (not merely of whichever
+  // organization this session happens to be looking at).
+  if (!req.isPlatformAdmin && !(job.organization_id && imp.canTarget(db, who(req), job.organization_id))) return res.status(403).json({ error: 'Organization owners and admins only' });
   const pairLockout = require('../lib/pair-lockout');
   const ip = req.ip || '';
   if (pairLockout.isLocked(ip)) return res.status(429).json({ error: 'Too many failed pairing attempts. Try again in a few minutes.' });

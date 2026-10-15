@@ -70,7 +70,7 @@ function request(db, userId, options = {}) {
 
 async function writeBundle(archive, db, job, tmps) {
   const opts = JSON.parse(job.options || '{}');
-  const orgs = db.prepare('SELECT id, name FROM organizations ORDER BY created_at, id').all();
+  const orgs = db.prepare('SELECT id, name FROM organizations ORDER BY created_at, rowid').all();
   const listed = [];
   for (const o of orgs) {
     const tmp = path.join(exporter.exportsDir(), `instance-${job.id}-${o.id}.zip`);

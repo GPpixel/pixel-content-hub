@@ -262,7 +262,8 @@ async function scan(arch, ctx, onProgress = () => {}) {
     if (d && !d.restore && counts[t]) summary.not_restored.push({ table: t, rows: counts[t], reason: d.reason });
   }
   for (const [t, why] of Object.entries(m.excluded_tables || {})) {
-    if (/site cache|passkey/i.test(why)) summary.not_restored.push({ table: t, rows: null, reason: why });
+    // Left out by the export itself, but worth saying here: the site cache boxes and people's passkeys.
+    if (['site_caches', 'webauthn_credentials'].includes(t)) summary.not_restored.push({ table: t, rows: null, reason: why });
   }
   summary.columns_removed = (m.redaction && m.redaction.columns_removed) || {};
   summary.history = {
@@ -884,6 +885,7 @@ class Restorer {
       if (sets.length) db.prepare(`UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`).run(...args, this.orgId);
     }
     this.settle();
+    this.result.workspaces = db.prepare(`SELECT id, name FROM workspaces WHERE organization_id = ? AND id IN (SELECT new_id FROM org_import_ids WHERE job_id = ? AND tbl = 'workspaces') ORDER BY name`).all(this.orgId, this.job.id);
     this.result.stats = this.stats;
     this.result.screens =db.prepare(`SELECT COUNT(*) AS n FROM devices WHERE workspace_id IN (SELECT new_id FROM org_import_ids WHERE job_id = ? AND tbl = 'workspaces')`).get(this.job.id).n;
   }
