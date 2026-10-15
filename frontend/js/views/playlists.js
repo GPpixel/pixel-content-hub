@@ -1319,6 +1319,16 @@ function playToEndToggle(item) {
     <input type="checkbox" class="item-play-to-end" data-item-id="${item.id}" ${item.play_to_end ? 'checked' : ''}>${esc(t('playlist.play_to_end'))}</label>`;
 }
 
+// 3.0 TV-safe video: the content's "already rotated for portrait screens" switch, on the row of an
+// uploaded video. It is the CONTENT's flag (server/lib/video-variants.js), so it changes this video
+// wherever it plays; the hint says so.
+const LIVE_VIDEO = new Set(['video/youtube', 'video/hls', 'video/rtsp', 'video/hdmi-in']);
+function prerotatedToggle(item) {
+  if (!item.content_id || item.remote_url || !/^video\//.test(item.mime_type || '') || LIVE_VIDEO.has(item.mime_type)) return '';
+  return `<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);white-space:nowrap;cursor:pointer" title="${esc(t('content.tvsafe.prerotated_item_hint'))}">
+    <input type="checkbox" class="item-prerotated" data-content-id="${esc(item.content_id)}" ${item.video_prerotated ? 'checked' : ''}>${esc(t('content.tvsafe.prerotated_short'))}</label>`;
+}
+
 function renderItems(items) {
   const itemsEl = document.getElementById('playlistItems');
   if (!itemsEl) return;
@@ -1379,7 +1389,7 @@ function renderItems(items) {
           ? `<label style="font-size:12px;color:var(--text-muted)" title="${esc(t('playlist.dwell_hint'))}">${t('playlist.dwell')}</label>
         <input type="number" class="input item-duration" data-item-id="${item.id}" data-live="1" value="${item.duration_sec || 0}" min="0" title="${esc(t('playlist.dwell_hint'))}" style="width:60px;padding:4px 8px;font-size:13px;text-align:center">
         <span style="font-size:12px;color:var(--text-muted)">${t('playlist.sec')}</span>`
-          : `${playToEndToggle(item)}<label style="font-size:12px;color:var(--text-muted)"${item.play_to_end && item.mime_type === 'video/youtube' ? ` title="${esc(t('playlist.play_to_end_fallback_hint'))}">${t('playlist.play_to_end_fallback')}` : `>${t('playlist.duration')}`}</label>
+          : `${playToEndToggle(item)}${prerotatedToggle(item)}<label style="font-size:12px;color:var(--text-muted)"${item.play_to_end && item.mime_type === 'video/youtube' ? ` title="${esc(t('playlist.play_to_end_fallback_hint'))}">${t('playlist.play_to_end_fallback')}` : `>${t('playlist.duration')}`}</label>
         <input type="number" class="input item-duration" data-item-id="${item.id}" value="${item.duration_sec}" min="1" style="width:60px;padding:4px 8px;font-size:13px;text-align:center">
         <span style="font-size:12px;color:var(--text-muted)">${t('playlist.sec')}</span>`}
         ${currentPlaybackOrder === 'weighted' && !item.child_playlist_id ? `<label style="font-size:12px;color:var(--text-muted)">${t('playlist.weight')}</label>
@@ -1451,6 +1461,18 @@ function renderItems(items) {
       } catch (err) {
         showToast(err.message, 'error');
         refreshAfterMutation();   // put the checkbox back to what is actually stored
+      }
+    });
+  });
+
+  itemsEl.querySelectorAll('.item-prerotated').forEach(box => {
+    box.addEventListener('change', async (e) => {
+      try {
+        await api.setContentPrerotated(e.target.dataset.contentId, e.target.checked);
+        refreshAfterMutation();
+      } catch (err) {
+        showToast(err.message, 'error');
+        refreshAfterMutation();
       }
     });
   });

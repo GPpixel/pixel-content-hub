@@ -192,9 +192,10 @@ ${section(t('admin.orgs.title'), t('admin.orgs.desc'), `
       <div id="diagBody"><p style="color:var(--text-muted)">${t('common.loading')}</p></div>
     </div>
       ${section(esc(t('platform.system.status_endpoint')), '', `<div id="statusDebugForm">${loading()}</div>`)}
+      ${section(esc(t('platform.tvsafe.title')), esc(t('platform.tvsafe.desc')), `<div id="tvSafeForm">${loading()}</div>`)}
       <div id="stockKeysSection">${section(esc(t('stock.admin.title')), esc(t('stock.admin.desc')), `<div id="stockKeysForm">${loading()}</div>`)}</div>
       ${section(esc(t('platform.system.player_debug')), esc(t('platform.system.player_debug_desc')), `<a class="btn btn-secondary" href="#/admin/player-debug">${esc(t('platform.system.player_debug_open'))} &rarr;</a>`)}`,
-    load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); loadStockKeys(); },
+    load: () => { loadSystem(); mountInstanceStorage(document.getElementById('instanceStorage')); loadDiagnostics(); wireDiagnostics(); loadStatusDebug(); loadTvSafe(); loadStockKeys(); },
   },
   // 3.0 "Your data, provably" (components/trust-report.js, docs/trust.md): the instance's data
   // handling report, every external host contacted, and the optional public /trust page.
@@ -351,6 +352,22 @@ function durationShort(sec) {
   const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
   return d ? t('platform.host.uptime_d', { d, h }) : h ? t('platform.host.uptime_h', { h, m }) : t('platform.host.uptime_m', { m });
 }
+// 3.0 TV-safe video copies (server/lib/video-variants.js): the encode queue beside the CPU it uses.
+// Shown once the server has had any copy to make (or when the feature is switched off).
+function tvCard(v) {
+  if (!v || (!v.queued && !(v.running || []).length && !v.failed && !v.ready && v.enabled)) return '';
+  const now = (v.running || [])[0];
+  const wait = { cpu: 'platform.host.tv_wait_cpu', window: 'platform.host.tv_wait_window', no_ffmpeg: 'platform.host.tv_wait_ffmpeg', disabled: 'platform.host.tv_wait_disabled' }[v.waiting];
+  const main = now ? t('platform.host.tv_now', { name: now.filename || now.content_id, secs: now.seconds })
+    : wait ? t(wait) : v.queued ? t('platform.host.tv_queue', { n: v.queued }) : t('platform.host.tv_idle');
+  const sub = [now && v.queued ? t('platform.host.tv_queue', { n: v.queued }) : '', v.failed ? t('platform.host.tv_failed', { n: v.failed }) : '', v.encoder || '']
+    .filter(Boolean).join(' · ');
+  return `<div class="host-card">
+        <span class="host-k">${esc(t('platform.host.tv'))}</span>
+        <span class="host-v" style="font-size:14px">${esc(main)}</span>
+        <span class="host-s">${esc(sub)}</span>
+      </div>`;
+}
 async function loadHost() {
   clearTimeout(hostTimer);
   const el = document.getElementById('platformHost');
@@ -386,6 +403,7 @@ async function loadHost() {
         ${pctBar(cpu.pct)}
         <span class="host-s">${esc(tn('platform.host.cores', cpu.cores || 0))}${cpu.load ? ` · ${esc(t('platform.host.load', { l: cpu.load.join(' / ') }))}` : ''}</span>
       </div>
+      ${tvCard(h.video_variants)}
       <div class="host-card">
         <span class="host-k">${esc(t('platform.host.memory'))}</span>
         <span class="host-v">${memPct == null ? '—' : esc(t('platform.host.pct_used', { n: Math.round(memPct) }))}</span>
@@ -870,6 +888,46 @@ async function loadStatusDebug() {
     try { await api.adminSetStatusDebug(chk.checked); showToast('Status debug ' + (chk.checked ? 'enabled' : 'disabled'), 'success'); }
     catch (err) { showToast(err.message, 'error'); chk.checked = !chk.checked; }
     finally { chk.disabled = false; }
+  };
+}
+
+/*
+ * 3.0 TV-safe video copies (server/lib/video-variants.js, docs/tv-safe-video.md): how much of this
+ * server's CPU may go to re-encoding tall videos for Samsung TVs. Platform admins only (the server
+ * enforces it); each value also has a VIDEO_VARIANTS_* env default.
+ */
+async function loadTvSafe() {
+  const el = document.getElementById('tvSafeForm');
+  if (!el) return;
+  let data;
+  try { data = await api.adminGetVideoVariants(); }
+  catch (e) { el.innerHTML = `<p style="color:var(--danger)">${esc(e.message || 'Failed to load')}</p>`; return; }
+  const s = data.settings || {};
+  const row = (label, input, hint = '') => `<div class="form-group" style="margin-bottom:10px"><label style="font-size:13px">${esc(label)}</label>${input}${hint ? `<p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">${esc(hint)}</p>` : ''}</div>`;
+  el.innerHTML = `
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:10px">
+      <input type="checkbox" id="tvSafeEnabled" ${s.enabled ? 'checked' : ''}> ${esc(t('platform.tvsafe.enabled'))}
+    </label>
+    ${row(t('platform.tvsafe.window'), `<input class="input" id="tvSafeWindow" style="max-width:140px" placeholder="22-6" value="${esc(s.window || '')}">`, t('platform.tvsafe.window_hint'))}
+    ${row(t('platform.tvsafe.concurrency'), `<select class="input" id="tvSafeConc" style="width:auto">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${Number(s.concurrency) === n ? 'selected' : ''}>${n}</option>`).join('')}</select>`)}
+    ${row(t('platform.tvsafe.max_cpu'), `<input class="input" type="number" min="10" max="100" id="tvSafeCpu" style="max-width:100px" value="${esc(String(s.max_cpu ?? 70))}">`)}
+    ${row(t('platform.tvsafe.minutes'), `<input class="input" type="number" min="0" id="tvSafeMinutes" style="max-width:120px" value="${esc(String(s.org_monthly_minutes ?? 0))}">`)}
+    <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px">${esc(t('platform.tvsafe.env_hint'))}</p>
+    <button class="btn btn-primary btn-sm" id="tvSafeSave">${esc(t('platform.tvsafe.save'))}</button>`;
+  document.getElementById('tvSafeSave').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await api.adminSetVideoVariants({
+        enabled: document.getElementById('tvSafeEnabled').checked,
+        window: document.getElementById('tvSafeWindow').value.trim(),
+        concurrency: Number(document.getElementById('tvSafeConc').value),
+        max_cpu: Number(document.getElementById('tvSafeCpu').value),
+        org_monthly_minutes: Number(document.getElementById('tvSafeMinutes').value),
+      });
+      showToast(t('platform.tvsafe.saved'), 'success');
+    } catch (err) { showToast(err.message, 'error'); }
+    finally { btn.disabled = false; }
   };
 }
 

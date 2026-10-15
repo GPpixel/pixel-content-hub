@@ -1121,6 +1121,7 @@ function requestOfflineCache(items, extraItems) {
 const TRIGGERS_CACHE_KEY = "rd_triggers_cache" + SCREEN_SUFFIX;
 let triggers = loadTriggersCache();
 let defaultContent = null;
+let cssQuarterTurn = 0;
 let _defaultShownRev = null;
 const TRIGGER_CFG_KEY = "rd_trigger_cfg" + SCREEN_SUFFIX;
 let triggerConfig = (function() {
@@ -4918,10 +4919,13 @@ function handlePlaylistUpdate(data) {
           el.style.width = "";
           el.style.height = "";
         });
+        cssQuarterTurn = 0;
         console.log("[bs] output rotated by host; CSS transform cleared");
       });
     }
     const st = window.OrientationStyle ? window.OrientationStyle.orientationStyle(effectiveOrientation) : null;
+    const quarter = st && /rotate\((90|270)deg\)/.exec(st.transform);
+    cssQuarterTurn = quarter ? Number(quarter[1]) : 0;
     if (st) {
       [document.getElementById("playerContainer"), document.getElementById("pipContainer")].forEach((el) => {
         if (!el) return;
@@ -6428,6 +6432,9 @@ function renderContent(item) {
       video.playsInline = true;
       video.crossOrigin = "anonymous";
       video.style.cssText = wallConfig ? "width:100%;height:100%;object-fit:fill;background:#000" : "width:100%;height:100%;object-fit:contain;background:transparent";
+      if (!wallConfig && Number(item.video_prerotated) === 1 && cssQuarterTurn) {
+        video.style.cssText = "position:absolute;left:50%;top:50%;width:100vw;height:100vh;object-fit:contain;background:transparent;transform:translate(-50%,-50%) rotate(-" + cssQuarterTurn + "deg)";
+      }
       mount.appendChild(video);
       currentVideoEl = video;
       wireSoloVideoPlayback(video, item, src, {

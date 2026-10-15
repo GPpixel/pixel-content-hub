@@ -1068,6 +1068,8 @@
     // Set from the payload's top-level default_content; null = none (keep the idle text). Declared
     // with the top-level state because a cold-start idle path can read it before Boot finishes.
     let defaultContent = null;
+    // 3.0 TV-safe video: 90 / 270 while #playerContainer is CSS-rotated for a portrait screen, else 0.
+    let cssQuarterTurn = 0;
     let _defaultShownRev = null;   // content_rev currently mounted as the default image, or null
     /*
      * Listener settings, cached for the same reason the definitions are: a player that has to reach
@@ -5924,6 +5926,7 @@
                 el.style.width = '';
                 el.style.height = '';
               });
+            cssQuarterTurn = 0;   // 3.0: nothing CSS-rotated left to undo for a pre-rotated video
             console.log('[bs] output rotated by host; CSS transform cleared');
           });
         }
@@ -5934,6 +5937,10 @@
         const st = window.OrientationStyle
           ? window.OrientationStyle.orientationStyle(effectiveOrientation)
           : null;
+        // 3.0 TV-safe video: remember the quarter-turn the container now carries, so a video the
+        // operator marked "already rotated for portrait screens" can be turned back (see below).
+        const quarter = st && /rotate\((90|270)deg\)/.exec(st.transform);
+        cssQuarterTurn = quarter ? Number(quarter[1]) : 0;
         if (st) {
           [document.getElementById('playerContainer'), document.getElementById('pipContainer')]
             .forEach((el) => {
@@ -7869,6 +7876,14 @@
             : 'width:100%;height:100%;object-fit:contain;background:transparent';   // #336: letterbox shows the device colour
           // Group members loop so a clip shorter than its schedule slot holds until the schedule
           // advances the index (and the tick seeks position % duration to stay aligned).
+          // 3.0 TV-safe video: a file the operator turned sideways themselves plays as-is on a
+          // portrait screen — counter-rotated inside the turned container, so the net turn is zero
+          // and the file fills the physical panel. (BrightSign rotates its output instead, which
+          // cssQuarterTurn reports as 0: there the flag has no effect.)
+          if (!wallConfig && Number(item.video_prerotated) === 1 && cssQuarterTurn) {
+            video.style.cssText = 'position:absolute;left:50%;top:50%;width:100vw;height:100vh;object-fit:contain;background:transparent;'
+              + 'transform:translate(-50%,-50%) rotate(-' + cssQuarterTurn + 'deg)';
+          }
           mount.appendChild(video);
           currentVideoEl = video;
           wireSoloVideoPlayback(video, item, src, {

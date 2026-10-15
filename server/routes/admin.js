@@ -852,8 +852,28 @@ router.delete('/promotions/:id', requirePlatformAdmin, async (req, res) => {
 // 3.0: the machine this server runs on — disk, CPU, memory (lib/host-stats.js). Platform admins only:
 // hostname, paths and load are about the box, not about any tenant. Polled by Platform → Overview.
 router.get('/host', requirePlatformAdmin, async (req, res) => {
-  try { res.json(await require('../lib/host-stats').sample()); }
+  try {
+    const out = await require('../lib/host-stats').sample();
+    // 3.0 TV-safe video copies: the encode queue sits beside the CPU it spends.
+    try { out.video_variants = require('../lib/video-variants').stats(); } catch (_) { out.video_variants = null; }
+    res.json(out);
+  }
   catch (e) { res.status(500).json({ error: 'Could not read server stats' }); }
+});
+
+// ===================== TV-safe video copies (3.0, lib/video-variants.js) =====================
+// Platform-admin only: how much of THIS server's CPU goes to re-encoding tall videos for Tizen TVs.
+// Each value also has an env default (VIDEO_VARIANTS_*) for self-hosters who configure by env.
+router.get('/video-variants', requirePlatformAdmin, (req, res) => {
+  const vv = require('../lib/video-variants');
+  res.json({ settings: vv.getSettings(), stats: vv.stats(), self_hosted: !!config.selfHosted });
+});
+router.put('/video-variants', requirePlatformAdmin, (req, res) => {
+  const vv = require('../lib/video-variants');
+  const out = vv.saveSettings(req.body || {});
+  if (out.error) return res.status(400).json({ error: out.error });
+  logActivity(req.user.id, 'admin_set_video_variants', JSON.stringify(out.settings), null, getClientIp(req), null);
+  res.json({ settings: out.settings, stats: vv.stats(), self_hosted: !!config.selfHosted });
 });
 
 router.get('/overview', requirePlatformAdmin, (req, res) => {

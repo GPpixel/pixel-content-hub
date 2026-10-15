@@ -3372,6 +3372,47 @@ const migrations = [
      BEGIN DELETE FROM playlist_item_zone_sources WHERE zone_id = OLD.id; END`,
   'ALTER TABLE playlists ADD COLUMN published_campaign TEXT',
   'ALTER TABLE play_logs ADD COLUMN layout_id TEXT',
+  /*
+   * 3.0: TV-safe video copies (lib/video-variants.js, docs/tv-safe-video.md).
+   *
+   * content.video_prerotated: the operator says this file is already turned for portrait-mounted
+   *   screens, so a portrait screen plays it as-is instead of rotating it a second time.
+   * content_video_variants: one re-encoded copy of a tall video per kind — rot_cw / rot_ccw (turned
+   *   into a landscape frame for portrait / portrait-flipped screens) and fit (scaled to fit 1920x1080
+   *   for landscape screens) — made only for screens whose player declares playback.video_variants
+   *   (Samsung Tizen TVs, whose decoders cannot open a 1080x1920 stream). source_file ties a copy to
+   *   the bytes it was made from (a replace always writes a new file name; a rename does not, so it
+   *   costs no re-encode), so a replaced file is never played from an old copy. A cache: never
+   *   exported, rebuilt on demand. The file lives in contentDir and is removed with its row.
+   * video_variant_usage: encoded source minutes per organization per month, for the hosted cap.
+   */
+  'ALTER TABLE content ADD COLUMN video_prerotated INTEGER NOT NULL DEFAULT 0',
+  `CREATE TABLE IF NOT EXISTS content_video_variants (
+     content_id TEXT NOT NULL,
+     kind TEXT NOT NULL CHECK (kind IN ('rot_cw','rot_ccw','fit')),
+     workspace_id TEXT,
+     source_file TEXT NOT NULL,
+     status TEXT NOT NULL CHECK (status IN ('queued','running','ready','failed','denied')),
+     filepath TEXT,
+     file_size INTEGER,
+     width INTEGER,
+     height INTEGER,
+     encoder TEXT,
+     encode_ms INTEGER,
+     error TEXT,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+     PRIMARY KEY (content_id, kind))`,
+  'CREATE INDEX IF NOT EXISTS idx_content_video_variants_status ON content_video_variants(status, created_at)',
+  // Every path that deletes content takes the copies' rows with it; the files go in the orphan sweep.
+  `CREATE TRIGGER IF NOT EXISTS trg_content_video_variants_content_del AFTER DELETE ON content
+     BEGIN DELETE FROM content_video_variants WHERE content_id = OLD.id; END`,
+  `CREATE TABLE IF NOT EXISTS video_variant_usage (
+     organization_id TEXT NOT NULL,
+     month TEXT NOT NULL,
+     seconds REAL NOT NULL DEFAULT 0,
+     PRIMARY KEY (organization_id, month))`,
 ];
 // Apply each ALTER idempotently. A "duplicate column name" / "already exists"
 // error means the column is already present (expected on a migrated DB) - benign.

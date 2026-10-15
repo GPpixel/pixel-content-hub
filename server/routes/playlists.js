@@ -1082,10 +1082,12 @@ function addLayoutItem(req, res) {
 
 // Get single playlist with items
 router.get('/:id', requirePlaylistRead, (req, res) => {
+  // c.video_prerotated: 3.0 TV-safe video — the editor shows the content's "already rotated for
+  // portrait screens" switch on a video row (it is the content's flag, so it reads the content's).
   const items = db.prepare(`
     SELECT pi.*,
            COALESCE(c.filename, w.name) as filename, cp.name as child_playlist_name,
-           c.mime_type, c.filepath, c.thumbnail_path,
+           c.mime_type, c.filepath, c.thumbnail_path, c.video_prerotated,
            c.duration_sec as content_duration, c.file_size, c.remote_url,
            w.name as widget_name, w.widget_type, w.config as widget_config, w.updated_at as widget_rev
     FROM playlist_items pi

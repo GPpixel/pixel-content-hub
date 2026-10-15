@@ -1905,6 +1905,30 @@ app.get('/api/content/:id/thumbnail', (req, res) => {
   res.sendFile(safePath);
 });
 
+/*
+ * 3.0 TV-safe video copies (lib/video-variants.js): a tall video re-encoded for a Tizen TV — turned
+ * for a portrait-mounted screen (rot_cw / rot_ccw) or fitted inside 1920x1080 (fit). The SAME gate
+ * as /file: a copy is the original's pixels, so it is readable exactly when the original is. Local
+ * files only (a cache this server made); a missing copy is a 404 and the player falls back.
+ */
+app.get('/api/content/:id/variant/:kind', (req, res) => {
+  const { db } = require('./db/database');
+  const vv = require('./lib/video-variants');
+  if (!vv.KINDS.includes(req.params.kind)) return res.status(404).json({ error: 'Not found' });
+  const content = db.prepare('SELECT * FROM content WHERE id = ?').get(req.params.id);
+  if (!content || !content.filepath) return res.status(404).json({ error: 'Content not found' });
+  if (!isReferencedForPlayers(db, content) && !requesterCanAccessContent(req, content)) return res.status(403).json({ error: 'Content not assigned to any playlist or widget' });
+  const v = db.prepare("SELECT filepath FROM content_video_variants WHERE content_id = ? AND kind = ? AND status = 'ready' AND source_file = ?")
+    .get(content.id, req.params.kind, path.basename(content.filepath));
+  if (!v || !v.filepath || !vv.FILE_RE.test(v.filepath)) return res.status(404).json({ error: 'No TV copy yet' });
+  const safePath = path.resolve(config.contentDir, path.basename(v.filepath));
+  if (!safePath.startsWith(path.resolve(config.contentDir)) || !fs.existsSync(safePath)) return res.status(404).json({ error: 'No TV copy yet' });
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  hardenUploadResponse(res, v.filepath);
+  res.sendFile(safePath);
+});
+
 // Protected API Routes.
 // Phase 2.1: resolveTenancy runs right after requireAuth on every resource
 // route. It attaches req.workspaceId, req.workspaceRole, req.orgRole,
@@ -2780,6 +2804,15 @@ try { require('./lib/migrate').boot(); } catch (e) { console.error('[migrate] bo
 require('./lib/cap/feeds').start(io);   // CAP emergency feeds: polling, expiry, pushes
 require('./lib/canva').start(io);       // Canva: re-export linked designs that changed
 require('./lib/cloud-folders').start(io);   // SharePoint/OneDrive folder syncs
+// 3.0 TV-safe video copies: resume the queue (lib/video-variants.js). A finished copy re-sends the
+// payload of every screen playing that video, so it switches to the copy without a reboot.
+require('./lib/video-variants').start({
+  push: (deviceIds) => {
+    const { buildPlaylistPayload } = require('./ws/deviceSocket');
+    const commandQueue = require('./lib/command-queue');
+    for (const id of new Set(deviceIds || [])) commandQueue.queueOrEmitPlaylistUpdate(io.of('/device'), id, buildPlaylistPayload);
+  },
+});
 require('./lib/automation/overrides').setIo(io);   // automation: timed playlist overrides
 require('./lib/automation/events').start();          // automation: REST-hook deliveries, screen up/down events
 require('./lib/social/feeds').start(io);   // social walls: fetch feeds, cache images

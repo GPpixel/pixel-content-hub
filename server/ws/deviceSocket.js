@@ -529,7 +529,8 @@ function refreshWidgetRevs(assignments, deviceId = null) {
  * revision stable and truthful rather than collapsing every new upload onto the same "0".
  */
 const contentFactsOf = db.prepare(`
-  SELECT COALESCE(NULLIF(updated_at, 0), created_at) AS rev, filepath, mime_type, file_size, bundle_entry
+  SELECT COALESCE(NULLIF(updated_at, 0), created_at) AS rev, filepath, mime_type, file_size, bundle_entry,
+         width, height, video_prerotated
     FROM content WHERE id = ?
 `);
 function refreshContentRevs(assignments) {
@@ -553,6 +554,12 @@ function refreshContentRevs(assignments) {
        * different start file. A player holding the old one would load a page that is no longer
        * there. */
       if (row.bundle_entry != null) a.bundle_entry = row.bundle_entry;
+      /* 3.0 TV-safe video (lib/video-variants.js): the asset's display size, so a player can tell a
+       * tall video from a wide one before it opens it, and the operator's "already rotated for
+       * portrait screens" flag, which tells a portrait screen to play the file as-is. Read here,
+       * at send time, so neither needs a republish. */
+      if (row.width > 0 && row.height > 0) { a.width = row.width; a.height = row.height; }
+      if (Number(row.video_prerotated) === 1) a.video_prerotated = 1; else delete a.video_prerotated;
     } catch (_) { /* keep published */ }
   }
 }
@@ -1102,6 +1109,9 @@ function buildPlaylistPayloadUnchecked(deviceId, opts = {}) {
   }
   stampFileUrls(assignments, deviceId);
   if (default_content) stampFileUrls([default_content], deviceId);
+  // 3.0 TV-safe video: ready copies of tall videos, and for a screen that plays them, queue a missing
+  // one now. Never from the forecast preview, which must not spend CPU on a "what if".
+  try { require('../lib/video-variants').stampItems(assignments, device, { lazy: !opts.forecast }); } catch (_) { /* keep the payload playable */ }
 
   // Weather and area conditions are decided here, for this screen (lib/local-conditions.js).
   if (trace) trace.before_local = assignments;

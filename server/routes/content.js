@@ -901,6 +901,8 @@ function purgeContentRow(content) {
   unlinkIfUnreferenced(content.filepath, id, 'filepath');
   unlinkIfUnreferenced(content.thumbnail_path, id, 'thumbnail_path');
   unlinkIfUnreferenced(content.subtitle_url, id, 'subtitle_url'); // #216 sidecar (no-op pre-#216)
+  // 3.0 TV-safe copies of a tall video (lib/video-variants.js): named per content id, never shared.
+  try { require('../lib/video-variants').removeFor(id); } catch (_) { /* the orphan sweep gets them */ }
 
   /*
    * ⚠️ And the provenance row goes with it, because nothing else will take it. The table declares
@@ -1078,6 +1080,26 @@ router.post('/batch/tags', (req, res) => {
 });
 
 // Get content metadata
+/*
+ * 3.0 TV-safe video (lib/video-variants.js): whether this video is tall, whether it is marked
+ * pre-rotated, which copies the workspace's TVs need and how each is coming along. Read access.
+ */
+router.get('/:id/tv-copies', (req, res) => {
+  const content = checkContentRead(req, res);
+  if (!content) return;
+  const vv = require('../lib/video-variants');
+  res.json({ ...vv.describe(content), enabled: vv.getSettings().enabled });
+});
+
+// Try the failed (or allowance-refused) copies again. Write access: it spends server CPU.
+router.post('/:id/tv-copies/retry', (req, res) => {
+  const content = checkContentWrite(req, res);
+  if (!content) return;
+  const vv = require('../lib/video-variants');
+  const requeued = vv.retry(content.id);
+  res.json({ requeued, ...vv.describe(content) });
+});
+
 router.get('/:id', (req, res) => {
   const content = checkContentRead(req, res);
   if (!content) return;
@@ -1092,7 +1114,7 @@ router.put('/:id', (req, res) => {
   if (!content) return;
 
   const { filename, mime_type, remote_url, folder, folder_id, expires_at, unstable_connection,
-          captions_enabled, captions_lang, subtitle_url, subtitle_lang, tags, meta } = req.body;
+          captions_enabled, captions_lang, subtitle_url, subtitle_lang, tags, meta, video_prerotated } = req.body;
   const updates = [];
   const values = [];
   /*
@@ -1219,6 +1241,16 @@ router.put('/:id', (req, res) => {
     set('subtitle_url', subtitle_url ? String(subtitle_url).slice(0, 255) : null);
   }
   if (subtitle_lang !== undefined) set('subtitle_lang', subtitle_lang ? String(subtitle_lang).slice(0, 10) : null);
+  /*
+   * 3.0 TV-safe video: "this file is already turned for portrait screens". Applied LIVE, not via the
+   * approval draft: it changes no pixel of the file, only whether a portrait screen turns it again,
+   * and the operator sets it precisely because a screen shows it sideways right now.
+   */
+  let prerotatedChanged = false;
+  if (video_prerotated !== undefined) {
+    const v = video_prerotated ? 1 : 0;
+    if (v !== Number(content.video_prerotated || 0)) { updates.push('video_prerotated = ?'); values.push(v); prerotatedChanged = true; }
+  }
 
   if (updates.length > 0) {
     values.push(req.params.id);
@@ -1233,6 +1265,10 @@ router.put('/:id', (req, res) => {
     return res.json({ ...db.prepare('SELECT * FROM content WHERE id = ?').get(req.params.id), draft: true, pending_review: true });
   }
   revisionsLib.recordCurrent(db, 'content', req.params.id, { actor, summary: 'Updated details' });
+  if (prerotatedChanged) {
+    // Screens showing it pick the change up now: the flag is read at send time (ws/deviceSocket.js).
+    try { pushContentUpdates(req, require('../lib/devices-playing').devicesPlayingContent(req.params.id)); } catch (_) { /* next payload */ }
+  }
   res.json(db.prepare('SELECT * FROM content WHERE id = ?').get(req.params.id));
 });
 
