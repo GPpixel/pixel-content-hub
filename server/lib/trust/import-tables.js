@@ -47,6 +47,8 @@ const RESTORED = {
   playlists: {},
   playlist_items: {},
   playlist_item_schedules: {},
+  // 3.0 campaigns: what each zone of a layout item plays (declared FKs: item, zone, playlist)
+  playlist_item_zone_sources: {},
   corporate_slots: {},
   corporate_mandates: {},
   corporate_slot_fills: {},
@@ -57,6 +59,8 @@ const RESTORED = {
   display_power_schedules: {},
   layouts: {},
   layout_zones: {},
+  // 3.0 portrait / 4:3 versions of a layout's zones (declared FKs: layout, zone)
+  layout_zone_variants: {},
   // signs
   slide_decks: {},
   kiosk_pages: {},
@@ -256,7 +260,7 @@ const REFS = {
   room_connections: { tenant_id: 'external', client_id: 'external' },
   revisions: { resource_id: '*', parent_id: 'revisions', submission_id: 'submissions', file_ref: null, thumb_ref: null },
   submissions: { resource_id: '*', request_id: 'content_requests' },
-  play_logs: { client_event_id: 'external', zone_id: 'layout_zones' },
+  play_logs: { client_event_id: 'external', zone_id: 'layout_zones', layout_id: 'layouts' },
   play_log_hourly: { device_id: 'devices', content_id: '*' },
   audience_buckets: { device_id: 'devices', item_id: '*', playlist_id: 'playlists' },
   device_usage_daily: { device_id: 'devices' },
