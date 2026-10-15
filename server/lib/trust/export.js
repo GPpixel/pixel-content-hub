@@ -116,6 +116,39 @@ function tableExists(db, t) {
 
 const tick = () => new Promise((r) => setImmediate(r));
 
+/*
+ * 3.0 (docs/move-server.md): every entry's SHA-256 and size go into the manifest, so an archive can be
+ * checked entry by entry on ANOTHER server — including one restoring it after this server is gone,
+ * where the manifest is the only thing left to check against. The digest is of the bytes exactly as
+ * they are in the archive, computed as they are written (tables, strings) or read once beforehand
+ * (media, which is written once and never changed in place).
+ */
+function recordIntegrity(archive, name, sha256, bytes) {
+  if (!archive._stIntegrity) archive._stIntegrity = {};
+  archive._stIntegrity[name] = { sha256, bytes };
+}
+function appendString(archive, text, name) {
+  const buf = Buffer.from(String(text), 'utf8');
+  recordIntegrity(archive, name, crypto.createHash('sha256').update(buf).digest('hex'), buf.length);
+  archive.append(buf, { name });
+}
+function hashFile(abs) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    let n = 0;
+    fs.createReadStream(abs).on('data', (c) => { h.update(c); n += c.length; }).on('error', reject)
+      .on('end', () => resolve({ sha256: h.digest('hex'), bytes: n }));
+  });
+}
+/** Add a file from disk with its digest; null when it could not be read. */
+async function appendHashedFile(archive, abs, name) {
+  let d;
+  try { d = await hashFile(abs); } catch (_) { return null; }
+  recordIntegrity(archive, name, d.sha256, d.bytes);
+  archive.file(abs, { name });
+  return d;
+}
+
 /**
  * Append `table`'s rows matching `where` to the archive as JSON Lines. Keyset pagination on rowid
  * (falls back to OFFSET for a table without one). Returns { rows, removed }.
@@ -131,6 +164,8 @@ async function appendTable(archive, db, table, where, name, { columns = null } =
   archive.append(out, { name });
   let rows = 0, last = -Infinity, offset = 0;
   let byRowid = true;
+  const h = crypto.createHash('sha256');
+  let bytes = 0;
   try { db.prepare(`SELECT rowid FROM ${table} LIMIT 0`).all(); } catch (_) { byRowid = false; }
   for (;;) {
     const page = byRowid
@@ -143,7 +178,9 @@ async function appendTable(archive, db, table, where, name, { columns = null } =
       chunk += JSON.stringify(redactRow(r)) + '\n';
     }
     rows += page.length; offset += page.length;
-    if (!out.write(chunk)) {
+    const buf = Buffer.from(chunk, 'utf8');
+    h.update(buf); bytes += buf.length;
+    if (!out.write(buf)) {
       // 'close' too: an archive error destroys this stream (runJob), and a drain would never come.
       await new Promise((r) => { out.once('drain', r); out.once('close', r); });
       if (archive._stErr) throw archive._stErr;
@@ -152,6 +189,7 @@ async function appendTable(archive, db, table, where, name, { columns = null } =
     await tick();
   }
   out.end();
+  recordIntegrity(archive, name, h.digest('hex'), bytes);
   return { rows, removed };
 }
 
@@ -174,11 +212,8 @@ async function appendFiles(archive, db, wsIds, prefix = 'files') {
           if (storageLoc.hasExplicitLocations(row.id)) abs = await storageLoc.ensureLocalFile(row, kind);
           else abs = path.join(config.contentDir, path.basename(row[col]));
         } catch (_) { abs = null; }
-        if (abs && fs.existsSync(abs)) {
-          const size = fs.statSync(abs).size;
-          archive.file(abs, { name: `${prefix}/${row.id}/${path.basename(row[col])}` });
-          stats.files += 1; stats.bytes += size;
-        } else if (kind === 'asset') stats.missing += 1;
+        const d = abs && fs.existsSync(abs) ? await appendHashedFile(archive, abs, `${prefix}/${row.id}/${path.basename(row[col])}`) : null;
+        if (d) { stats.files += 1; stats.bytes += d.bytes; } else if (kind === 'asset') stats.missing += 1;
       }
     }
     await tick();
@@ -186,10 +221,8 @@ async function appendFiles(archive, db, wsIds, prefix = 'files') {
   if (tableExists(db, 'custom_fonts')) {
     for (const f of db.prepare(`SELECT id, filepath FROM custom_fonts WHERE workspace_id IN (${ph})`).all(...wsIds)) {
       const abs = f.filepath ? path.join(config.fontsDir, path.basename(f.filepath)) : null;
-      if (abs && fs.existsSync(abs)) {
-        archive.file(abs, { name: `fonts/${f.id}/${path.basename(f.filepath)}` });
-        stats.files += 1; stats.bytes += fs.statSync(abs).size;
-      }
+      const d = abs && fs.existsSync(abs) ? await appendHashedFile(archive, abs, `fonts/${f.id}/${path.basename(f.filepath)}`) : null;
+      if (d) { stats.files += 1; stats.bytes += d.bytes; }
     }
   }
   return stats;
@@ -259,7 +292,7 @@ async function writeOrgExport(archive, db, job) {
       if (row && !row.remote_url && row.thumbnail_path && row.thumbnail_path !== row.filepath) c.original_thumbnail = path.basename(row.thumbnail_path);
     }
     const name = `workspaces/${w.id}/export.json`;
-    archive.append(JSON.stringify(data, null, 2), { name });
+    appendString(archive, JSON.stringify(data, null, 2), name);
     workspaces.push({ id: w.id, name: w.name, export: name });
     await tick();
   }
@@ -279,7 +312,9 @@ async function writeOrgExport(archive, db, job) {
       columns_removed: columnsRemoved,
     },
   };
-  archive.append(README_ORG, { name: 'README.txt' });
+  appendString(archive, README_ORG, 'README.txt');
+  // Last, so it can list the digest of every entry before it. It cannot list its own.
+  manifest.integrity = { algorithm: 'sha256', entries: { ...(archive._stIntegrity || {}) } };
   archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
   return manifest;
 }
@@ -389,34 +424,53 @@ async function runQueue(db = dbOf()) {
   } finally { running = false; }
 }
 
+/*
+ * Stream an archive built by `write(archive)` to `file`, hashing the bytes on their way to disk.
+ * Resolves { manifest, sha256, bytes }; on failure the partial file is removed and it throws. Shared
+ * by the organization and personal exports and the whole-server bundle (lib/trust/instance-export.js).
+ */
+async function buildZip(file, write, { store = false } = {}) {
+  const { ZipArchive } = require('archiver');
+  const { Transform } = require('stream');
+  const archive = new ZipArchive(store ? { store: true } : { zlib: { level: 5 } });
+  const out = fs.createWriteStream(file, { mode: 0o600 });
+  // The whole archive's SHA-256: the download sends it, so a server pulling the archive can check
+  // that every byte arrived as it left (docs/move-server.md).
+  const whole = crypto.createHash('sha256');
+  const tap = new Transform({ transform(chunk, enc, cb) { whole.update(chunk); cb(null, chunk); } });
+  const done = new Promise((resolve, reject) => {
+    out.on('close', resolve);
+    out.on('error', reject);
+    archive.on('error', (e) => {
+      archive._stErr = e;
+      if (archive._stCurrent) archive._stCurrent.destroy();
+      reject(e);
+    });
+  });
+  done.catch(() => { /* surfaced by the await below, or by the writer that stopped */ });
+  archive.pipe(tap).pipe(out);
+  try {
+    const manifest = await write(archive);
+    await archive.finalize();
+    await done;
+    return { manifest, sha256: whole.digest('hex'), bytes: fs.statSync(file).size };
+  } catch (e) {
+    try { fs.rmSync(file, { force: true }); } catch (_) { /* */ }
+    throw e;
+  }
+}
+
 async function runJob(db, job) {
   db.prepare("UPDATE data_exports SET status = 'running', started_at = ? WHERE id = ?").run(now(), job.id);
   fs.mkdirSync(exportsDir(), { recursive: true });
   const file = path.join(exportsDir(), `${job.id}.zip`);
   try {
-    const { ZipArchive } = require('archiver');
-    const archive = new ZipArchive({ zlib: { level: 5 } });
-    const out = fs.createWriteStream(file, { mode: 0o600 });
-    const done = new Promise((resolve, reject) => {
-      out.on('close', resolve);
-      out.on('error', reject);
-      archive.on('error', (e) => {
-        archive._stErr = e;
-        if (archive._stCurrent) archive._stCurrent.destroy();
-        reject(e);
-      });
-    });
-    done.catch(() => { /* surfaced by the await below, or by the writer that stopped */ });
-    archive.pipe(out);
-    const manifest = job.kind === 'org' ? await writeOrgExport(archive, db, job) : await writeUserExport(archive, db, job);
-    await archive.finalize();
-    await done;
-    const bytes = fs.statSync(file).size;
+    const { manifest, sha256, bytes } = await buildZip(file, (archive) => (job.kind === 'org' ? writeOrgExport(archive, db, job) : writeUserExport(archive, db, job)));
     const summary = job.kind === 'org'
       ? { categories: Object.fromEntries(Object.entries(manifest.categories).map(([k, v]) => [k, v.rows])), files: manifest.files }
       : { contents: manifest.contents };
-    db.prepare("UPDATE data_exports SET status = 'ready', file_name = ?, bytes = ?, manifest = ?, finished_at = ?, expires_at = ? WHERE id = ?")
-      .run(path.basename(file), bytes, JSON.stringify(summary), now(), now() + TTL_HOURS * 3600, job.id);
+    db.prepare("UPDATE data_exports SET status = 'ready', file_name = ?, bytes = ?, sha256 = ?, manifest = ?, finished_at = ?, expires_at = ? WHERE id = ?")
+      .run(path.basename(file), bytes, sha256, JSON.stringify(summary), now(), now() + TTL_HOURS * 3600, job.id);
   } catch (e) {
     try { fs.rmSync(file, { force: true }); } catch (_) { /* */ }
     db.prepare("UPDATE data_exports SET status = 'failed', error = ?, finished_at = ? WHERE id = ?").run(String((e && e.message) || e).slice(0, 300), now(), job.id);
@@ -484,12 +538,13 @@ function publicJob(j) {
   return {
     id: j.id, kind: j.kind, status: j.status, bytes: j.bytes || null, created_at: j.created_at,
     finished_at: j.finished_at || null, expires_at: j.expires_at || null, error: j.status === 'failed' ? (j.error || null) : null,
-    downloads: j.downloads || 0, summary,
+    downloads: j.downloads || 0, sha256: j.sha256 || null, summary,
   };
 }
 
 module.exports = {
   request, runQueue, runJob, link, verifyKey, filePath, sweep, start, publicJob, whereFor, exportableColumns, redactRow,
+  buildZip, writeOrgExport, appendTable, appendString, recordIntegrity, now, exportsDir,
   ExportError, MAX_PER_DAY, LINK_TTL_MIN, TTL_HOURS,
   _setHooks: (h) => { _hooks = { ...(h || {}) }; },
 };

@@ -223,6 +223,12 @@ table therefore cannot be left out of the export by accident.
 - The mesh replication blocklist also applies.
 - In JSON settings, encrypted values and keys with secret-looking names are removed.
 
+**Checkable on its own (3.0).** `manifest.json` lists the SHA-256 and size of every other file in the
+zip (`integrity.entries`), and the download sends the whole archive's SHA-256 (`X-Export-SHA256`) and
+supports `Range`, so a transfer can resume. Another server can restore the organization from this
+zip, even after this server is gone: see [Move your organization to another server](move-server.md).
+Platform administrators can also export the whole server as one bundle (same document).
+
 ### Personal export (anyone, for themselves)
 
 The personal export covers the GDPR right of access.

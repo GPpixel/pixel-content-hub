@@ -1125,3 +1125,6 @@ module.exports = router;
 module.exports.scaleOutStatus = scaleOutStatus;
 // 3.0 complete exports (lib/trust/export.js) write this same format for each workspace and person.
 module.exports.collectExportData = collectExportData;
+// 3.0 organization import (lib/trust/import-restore.js) applies the same URL and type gates to the
+// content rows it restores.
+module.exports.importedContentRefusal = importedContentRefusal;

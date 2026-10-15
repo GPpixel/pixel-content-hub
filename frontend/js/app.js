@@ -42,6 +42,7 @@ import * as help from './views/help.js';
 import * as teams from './views/teams.js';
 import * as admin from './views/admin.js';
 import * as privacy from './views/privacy.js';   // 3.0 "Your data, provably" (#/privacy)
+import * as orgImport from './views/org-import.js';   // 3.0 move an organization to another server (#/org-import)
 import * as adminPlayerDebug from './views/admin-player-debug.js';
 import * as designer from './views/designer.js';
 import * as playlists from './views/playlists.js';
@@ -635,7 +636,7 @@ function route() {
     link.classList.remove('active');
     if (hash === '#/' && link.dataset.view === 'dashboard') link.classList.add('active');
     else if ((hash.startsWith('#/content') || hash.startsWith('#/migrate')) && link.dataset.view === 'content') link.classList.add('active');
-    else if ((hash.startsWith('#/settings') || hash === '#/privacy') && link.dataset.view === 'settings') link.classList.add('active');
+    else if ((hash.startsWith('#/settings') || hash === '#/privacy' || hash.startsWith('#/org-import')) && link.dataset.view === 'settings') link.classList.add('active');
     else if (hash.startsWith('#/billing') && link.dataset.view === 'billing') link.classList.add('active');
     else if ((hash.startsWith('#/layout') || hash === '#/layouts') && link.dataset.view === 'layouts') link.classList.add('active');
     else if ((hash === '#/playlists' || hash.startsWith('#/playlists/')) && link.dataset.view === 'playlists') link.classList.add('active');
@@ -829,6 +830,10 @@ function route() {
     // 3.0 Settings -> Data & privacy (docs/trust.md).
     currentView = privacy;
     privacy.render(app);
+  } else if (hash.startsWith('#/org-import')) {
+    // 3.0 Import an organization / the whole server (docs/move-server.md). Prefix: ?job=… and ?kind=….
+    currentView = orgImport;
+    orgImport.render(app);
   } else if (hash === '#/settings' || hash.startsWith('#/settings?')) {
     // `?` prefix too: a credit-pack Checkout returns to `#/settings?credits=success` (the same trap
     // the #/billing route below documents). Not a bare startsWith, so no future #/settings-x matches.

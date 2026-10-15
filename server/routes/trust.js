@@ -215,21 +215,59 @@ function download(req, res) {
   if (!user || !mayAccess(job, user.id, user.role)) return res.status(404).json({ error: 'This download link is not valid or has expired.' });
   const p = exporter.filePath(job);
   if (!p || !fs.existsSync(p)) return res.status(404).json({ error: 'This download link is not valid or has expired.' });
-  db.prepare('UPDATE data_exports SET downloads = downloads + 1 WHERE id = ?').run(job.id);
-  audit(job.kind === 'org' ? 'trust.export_org_downloaded' : 'trust.export_personal_downloaded', {
-    userId: job.user_id, ip: req.ip || null, details: { export_id: job.id, organization_id: job.organization_id || undefined },
-  });
   const date = new Date((job.finished_at || job.created_at) * 1000).toISOString().slice(0, 10);
+  sendArchive(req, res, p, {
+    name: `screentinker-${job.kind === 'org' ? 'organization' : 'personal'}-export-${date}.zip`,
+    sha256: job.sha256,
+    onFirstByte: () => {
+      db.prepare('UPDATE data_exports SET downloads = downloads + 1 WHERE id = ?').run(job.id);
+      audit(job.kind === 'org' ? 'trust.export_org_downloaded' : 'trust.export_personal_downloaded', {
+        userId: job.user_id, ip: req.ip || null, details: { export_id: job.id, organization_id: job.organization_id || undefined },
+      });
+    },
+  });
+}
+
+/*
+ * Send an export archive, honouring one byte range.
+ *
+ * 3.0 (docs/move-server.md): another server pulling a large organization resumes an interrupted
+ * transfer with `Range: bytes=N-` instead of starting again, and checks the whole file against
+ * X-Export-SHA256 at the end. Only a single range is served (that is all a resume needs); anything
+ * else is answered with the whole file, as a server without range support would. A download counts
+ * (and is audited) once, when it starts from the first byte.
+ */
+function sendArchive(req, res, p, { name, sha256, onFirstByte }) {
+  const size = fs.statSync(p).size;
+  let start = 0, end = size - 1;
+  const m = /^bytes=(\d+)-(\d*)$/.exec(String(req.headers.range || '').trim());
+  if (m) {
+    start = Number(m[1]);
+    if (m[2] !== '') end = Math.min(Number(m[2]), size - 1);
+    if (!Number.isSafeInteger(start) || start >= size || end < start) {
+      res.set('Content-Range', `bytes */${size}`);
+      return res.status(416).end();
+    }
+  }
+  if (start === 0 && onFirstByte) onFirstByte();
   res.set('Referrer-Policy', 'no-referrer');
   res.set('Cache-Control', 'private, no-store');
   res.set('Content-Type', 'application/zip');
-  res.set('Content-Disposition', `attachment; filename="screentinker-${job.kind === 'org' ? 'organization' : 'personal'}-export-${date}.zip"`);
-  res.set('Content-Length', String(fs.statSync(p).size));
-  fs.createReadStream(p).pipe(res);
+  res.set('Accept-Ranges', 'bytes');
+  if (sha256) res.set('X-Export-SHA256', sha256);
+  res.set('Content-Disposition', `attachment; filename="${name}"`);
+  res.set('Content-Length', String(end - start + 1));
+  if (m) {
+    res.status(206);
+    res.set('Content-Range', `bytes ${start}-${end}/${size}`);
+  }
+  fs.createReadStream(p, { start, end }).pipe(res);
 }
 
 module.exports = router;
 module.exports.publicJson = publicJson;
 module.exports.publicPage = publicPage;
 module.exports.download = download;
+module.exports.sendArchive = sendArchive;
+module.exports.mayAccess = mayAccess;
 module.exports.PUBLIC_SETTING = PUBLIC_SETTING;

@@ -14,6 +14,7 @@ import { openTypeToConfirmModal } from '../components/type-to-confirm-modal.js';
 import { mapMutationError } from './workspace-members.js';
 import { mountInstanceStorage } from '../components/storage-settings.js';
 import { reportHtml, mountOutbound, mountPublicToggle } from '../components/trust-report.js';
+import { mountServerMove } from '../components/org-move.js';
 
 async function loadTrustInstance() {
   const el = document.getElementById('trustInstance');
@@ -22,6 +23,8 @@ async function loadTrustInstance() {
   catch (e) { el.innerHTML = `<p style="color:var(--text-muted)">${esc(e.message)}</p>`; }
   mountOutbound(document.getElementById('trustOutboundInstance'), { instance: true });
   mountPublicToggle(document.getElementById('trustPublic'));
+  // 3.0 export / import the whole server (components/org-move.js, docs/move-server.md).
+  mountServerMove(document.getElementById('trustServerMove'));
 }
 
 const headers = () => ({ Authorization: `Bearer ${localStorage.getItem('token')}`, 'Content-Type': 'application/json' });
@@ -199,6 +202,7 @@ ${section(t('admin.orgs.title'), t('admin.orgs.desc'), `
     tab: 'platform.tab.privacy', title: 'trust.platform.title', subtitle: 'trust.platform.subtitle',
     html: () => `<div id="trustInstance">${loading()}</div>
       ${section(esc(t('trust.out.title')), esc(t('trust.out.desc_instance')), '<div id="trustOutboundInstance"></div>')}
+      ${section(esc(t('imp.server.title')), '', '<div id="trustServerMove"></div>')}
       ${section(esc(t('trust.pub.title_admin')), '', '<div id="trustPublic"></div>')}`,
     load: () => loadTrustInstance(),
   },

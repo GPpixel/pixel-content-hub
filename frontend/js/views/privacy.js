@@ -10,6 +10,7 @@ import { api } from '../api.js';
 import { esc } from '../utils.js';
 import { t } from '../i18n.js';
 import { reportHtml, mountOutbound, mountExports, mountDeletion, stopPolling, section } from '../components/trust-report.js';
+import { mountMoveSection } from '../components/org-move.js';
 
 export async function render(container) {
   container.innerHTML = `
@@ -38,7 +39,10 @@ export async function render(container) {
     ${reportHtml(report)}
     ${section(t('trust.out.title'), '<div id="trustOutbound"></div>', t('trust.out.desc_org'))}
     ${section(t('trust.exp.title'), '<div id="trustExports"></div>', t('trust.exp.desc'))}
+    ${section(t('imp.move.title'), '<div id="trustMove"></div>')}
     ${section(t('trust.del.title'), '<div id="trustDeletion"></div>')}`;
+  // 3.0 move an organization to another server (components/org-move.js, docs/move-server.md).
+  mountMoveSection(body.querySelector('#trustMove'));
   await Promise.all([
     mountOutbound(body.querySelector('#trustOutbound')),
     mountExports(body.querySelector('#trustExports'), { canOrg: true }),
