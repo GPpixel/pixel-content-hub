@@ -85,22 +85,22 @@ export async function render(container) {
   const passkeyUsable = !isSetup && passkeysUsableHere(config.passkeys, { inApp: inManagerApp() });
 
   applyLoginBrandingDoc(branding);
-  const brandName = branding.brand_name || 'ScreenTinker';
-  // Branded logo if set, else the default ScreenTinker glyph.
+  const brandName = branding.brand_name || 'Pixel Content Hub';
+  // A white-label logo replaces the heading; otherwise the Pixel Inspiration | Content Hub lockup.
   const logoHtml = branding.logo_url
-    ? `<img src="${brandEsc(branding.logo_url)}" alt="${brandEsc(brandName)}" style="max-height:48px;max-width:200px;margin:0 auto 12px;display:block">`
-    : `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="margin:0 auto 12px">
-            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-            <line x1="8" y1="21" x2="16" y2="21"/>
-            <line x1="12" y1="17" x2="12" y2="21"/>
-          </svg>`;
+    ? `<img src="${brandEsc(branding.logo_url)}" alt="${brandEsc(brandName)}" style="max-height:48px;max-width:200px;margin:0 auto 12px;display:block">
+          <h1 style="font-size:24px;font-weight:700;color:var(--accent)">${brandEsc(brandName)}</h1>`
+    : `<h1 class="pixel-lockup pixel-lockup-lg" aria-label="Pixel Content Hub">
+            <img class="pixel-lockup-logo" src="/assets/pixel-inspiration-logo-white.svg" alt="Pixel Inspiration">
+            <span class="pixel-lockup-divider" aria-hidden="true"></span>
+            <span class="pixel-lockup-product">Content Hub</span>
+          </h1>`;
 
   container.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px">
       <div style="width:400px;max-width:100%">
         <div style="text-align:center;margin-bottom:32px">
           ${logoHtml}
-          <h1 style="font-size:24px;font-weight:700;color:var(--accent)">${brandEsc(brandName)}</h1>
           <p style="color:var(--text-secondary);font-size:13px;margin-top:4px">
             ${isSetup ? t('auth.subtitle_setup') : t('auth.subtitle_signin')}
           </p>

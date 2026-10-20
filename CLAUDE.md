@@ -91,9 +91,10 @@ Figtree for body text and Cal Sans for headings, self-hosted from `frontend/asse
 
 An unbranded workspace is "Pixel Content Hub" with the Pixel accent and background. The defaults live in `server/lib/branding.js` (`HARDCODED_BRANDING`), the `white_labels` table defaults in `server/db/schema.sql`, and the white-label routes. `frontend/js/branding.js` and `brand-prime.js` treat the Pixel default and the old ScreenTinker default colours as "not a brand", so they never override the Pixel palette. A real white-label colour still replaces the accent.
 
-### Icon
+### Logo and icon
 
-`frontend/assets/icon.svg` is the app icon (crimson tile with a white screen) used for the sidebar logo and the favicon. `icon-192.png` and `icon-512.png` are rendered from it for the web app manifest and home-screen icons. Replace all three together.
+- `frontend/assets/pixel-inspiration-logo-white.svg` is the company logo (the same file as the staff portal). The sidebar header and the sign-in page show it as a lockup: logo, a thin rule, then "Content Hub" (`.pixel-lockup` in `pixel-theme.css`), as the staff portal does with "Hub". A white-label logo replaces the lockup on the sign-in page.
+- `frontend/assets/icon.svg` is the app icon: the white logo on a crimson (`--accent-gradient`) tile. It is the favicon; `icon-192.png` and `icon-512.png` are rendered from it for the web app manifest and home-screen icons. Replace all three together.
 
 ### Usage statistics prompt
 

@@ -126,3 +126,13 @@ body {
 .stock-toggle button[aria-checked="true"],
 .sign-aspect button[aria-pressed="true"] { background: var(--px-selected); color: #fff; }
 .logo { color: var(--text-primary); }
+
+/* Pixel Inspiration | Content Hub lockup: the white company logo, a thin rule, then the product
+   name, as on the staff portal. Used in the sidebar header and on the sign-in page. */
+.pixel-lockup { display: inline-flex; align-items: center; gap: 12px; color: var(--text-primary); text-decoration: none; }
+.pixel-lockup-logo { height: 30px; width: auto; display: block; }
+.pixel-lockup-divider { width: 1px; align-self: stretch; margin: 2px 0; background: var(--px-border); }
+.pixel-lockup-product { font-family: var(--px-font); font-size: 16px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+.pixel-lockup-lg { justify-content: center; gap: 16px; margin: 0 auto 8px; }
+.pixel-lockup-lg .pixel-lockup-logo { height: 48px; }
+.pixel-lockup-lg .pixel-lockup-product { font-size: 24px; }

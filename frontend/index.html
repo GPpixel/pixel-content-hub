@@ -35,10 +35,13 @@
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <div class="logo">
-        <img src="/assets/icon.svg" width="28" height="28" alt="">
-        <span id="brandName">Pixel Content Hub</span>
-      </div>
+      <a class="logo pixel-lockup" href="#/" aria-label="Pixel Content Hub home">
+        <img class="pixel-lockup-logo" src="/assets/pixel-inspiration-logo-white.svg" alt="Pixel Inspiration">
+        <span class="pixel-lockup-divider" aria-hidden="true"></span>
+        <span class="pixel-lockup-product">Content Hub</span>
+        <!-- Kept for the white-label code, which writes the brand name here. -->
+        <span id="brandName" hidden>Pixel Content Hub</span>
+      </a>
       <!-- #38: apply cached white-label before first paint (no ScreenTinker flash) -->
       <script src="/js/brand-prime.js"></script>
       <!-- Client-error reporter. Plain script, not a module: a module is deferred and would
