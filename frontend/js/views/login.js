@@ -90,7 +90,7 @@ export async function render(container) {
   const logoHtml = branding.logo_url
     ? `<img src="${brandEsc(branding.logo_url)}" alt="${brandEsc(brandName)}" style="max-height:48px;max-width:200px;margin:0 auto 12px;display:block">
           <h1 style="font-size:24px;font-weight:700;color:var(--accent)">${brandEsc(brandName)}</h1>`
-    : `<h1 class="pixel-lockup pixel-lockup-lg" aria-label="Pixel Content Hub">
+    : `<h1 class="pixel-lockup pixel-lockup-lg" aria-label="${brandEsc(brandName)}">
             <img class="pixel-lockup-logo" src="/assets/pixel-inspiration-logo-white.svg" alt="Pixel Inspiration">
             <span class="pixel-lockup-divider" aria-hidden="true"></span>
             <span class="pixel-lockup-product">Content Hub</span>
@@ -234,15 +234,6 @@ export async function render(container) {
           </div>
         </div>
 
-        <!-- Support Access (collapsible) -->
-        <details id="supportDetails" style="margin-top:16px">
-          <summary style="font-size:11px;color:var(--text-muted);cursor:pointer;text-align:center">${t('auth.support_access')}</summary>
-          <div style="margin-top:8px">
-            <input type="text" id="supportToken" class="input" placeholder="${t('auth.support_token_placeholder')}" style="font-family:monospace">
-            <button class="btn btn-secondary" id="supportLoginBtn" style="width:100%;justify-content:center;padding:8px;margin-top:6px;font-size:12px">${t('auth.support_authenticate')}</button>
-          </div>
-        </details>
-
         <div id="forgotForm" style="display:none">
           <div class="form-group">
             <label>${t('auth.email')}</label>
@@ -285,21 +276,6 @@ function setupHandlers(container, config, isSetup, passkeyUsable = false) {
   if (hashQuery.get('verified') === '1') showToast(t('auth.verify_ok'), 'success');
   else if (hashQuery.get('verify_error') === '1') showToast(t('auth.verify_failed'), 'error');
 
-  // Support token login
-  document.getElementById('supportLoginBtn')?.addEventListener('click', async () => {
-    const token = document.getElementById('supportToken')?.value.trim();
-    if (!token) { showError(t('auth.error_paste_support_token')); return; }
-    try {
-      const res = await fetch('/api/auth/support', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      const data = await res.json();
-      if (!res.ok) { showError(data.error); return; }
-      onAuthSuccess(data);
-    } catch (err) { showError(t('auth.error_support_failed')); }
-  });
 
   // Local login/register
   if (isSetup) {
@@ -509,7 +485,7 @@ function setupHandlers(container, config, isSetup, passkeyUsable = false) {
     // else the router would treat this browser as authenticated and bounce it into the app.
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    ['localAuthForm', 'registerForm', 'mfaForm', 'ssoBlock', 'supportDetails'].forEach((id) => {
+    ['localAuthForm', 'registerForm', 'mfaForm', 'ssoBlock'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
     document.getElementById('verifyNotice').style.display = 'block';
@@ -532,7 +508,7 @@ function setupHandlers(container, config, isSetup, passkeyUsable = false) {
   // Swap the card to the 6-digit challenge and exchange mfa_token + code for a session.
   function showMfaChallenge(mfaToken, hasPasskey = false) {
     stopConditional();   // the address field it was attached to is going away
-    ['localAuthForm', 'registerForm', 'ssoBlock', 'supportDetails'].forEach((id) => {
+    ['localAuthForm', 'registerForm', 'ssoBlock'].forEach((id) => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
     const form = document.getElementById('mfaForm');

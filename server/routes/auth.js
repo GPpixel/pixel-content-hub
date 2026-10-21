@@ -2255,6 +2255,11 @@ function upsertFederatedUser({ claims, email, provider, req }) {
 // Ed25519 signature, and a valid token still needs an open request code from THIS instance.
 // ---------------------------------------------------------------------------
 const supportAccess = require('../lib/support-access');
+
+// Pixel Content Hub has no vendor support access: every /support endpoint is a 404, so no request
+// code can be minted and no support token can be redeemed. The handlers below are upstream's and
+// stay unreachable, which keeps upstream merges simple.
+router.use('/support', (req, res) => res.status(404).json({ error: 'Not found' }));
 const { generateSupportSessionToken } = require('../middleware/auth');
 
 router.post('/support/request', requireAuth, requireAdmin, (req, res) => {

@@ -180,12 +180,10 @@ function resolveSessionUser(token, { allowPasswordChange = false, sourceIp = nul
   // Support sessions (lib/support-access) are the same shape: a synthetic platform_operator
   // identity with no users row, honoured only while its support_grants row exists and is
   // unexpired. Revoking the row from Settings ends the session on the very next request.
+  // Pixel Content Hub has no support access (routes/auth.js 404s every /support endpoint), so a
+  // support session is never honoured, whatever grant rows exist.
   if (decoded.support) {
-    const support = require('../lib/support-access');
-    if (!decoded.jti || !support.grantActive(decoded.jti, { sourceIp })) {
-      throw new SessionError('support_grant_invalid');
-    }
-    return { user: support.supportUser(decoded), decoded, viaRecovery: false, viaSupport: true };
+    throw new SessionError('support_grant_invalid');
   }
   if (decoded.mfa_pending) throw new SessionError('mfa_required');
   const user = loadSessionRow(decoded.id);
