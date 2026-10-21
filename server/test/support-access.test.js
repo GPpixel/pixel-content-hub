@@ -129,28 +129,11 @@ test('request codes: same alphabet, same XXXX-XXXX-XXXX-XXXX shape, every symbol
 // ---------------------------------------------------------------------------
 // The session
 // ---------------------------------------------------------------------------
-test('a redeemed grant is a platform_operator session that lives exactly as long as the grant', () => {
+// Pixel Content Hub has no support access, so even a properly redeemed grant opens no session.
+test('a redeemed grant is still refused: support sessions are switched off', () => {
   const { code } = support.createRequest();
-  const grant = support.redeemToken(support.issueToken({ requestCode: code, org: 'Acme', hours: 3, issuedBy: 'me@screentinker.com' }).token);
+  const grant = support.redeemToken(support.issueToken({ requestCode: code, org: 'Acme', hours: 3 }).token);
   const jwt = generateSupportSessionToken(grant);
-  const s = resolveSessionUser(jwt, { sourceIp: '198.51.100.7' });
-  assert.equal(s.viaSupport, true);
-  assert.equal(s.user.role, 'platform_operator', 'cross-org read/write, no owner powers (#13)');
-  assert.equal(s.user.id, `support:${grant.jti}`);
-  assert.match(s.user.name, /me@screentinker\.com/);
-  const row = db.prepare('SELECT first_used_at, source_ip FROM support_grants WHERE jti = ?').get(grant.jti);
-  assert.ok(row.first_used_at, 'first use is stamped');
-  // The JWT's own expiry matches the grant's, to the minute.
-  const decoded = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
-  assert.ok(Math.abs(decoded.exp - grant.expiresAt) <= 1);
-});
-
-test('revoking the grant ends the session on the very next request', () => {
-  const { code } = support.createRequest();
-  const grant = support.redeemToken(support.issueToken({ requestCode: code }).token);
-  const jwt = generateSupportSessionToken(grant);
-  assert.doesNotThrow(() => resolveSessionUser(jwt));
-  assert.equal(support.revokeGrant(grant.jti), 1);
   assert.throws(() => resolveSessionUser(jwt), (e) => e.code === 'support_grant_invalid');
 });
 

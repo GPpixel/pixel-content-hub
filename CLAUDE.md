@@ -100,6 +100,10 @@ An unbranded workspace is "Pixel Content Hub" with the Pixel accent and backgrou
 
 The dashboard doesn't show upstream's "Help show how widely ScreenTinker is deployed?" prompt (`PIXEL_HIDE_STATS_PROMPT` in `frontend/js/views/dashboard.js`), because those statistics go to ScreenTinker. Nothing is sent unless a platform admin turns sharing on in Settings. Upstream's sponsor request is turned off with `ST_HIDE_SPONSOR=true` in `server/.env`.
 
+### Support access
+
+Upstream's vendor "Support Access" (a support token on the sign-in page, a request-code section in Settings) is removed. The sign-in page and Settings don't show it, `routes/auth.js` answers every `/api/auth/support` endpoint with a 404, and `middleware/auth.js` refuses any support session. `docs/support-access.md` describes the upstream feature, which doesn't apply here. `test/pixel-no-support-access.test.js` checks it stays off.
+
 ### Known fallbacks
 
 - **Glass needs `backdrop-filter`.** Without it, surfaces stay solid (the token values above).
