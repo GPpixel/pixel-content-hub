@@ -627,12 +627,15 @@ router.put('/telemetry', requirePlatformAdmin, async (req, res) => {
 // docs/instance-updater.md), never by this process.
 
 const ghcrCheck = require('../lib/ghcr-check');
+const PIXEL_NO_UPSTREAM_UPDATES = true;
 const VERSION = require('../version');
 const { trimTrailing } = require('../lib/trim-trailing');
 
 // POST /api/admin/check-update — force a fresh GHCR poll (bypasses cache)
 // and return version comparison.
 router.post('/check-update', requireAdmin, async (req, res) => {
+  // Pixel Content Hub never offers a ScreenTinker release (see server.js, where polling is off).
+  if (PIXEL_NO_UPSTREAM_UPDATES) return res.json({ current: VERSION, latest: null, update_available: false });
   try {
     const result = await ghcrCheck.checkNow(VERSION);
     res.json({

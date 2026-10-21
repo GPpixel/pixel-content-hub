@@ -47,7 +47,7 @@ You need Node.js 22.14 or newer. The first account registered becomes the admin.
 - **No Support Access.** ScreenTinker's vendor support login is removed from the sign-in page, Settings and the server.
 - **No ScreenTinker prompts.** The usage-statistics prompt is hidden, and the sponsor request is turned off with `ST_HIDE_SPONSOR=true`.
 - **No public website.** ScreenTinker's marketing pages are removed, and `/` opens the dashboard. Search engines are asked not to index the portal.
-- **No in-app "Update Now".** It would install a ScreenTinker release over the Pixel changes. ScreenTinker updates are brought in with git instead.
+- **No in-app updates.** The dashboard doesn't offer ScreenTinker releases, which would replace the Pixel changes. ScreenTinker updates are brought in with git instead.
 
 ## Working on it
 

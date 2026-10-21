@@ -21,7 +21,7 @@ Pixel's digital signage server: a dashboard to manage screens, upload content, b
 - **State lives under `DATA_DIR`** (default `server/`): `db/`, `uploads/`, `certs/` (including the generated JWT secret). Never commit it. Don't change the JWT secret on a running install: everyone is signed out and saved secrets become unreadable.
 - **Run the tests** before pushing: `cd server && npm test`. Add or update a test for any behaviour change.
 - **The player has a generated copy.** After editing `server/player/index.html`, run `cd server && npm run build:legacy-player` to regenerate `server/player/legacy.html`.
-- **Don't use the in-app "Update Now".** It upgrades to upstream ScreenTinker releases and would replace the Pixel changes. Bring upstream changes in as a patch instead (below).
+- **No in-app updates.** Upstream's "Update Now" would install a ScreenTinker release over the Pixel changes, so it's turned off (see "No ScreenTinker updates" below). Bring upstream changes in as a patch instead (below).
 
 ## Bringing in ScreenTinker updates
 
@@ -94,12 +94,16 @@ An unbranded workspace is "Pixel Content Hub" with the Pixel accent and backgrou
 
 ### Logo and icon
 
-- `frontend/assets/pixel-inspiration-logo-white.svg` is the company logo (the same file as the staff portal). The sidebar header and the sign-in page show it as a lockup: logo, a thin rule, then "Content Hub" (`.pixel-lockup` in `pixel-theme.css`), as the staff portal does with "Hub". A white-label logo replaces the lockup on the sign-in page.
+- `frontend/assets/pixel-inspiration-logo-white.svg` is the company logo (the same file as the staff portal). The sidebar header, the Simple view's top bar (`views/simple-home.js`) and the sign-in page show it as a lockup: logo, a thin rule, then "Content Hub" (`.pixel-lockup` in `pixel-theme.css`), as the staff portal does with "Hub". A white-label logo replaces the lockup on the sign-in page.
 - `frontend/assets/icon.svg` is the app icon: the white logo on a crimson (`--accent-gradient`) tile. It is the favicon; `icon-192.png` and `icon-512.png` are rendered from it for the web app manifest and home-screen icons. Replace all three together.
 
 ### Usage statistics prompt
 
 The dashboard doesn't show upstream's "Help show how widely ScreenTinker is deployed?" prompt (`PIXEL_HIDE_STATS_PROMPT` in `frontend/js/views/dashboard.js`), because those statistics go to ScreenTinker. Nothing is sent unless a platform admin turns sharing on in Settings. Upstream's sponsor request is turned off with `ST_HIDE_SPONSOR=true` in `server/.env`.
+
+### No ScreenTinker updates
+
+The dashboard never offers a ScreenTinker release, because installing one would replace the Pixel changes. `server.js` doesn't start upstream's GHCR polling, `routes/admin.js` answers `/api/admin/check-update` with no update (`PIXEL_NO_UPSTREAM_UPDATES`), and the System page hides the latest-version card and the Check now / Update now buttons (`PIXEL_NO_UPSTREAM_UPDATES` in `frontend/js/views/admin.js`). So the sidebar's Update badge and the Simple home's "ScreenTinker x is available" notice never show. `test/pixel-no-upstream-updates.test.js` checks it.
 
 ### Support access
 

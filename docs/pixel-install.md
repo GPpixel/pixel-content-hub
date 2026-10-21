@@ -75,8 +75,6 @@ npm install
 
 Then restart it: Ctrl+C and `npm start` again, or `sudo systemctl restart pixel-content-hub`.
 
-Don't use **Platform → System → Update Now** in the dashboard: it installs upstream ScreenTinker releases, not Pixel Content Hub.
-
 ## Remove
 
 ```bash

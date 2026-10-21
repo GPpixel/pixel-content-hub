@@ -136,3 +136,33 @@ body {
 .pixel-lockup-lg { justify-content: center; gap: 16px; margin: 0 auto 8px; }
 .pixel-lockup-lg .pixel-lockup-logo { height: 48px; }
 .pixel-lockup-lg .pixel-lockup-product { font-size: 24px; }
+
+/* Simple view (js/views/simple-home.js): the same surfaces as Advanced. The top bar is the sidebar's
+   glass with the lockup; tasks, cards and screen tiles are glass panels; hover and the chosen option
+   are neutral, as in the rest of the dashboard. */
+.simple-topbar { border-bottom-color: var(--px-border); }
+.simple-brand.pixel-lockup { font-weight: inherit; }
+.simple-account > summary { border-color: var(--px-border); border-radius: var(--px-radius-pill); padding: 6px 14px; }
+.simple-account-menu a, .simple-account-menu button { border-radius: var(--radius); }
+.simple-task, .simple-card, .simple-screen, .simple-task:hover, .simple-task:focus-visible,
+.simple-screen:hover, .simple-screen:focus-visible { border-color: var(--border-light); background: var(--bg-card-hover); }
+.simple-choice label:has(input:checked) { border-color: var(--border-light); background: var(--bg-card-hover); }
+.simple-notice { border-color: var(--px-border); }
+.simple-empty { border-color: var(--px-border); }
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .simple-topbar,
+  .simple-task,
+  .simple-card,
+  .simple-screen,
+  .simple-notice,
+  .simple-account-menu {
+    background: var(--px-bg-panel);
+    -webkit-backdrop-filter: var(--px-glass-blur);
+    backdrop-filter: var(--px-glass-blur);
+    box-shadow: var(--px-glass-highlight), var(--shadow);
+  }
+  .simple-task:hover, .simple-task:focus-visible,
+  .simple-screen:hover, .simple-screen:focus-visible { background: var(--px-bg-hover); }
+  /* The menu opens over the page, so it keeps a solid base under the glass, like the modal. */
+  .simple-account-menu { background: color-mix(in srgb, var(--bg-secondary) 92%, transparent); }
+}

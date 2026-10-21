@@ -51,7 +51,7 @@ function cachedUser() {
   try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
 }
 function brandName() {
-  return (document.getElementById('brandName')?.textContent || 'ScreenTinker').trim();
+  return (document.getElementById('brandName')?.textContent || 'Pixel Content Hub').trim();
 }
 function online(d) { return d && d.status === 'online'; }
 
@@ -64,7 +64,11 @@ export function shell(container, inner) {
   const showPlan = plansVisible(u);
   container.innerHTML = `
     <div class="simple-topbar">
-      <a href="#/" class="simple-brand">${esc(brandName())}</a>
+      <a href="#/" class="simple-brand pixel-lockup" aria-label="${esc(brandName())}">
+        <img class="pixel-lockup-logo" src="/assets/pixel-inspiration-logo-white.svg" alt="">
+        <span class="pixel-lockup-divider" aria-hidden="true"></span>
+        <span class="pixel-lockup-product">Content Hub</span>
+      </a>
       <div class="simple-topbar-right">
         <div class="ui-mode-switch simple-switch" role="radiogroup" aria-label="${esc(t('simple.view_label'))}">
           <button type="button" role="radio" aria-checked="true" data-simple-mode="simple">${esc(t('nav.view_simple'))}</button>

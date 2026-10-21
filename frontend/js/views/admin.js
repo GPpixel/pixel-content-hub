@@ -1088,6 +1088,8 @@ async function loadPlans() {
   } catch (err) { el.innerHTML = `<p style="color:var(--danger)">${esc(err.message)}</p>`; }
 }
 
+const PIXEL_NO_UPSTREAM_UPDATES = true;
+
 async function loadSystem() {
   const el = document.getElementById('systemInfo');
   try {
@@ -1101,7 +1103,9 @@ async function loadSystem() {
       : null;
     const updaterInfo = updateStatus?.updater || null;
 
-    const versionComparison = version.latest_version
+    // Pixel Content Hub offers no ScreenTinker releases (the server never looks for one), so the
+    // latest-version card and Check now / Update now are not shown.
+    const versionComparison = PIXEL_NO_UPSTREAM_UPDATES ? '' : version.latest_version
       ? `<div class="info-card">
            <div class="info-card-label">${t('admin.latest_version')}</div>
            <div class="info-card-value small">${esc(version.latest_version)}</div>
@@ -1119,7 +1123,7 @@ async function loadSystem() {
       <div class="info-grid">
         <div class="info-card"><div class="info-card-label">${t('admin.version')}</div><div class="info-card-value small">${esc(version.version)}</div></div>
         ${versionComparison}
-        ${updaterInfo ? `<div class="info-card">
+        ${!PIXEL_NO_UPSTREAM_UPDATES && updaterInfo ? `<div class="info-card">
            <div class="info-card-label">${t('admin.updater')}</div>
            <div class="info-card-value small" style="color:${updaterInfo.available ? 'var(--success)' : 'var(--text-muted)'}">${
              updaterInfo.available ? esc(t('admin.updater_ready', { kind: updaterInfo.kind }))
@@ -1127,8 +1131,8 @@ async function loadSystem() {
          </div>` : ''}
       </div>
       <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
-        <button class="btn btn-secondary btn-sm" id="checkUpdateBtn">${t('admin.check_now')}</button>
-        <button class="btn btn-primary btn-sm" id="triggerUpdateBtn"${!version.update_available ? ' style="display:none"' : ''}>${t('admin.update_now')}</button>
+        ${PIXEL_NO_UPSTREAM_UPDATES ? '' : `<button class="btn btn-secondary btn-sm" id="checkUpdateBtn">${t('admin.check_now')}</button>
+        <button class="btn btn-primary btn-sm" id="triggerUpdateBtn"${!version.update_available ? ' style="display:none"' : ''}>${t('admin.update_now')}</button>`}
         <a href="/api/status/backup?token=${token}" class="btn btn-secondary btn-sm" style="text-decoration:none">${t('admin.download_db_backup')}</a>
         <a href="/api/status" target="_blank" class="btn btn-secondary btn-sm" style="text-decoration:none">${t('admin.server_status')}</a>
       </div>

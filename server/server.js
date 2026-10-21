@@ -2893,9 +2893,10 @@ try { require('./lib/trust/import').start(); require('./lib/trust/instance-expor
 const { startWalCheckpointer, stopWalCheckpointer } = require('./db/wal-checkpointer');
 startWalCheckpointer(require('./db/database').db, config.dbPath);
 
-// Version update indicator: poll GHCR for latest image tag, cache in memory.
-// First poll fires after 30s to let the server stabilize.
-ghcrCheck.startPolling(config.ghcrCheckIntervalHours, VERSION);
+// Pixel Content Hub does not poll GHCR for ScreenTinker releases (upstream starts
+// ghcrCheck.startPolling here). Installing one would replace the Pixel changes, so nothing offers
+// them: latest_version stays null and update_available false, which hides the sidebar's Update
+// badge, the Simple home notice and Update Now. See "Bringing in ScreenTinker updates" in CLAUDE.md.
 
 // Graceful shutdown: stop the checkpointer worker (closes its own DB handle) + flush + close.
 let _shuttingDown = false;
