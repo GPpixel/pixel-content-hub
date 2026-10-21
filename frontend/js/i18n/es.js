@@ -1340,7 +1340,6 @@ export default {
   'add_display.need_player': '¿Necesitas la app del reproductor? Instala una para obtener un código:',
   'add_display.android_apk': 'APK Android',
   'add_display.web_player': 'Reproductor web',
-  'add_display.raspberry_pi': 'Raspberry Pi',
   'add_display.windows': 'Windows',
   'add_display.pair_btn': 'Conectar pantalla',
   'add_display.server_url_label': 'URL del servidor',

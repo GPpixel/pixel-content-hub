@@ -674,7 +674,7 @@ export default {
   'help.shortcut_esc': '重置网页播放器（播放器页面）', 'help.shortcut_f': '切换全屏（网页播放器）',
   'add_display.title': '添加屏幕', 'add_display.intro': '输入屏幕上显示的 6 位代码。', 'add_display.pairing_code': '配对码',
   'add_display.display_name': '屏幕名称（可选）', 'add_display.name_placeholder': '例如：大厅电视', 'add_display.need_player': '需要播放器应用？安装一个即可获取配对码：',
-  'add_display.android_apk': 'Android APK', 'add_display.web_player': '网页播放器', 'add_display.raspberry_pi': '树莓派', 'add_display.windows': 'Windows',
+  'add_display.android_apk': 'Android APK', 'add_display.web_player': '网页播放器', 'add_display.windows': 'Windows',
   'add_display.owner_prompt': '正在配置全新或恢复出厂设置的 Android 面板？将其注册为设备所有者即可静默更新、重启和锁定信息亭：',
   'add_display.owner_qr_btn': '显示设备所有者二维码', 'add_display.pair_btn': '连接屏幕', 'add_display.server_url_label': '服务器 URL',
   'add_display.server_url_hint': '在 Android 应用中配置时使用此 URL', 'add_display.smart_tv_prefix': '智能电视（LG/Samsung）：打开内置浏览器并访问',

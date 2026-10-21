@@ -1256,7 +1256,7 @@ app.use('/player', express.static(path.join(__dirname, 'player'), { etag: true, 
 // /download/apk is: a player fetches them before it has any identity.
 const PUBLIC_SCRIPTS = new Set([
   // Setup scripts, tracked in the repository and linked as URLs.
-  'raspberry-pi-setup.sh', 'windows-setup.bat', 'debian-13-setup.sh',
+  'windows-setup.bat', 'debian-13-setup.sh',
   // BrightSign provisioning payloads, supplied by the deployment rather than the repository.
   'autorun.zip', 'autorun-server.zip', 'server-payload.zip', 'server-payload.json',
 ]);
@@ -2397,14 +2397,9 @@ const wgtCache = require('./lib/wgt-cache');
 const ipkCache = require('./lib/ipk-cache');
 wgtCache.start();                                    // Tizen SSSP URL-Launcher: resolve .wgt path/size/mtime once + refresh on interval
 ipkCache.start();                                    // LG webOS Signage: same for the .ipk
-const debCache = require('./lib/deb-cache');
-debCache.start();                                    // native Raspberry Pi player: newest screentinker-pi_<ver>_all.deb + its sha256
-// /api/pi/update/check + /download/pi. Same kill switches, breaker and download guard as the APK
-// path below — see the header of routes/pi-update.js for why they are shared rather than copied.
-require('./routes/pi-update')(app);
 const winCache = require('./lib/win-cache');
 winCache.start();                                    // native Windows player: newest ScreenTinker-Setup-<ver>.exe + its sha256
-// /api/win/update/check + /download/win — the same factory as the Pi route (routes/native-update.js),
+// /api/win/update/check + /download/win (routes/native-update.js),
 // plus the device-less sha256 lookup the SYSTEM helper service makes before running an installer.
 require('./routes/win-update')(app);
 const macCache = require('./lib/mac-cache');
@@ -3301,7 +3296,6 @@ app.get(['/download', '/download/'], (req, res) => {
     ipk: ipkCache.get(),
     wgt: wgtCache.get(),
     brightsign: { exists: bsPackage.available(), version: bsPackage.version() },
-    deb: debCache.get(),
     exe: winCache.get(),
     dmg: macCache.get(),
   }, base));

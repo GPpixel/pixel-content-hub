@@ -11,7 +11,7 @@ Pixel's digital signage server: a dashboard to manage screens, upload content, b
 - `server/player/` is the web player the screens run.
 - The native players (`android/`, `native/`, `tizen/`, `webos/`, `roku/` and so on) are upstream's and still say ScreenTinker.
 
-`README.md` describes Pixel Content Hub, with screenshots in `docs/images/`. `ARCHITECTURE.md` and the rest of `docs/` describe the upstream product. `docs/pixel-pi-install.md` is how Pixel installs it.
+`README.md` describes Pixel Content Hub, with screenshots in `docs/images/`. `ARCHITECTURE.md` and the rest of `docs/` describe the upstream product. `docs/pixel-install.md` is how Pixel installs it.
 
 ## Ground rules
 
@@ -85,7 +85,7 @@ The web player (`server/player/index.html`) styles its pairing and status screen
 
 ### Type
 
-Figtree for body text and Cal Sans for headings, self-hosted from `frontend/assets/fonts/pixel/` (OFL; the licences are next to the files). The dashboard's Content-Security-Policy only allows same-origin fonts, and a Pi on a LAN may have no internet, so don't switch to a font CDN.
+Figtree for body text and Cal Sans for headings, self-hosted from `frontend/assets/fonts/pixel/` (OFL; the licences are next to the files). The dashboard's Content-Security-Policy only allows same-origin fonts, and a server on a LAN may have no internet, so don't switch to a font CDN.
 
 ### Branding defaults
 
@@ -103,6 +103,10 @@ The dashboard doesn't show upstream's "Help show how widely ScreenTinker is depl
 ### Support access
 
 Upstream's vendor "Support Access" (a support token on the sign-in page, a request-code section in Settings) is removed. The sign-in page and Settings don't show it, `routes/auth.js` answers every `/api/auth/support` endpoint with a 404, and `middleware/auth.js` refuses any support session. `docs/support-access.md` describes the upstream feature, which doesn't apply here. `test/pixel-no-support-access.test.js` checks it stays off.
+
+### No Raspberry Pi player
+
+Upstream's native Raspberry Pi player is removed: its packaging (`native/packaging/linux/`), `scripts/raspberry-pi-setup.sh`, the `/download/pi` and `/api/pi/update/check` routes (`routes/pi-update.js`, `lib/deb-cache.js`), the Pi build steps in the Dockerfile and the release, upgrade and Debian setup scripts, the Raspberry Pi button under Add display, and `docs/pi-native-player.md`. `test/download-index.test.js` checks the download page offers no Pi player. When merging upstream, delete these again rather than taking upstream's changes to them. Upstream's marketing pages (below) still mention the Pi.
 
 ### Known fallbacks
 

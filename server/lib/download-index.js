@@ -39,7 +39,6 @@ function entries(state = {}) {
   const ipk = state.ipk || {};
   const wgt = state.wgt || {};
   const brightsign = state.brightsign || {};
-  const deb = state.deb || {};
   const exe = state.exe || {};
   const dmg = state.dmg || {};
 
@@ -101,38 +100,6 @@ function entries(state = {}) {
     },
     {
       /*
-       * The NATIVE Pi player (pi/, a .deb). Separate from the 'raspberry-pi' row below, which is the
-       * kiosk-browser install and is always available: the native package exists only where someone
-       * built it or mounted it (lib/deb-cache.js), and must say so rather than 404.
-       */
-      id: 'raspberry-pi-native',
-      name: 'Raspberry Pi (native player)',
-      file: deb.filename || 'screentinker-pi_<version>_all.deb',
-      // Trixie, not Bookworm: the .deb needs PySide6, packaged only from Debian 13 on, so apt refuses
-      // it on Bookworm (native/packaging/linux/build-deb.sh). Bookworm Pis use the kiosk row below.
-      what: 'A native player for Raspberry Pi OS 13 (Trixie) or newer; on older Pi OS use the kiosk install below. Install with apt; it updates itself against this instance afterwards.',
-      url: '/download/pi',
-      guide: '/guides/raspberry-pi-digital-signage.html',
-      available: !!deb.exists,
-      version: deb.version || null,
-      size: formatSize(deb.size),
-      absent: 'No Raspberry Pi package is hosted on this instance. The kiosk-browser install below works on any Pi meanwhile.',
-      fallback: '/player',
-    },
-    {
-      id: 'raspberry-pi',
-      name: 'Raspberry Pi',
-      file: 'raspberry-pi-setup.sh',
-      what: 'Installs a kiosk browser, autostart and the player on Pi OS.',
-      url: '/scripts/raspberry-pi-setup.sh',
-      guide: '/guides/raspberry-pi-digital-signage.html',
-      // Ships in the source tree, so it is present wherever the server is.
-      available: true,
-      version: null,
-      size: null,
-    },
-    {
-      /*
        * The NATIVE Windows player (native/, an Inno Setup installer). Separate from the 'windows' row
        * below, which is the kiosk-browser shortcut script and is always available: the installer
        * exists only where someone built it or mounted it (lib/win-cache.js), and must say so rather
@@ -163,8 +130,8 @@ function entries(state = {}) {
     },
     {
       /*
-       * The NATIVE macOS player (native/, ScreenTinker.app in a .dmg). Like the Pi and Windows rows it
-       * exists only where someone built it or mounted it (lib/mac-cache.js). Unlike them it never
+       * The NATIVE macOS player (native/, ScreenTinker.app in a .dmg). Like the Windows row it
+       * exists only where someone built it or mounted it (lib/mac-cache.js). Unlike it, it never
        * updates itself — a Mac is updated from this file or by MDM — so the row says so.
        */
       id: 'macos-native',

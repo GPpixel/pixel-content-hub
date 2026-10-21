@@ -96,15 +96,15 @@ column. A minute where the camera restarted can have two rows for the same item.
 | Player | Counts? | How |
 |---|---|---|
 | Android (phones, tablets, Android TV / Google TV, Fire TV with a USB camera) | Yes | Camera2 plus Android's built-in face detector. No extra download, and no Google Play services needed |
-| Raspberry Pi / Windows (native) | Yes, with the add-on | A USB webcam plus the optional **audience-counting add-on** (OpenCV and the YuNet face detector, about 54 MB). It's chosen at install time and off by default. See [The add-on for Raspberry Pi and Windows](#the-add-on-for-raspberry-pi-and-windows) |
+| Windows (native) | Yes, with the add-on | A USB webcam plus the optional **audience-counting add-on** (OpenCV and the YuNet face detector, about 54 MB). It's chosen at install time and off by default. See [The add-on for Windows](#the-add-on-for-windows) |
 | Web, Tizen, webOS, BrightSign | No | No camera access a signage player can rely on |
 
 The **Which screens count** list says when a player hasn't reported a camera.
 
 On Android the camera used is the front camera if there is one, then a USB camera, then any
-camera. On a Raspberry Pi or Windows player it's the first USB webcam.
+camera. On a Windows player it's the first USB webcam.
 
-### The add-on for Raspberry Pi and Windows
+### The add-on for Windows
 
 The face detector needs OpenCV, which is too big to put in every player install. So it comes as a
 separate add-on, and **you choose it when you install the player. It's off by default.** Without
@@ -113,7 +113,6 @@ it, the player plays as normal and doesn't report a camera.
 | | How to add it |
 |---|---|
 | **Windows** | Tick **Audience counting add-on** in the installer. For a silent install, add `/MERGETASKS=audience` (with `/VERYSILENT /SUPPRESSMSGBOXES`; a silent install that can't add the add-on only notes it in the setup log). An upgrade keeps your choice, and running the installer again with the box unticked removes the add-on. |
-| **Raspberry Pi** | Answer **y** when the installer asks, or pass `--audience`. On a Pi that's already installed, run `sudo screentinker-pi audience-addon install`. To remove it, use `... remove`. Needs 64-bit Pi OS: a 32-bit Pi OS on a 64-bit kernel isn't enough. |
 
 The add-on is downloaded from **your own ScreenTinker server** and checked against the SHA-256
 checksum the server publishes. Nothing is installed if they don't match.
@@ -121,18 +120,11 @@ checksum the server publishes. Nothing is installed if they don't match.
 | Platform | Download | Size on disk |
 |---|---|---|
 | Windows | about 53 MB | about 150 MB |
-| Raspberry Pi (64-bit) | about 54 MB | about 145 MB |
 
 It's installed where only an administrator can change it: `C:\Program Files\ScreenTinker\addons\audience`
-on Windows, `/usr/lib/screentinker-pi-audience` on a Pi. The player loads code from there, so it must
-not be writable by the player's user or the dashboard's remote terminal. The player checks this
-before loading it. On a Pi, the folder and every folder above it must belong to root and be
-writable only by root, with no symlinks. On Windows, it must be inside the player's install folder.
-Otherwise the screen reports that it can't count, and why.
-
-Older players put the Pi add-on in `/opt/screentinker/audience-addon`. It isn't used from there any
-more, because an all-in-one Pi gives `/opt/screentinker` to the Pi's user. Run
-`sudo screentinker-pi audience-addon install` again, which also deletes the old copy.
+on Windows. The player loads code from there, so it must not be writable by the player's user or the
+dashboard's remote terminal. The player checks this before loading it: the folder must be inside the
+player's install folder. Otherwise the screen reports that it can't count, and why.
 
 **Hosting it (self-hosted servers).** Build it with
 `python3 native/packaging/audience/build-addon.py`, which writes

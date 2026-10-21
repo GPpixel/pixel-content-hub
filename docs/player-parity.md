@@ -56,7 +56,7 @@ reads "as Pi". Every row that is the OS (screen power, the mixer, the backlight,
 installing, the display timeout, self-update, kiosk) is its own Windows work; each is marked with
 what ran on a Windows 11 25H2 VM (2026-09-29) and ❓ where only real display hardware can answer.
 Both native players are built on PySide6 (LGPL-3.0), never PyQt6 (GPL-3.0); the Pi needs Pi OS
-Trixie (Debian 13), the first release that packages PySide6. Server and dashboard contract: [`pi-native-player.md`](pi-native-player.md),
+Trixie (Debian 13), the first release that packages PySide6. Server and dashboard contract: ScreenTinker's [`pi-native-player.md`](https://github.com/screentinker/screentinker/blob/main/docs/pi-native-player.md),
 [`windows-native-player.md`](windows-native-player.md).
 
 BrightSign runs the *same* `server/player/index.html` as the browser, so it differs only where the

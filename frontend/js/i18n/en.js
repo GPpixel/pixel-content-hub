@@ -4316,7 +4316,6 @@ export default {
   'add_display.need_player': 'Need a player app? Install one to get a pairing code:',
   'add_display.android_apk': 'Android APK',
   'add_display.web_player': 'Web Player',
-  'add_display.raspberry_pi': 'Raspberry Pi',
   'add_display.windows': 'Windows',
   'add_display.owner_prompt': 'Provisioning a fresh / factory-reset Android panel? Enroll it as device owner for silent updates, reboot & kiosk:',
   'add_display.owner_qr_btn': 'Show device-owner QR',

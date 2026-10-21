@@ -1393,7 +1393,6 @@ export default {
   'add_display.need_player': 'Player-App benötigt? Installieren Sie eine, um einen Kopplungscode zu erhalten:',
   'add_display.android_apk': 'Android-APK',
   'add_display.web_player': 'Web-Player',
-  'add_display.raspberry_pi': 'Raspberry Pi',
   'add_display.windows': 'Windows',
   'add_display.pair_btn': 'Bildschirm verbinden',
   // --- 2.0.1: Einstiegs-Checkliste, Neuerungen ---

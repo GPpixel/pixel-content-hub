@@ -63,7 +63,7 @@ test('the platforms that need no artifact are always offered', () => {
   // These ship in the source tree or are the player URL itself, so a deployment cannot lack them —
   // and a blank downloads page on a fresh instance would be the worst possible first impression.
   const bare = di.entries({});
-  for (const id of ['raspberry-pi', 'windows', 'web']) {
+  for (const id of ['windows', 'web']) {
     assert.equal(bare.find((x) => x.id === id).available, true, `${id} should always be available`);
   }
 });
@@ -217,7 +217,7 @@ test('/scripts serves an allowlist, not the directory', () => {
   const allowed = [...set[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
 
   // Exactly these, and nothing else. A new entry is a deliberate edit here.
-  const SETUP_SCRIPTS = ['debian-13-setup.sh', 'raspberry-pi-setup.sh', 'windows-setup.bat'];
+  const SETUP_SCRIPTS = ['debian-13-setup.sh', 'windows-setup.bat'];
   // ⚠️ The BrightSign payloads are NOT in the repository — a deployment bind-mounts them into
   // scripts/ (compose: ./brightsign/autorun.zip -> /app/scripts/autorun.zip) and
   // brightsign/server/bs-server-boot.js fetches <server>/scripts/server-payload.zip by URL.
@@ -294,24 +294,8 @@ test('the BrightSign package helper answers availability without building the zi
   assert.equal(typeof bs.available(), 'boolean');
 });
 
-test('the native Pi package is offered only when a .deb is hosted, and names its version', () => {
-  const bare = di.entries({}).find((x) => x.id === 'raspberry-pi-native');
-  assert.equal(bare.available, false, 'no .deb, no download button');
-  assert.ok(bare.absent, 'and it says what to do instead');
-  assert.equal(di.entries({}).find((x) => x.id === 'raspberry-pi').available, true, 'the kiosk-browser row is unaffected');
-  const hosted = di.entries({ deb: { exists: true, version: '1.2.0', size: 400_000, filename: 'screentinker-pi_1.2.0_all.deb' } })
-    .find((x) => x.id === 'raspberry-pi-native');
-  assert.equal(hosted.available, true);
-  assert.equal(hosted.url, '/download/pi');
-  assert.equal(hosted.file, 'screentinker-pi_1.2.0_all.deb');
-  assert.equal(hosted.version, '1.2.0');
-});
-
-test('the native Pi card names the OS the .deb actually installs on (Trixie, not Bookworm)', () => {
-  // The .deb depends on PySide6, packaged only from Debian 13 "trixie" on — apt refuses it on Bookworm.
-  const row = di.entries({}).find((x) => x.id === 'raspberry-pi-native');
-  assert.match(row.what, /Trixie/);
-  assert.doesNotMatch(row.what, /Bookworm/, 'BUG: the card sends Bookworm users to a package apt will refuse');
+test('there is no Raspberry Pi row (Pixel Content Hub ships no Pi player builds)', () => {
+  assert.equal(di.entries({}).find((x) => /raspberry|pi$/i.test(x.id)), undefined);
 });
 
 test('the native Windows installer is offered only when an .exe is hosted, and the kiosk script stays', () => {

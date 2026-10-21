@@ -347,22 +347,8 @@ if [ "$NATIVE_DRIVER" = 1 ]; then
   echo "==> Database driver loads"
 fi
 
-# #634: build the native Raspberry Pi player for the release just checked out, so /download/pi
-# serves it. The .deb is not in git (native/dist/ is ignored), so a git install never had one and
-# `raspberry-pi-setup.sh --native` got a 404. Best effort: the server runs fine without it.
-STEP="building the Raspberry Pi player package"
-if command -v dpkg-deb >/dev/null 2>&1 && command -v rsync >/dev/null 2>&1; then
-  if PI_DEB="$(native/packaging/linux/build-deb.sh 2>&1 | tail -1)" && [ -s "$PI_DEB" ]; then
-    echo "==> Raspberry Pi player package: ${PI_DEB#"$PWD"/}"
-  else
-    echo "WARNING: could not build the Raspberry Pi player package; /download/pi will not offer it." >&2
-  fi
-else
-  echo "NOTE: dpkg-deb or rsync is missing, so the Raspberry Pi player package was not built (/download/pi)." >&2
-fi
-
 # #634: the player packages the release carries (the signed Android APK and its version sidecar, the
-# webOS .ipk, the Tizen .wgt, and the Windows/macOS/Pi installers when attached), into the places the
+# webOS .ipk, the Tizen .wgt, and the Windows/macOS installers when attached), into the places the
 # server serves them from: the checkout root, as in the release tarball, and native/dist/. Before,
 # only a tarball install had them, and everyone else copied them in by hand.
 #   - Each file is checked against the SHA-256 the release publishes, then moved into place; a file
@@ -384,7 +370,7 @@ fetch_players() {
   list="$(printf '%s' "$json" | node -e '
     let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
       const root = new Set(["ScreenTinker.apk", "ScreenTinker.apk.version", "ScreenTinker.ipk", "ScreenTinker.wgt"]);
-      const dist = /^(screentinker-pi_[^/]+_all\.deb|ScreenTinker-Setup-[^/]+\.exe|ScreenTinker-[^/]+\.dmg)$/;
+      const dist = /^(ScreenTinker-Setup-[^/]+\.exe|ScreenTinker-[^/]+\.dmg)$/;
       const rank = (n) => (n === "ScreenTinker.apk" ? 0 : n === "ScreenTinker.apk.version" ? 1 : 2);
       const out = (JSON.parse(s).assets || [])
         .filter((a) => /^sha256:[0-9a-f]{64}$/.test(a.digest || "") && (root.has(a.name) || dist.test(a.name)))
@@ -398,8 +384,6 @@ fetch_players() {
     if [ "$name" = ScreenTinker.apk.version ] && [ "$apk_state" = failed ]; then
       echo "    $name: kept, because the APK was not replaced" >&2; continue
     fi
-    # The Pi package built above is the same release; keep it rather than swap it for a download.
-    case "$name" in *.deb) [ -s "$dest" ] && { echo "    $name: built above"; continue; } ;; esac
     if ! mkdir -p "$(dirname "$dest")"; then
       echo "WARNING: cannot write $(dirname "$dest"); $name not updated" >&2
       [ "$name" = ScreenTinker.apk ] && apk_state=failed; continue

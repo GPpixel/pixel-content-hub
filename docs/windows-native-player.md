@@ -4,7 +4,7 @@ The native Windows player is the **same engine** as the native Raspberry Pi play
 (`native/screentinker_native`, Python + Qt) with a Windows OS backend (`platform/windows`). It is
 shipped as an Inno Setup installer, `ScreenTinker-Setup-<ver>.exe`, and talks to the server exactly
 like the Pi: Socket.IO on `<server>/device`, `device:register`, heartbeats, `device:command`, and the
-PTY relay. Read [`pi-native-player.md`](pi-native-player.md) first — everything there applies unless
+PTY relay. Read ScreenTinker's [`pi-native-player.md`](https://github.com/screentinker/screentinker/blob/main/docs/pi-native-player.md) first — everything there applies unless
 this page says otherwise. It is **not** the kiosk-browser shortcut that `scripts/windows-setup.bat`
 creates; that one is a browser and registers as the web player.
 
@@ -71,8 +71,7 @@ GET /download/win  → the installer (Content-Disposition: attachment; filename=
                      X-Package-Sha256, X-Package-Version; Content-Type application/octet-stream)
 ```
 
-- Package source (`server/lib/win-cache.js`, an instance of `lib/package-cache.js` — the same factory
-  as the Pi's `deb-cache.js`): the newest `ScreenTinker-Setup-<ver>.exe` in `DATA_DIR`, else
+- Package source (`server/lib/win-cache.js`, an instance of `lib/package-cache.js`): the newest `ScreenTinker-Setup-<ver>.exe` in `DATA_DIR`, else
   `WIN_DIST_DIR` if set, else `<repo>/native/dist/`. First directory with any match wins. `<ver>` is
   `X.Y.Z` or `X.Y.Z~rcN` / `X.Y.Z-rcN`; `~` is normalised to `-` for comparison and in
   `latest_version`.
@@ -88,7 +87,7 @@ GET /download/win  → the installer (Content-Disposition: attachment; filename=
   the current package's `sha256` and `size` (once hashed), `update_available` a plain version
   comparison, and **no** breaker bookkeeping. The global kill switch still applies
   (`ota_disabled_global`, no hash), as do `exe-missing` / `exe-hashing`.
-- `/download/win` shares the global OTA admission guard with `/download/apk` and `/download/pi`
+- `/download/win` shares the global OTA admission guard with `/download/apk`
   (503 + `Retry-After` under load).
 - `/download` lists it as **Windows (native player)** (`id="windows-native"`) when an installer is
   hosted, beside the unchanged kiosk-script row.

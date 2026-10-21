@@ -1827,7 +1827,6 @@ export default {
   'add_display.need_player': "Besoin d'une app de lecture ? Installez-en une pour obtenir un code :",
   'add_display.android_apk': "APK Android",
   'add_display.web_player': "Lecteur web",
-  'add_display.raspberry_pi': "Raspberry Pi",
   'add_display.windows': "Windows",
   'add_display.owner_prompt': "Provisionnement d'un panneau Android frais/réinitialisé aux paramètres d'usine ? Enregistrez-le en tant que propriétaire de l'appareil pour les mises à jour silencieuses, le redémarrage et le kiosque :",
   'add_display.owner_qr_btn': "Afficher le QR du propriétaire de l'appareil",

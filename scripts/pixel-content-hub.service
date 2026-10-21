@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# For a Pi with the checkout at /home/pi/pixel-content-hub and Node 22 from nvm in
-# /home/pi/.config/nvm. Change the paths and User if yours differ.
-User=pi
-WorkingDirectory=/home/pi/pixel-content-hub/server
-# npm start loads server/.env (PORT=3002 and the rest), so settings stay in one place.
-ExecStart=/bin/bash -c 'source /home/pi/.config/nvm/nvm.sh && exec npm start'
+# For the checkout at ~/pixel-content-hub and Node 22 from nvm in ~/.config/nvm
+# (docs/pixel-install.md). Replace each youruser with your Linux user name.
+User=youruser
+WorkingDirectory=/home/youruser/pixel-content-hub/server
+# npm start loads server/.env (PORT=2004 and the rest), so settings stay in one place.
+ExecStart=/bin/bash -c 'source /home/youruser/.config/nvm/nvm.sh && exec npm start'
 Restart=always
 RestartSec=5
 # 78 = the server refused to start because Node is below 22.14. Restarting can't fix that.

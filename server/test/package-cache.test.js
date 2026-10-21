@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * lib/package-cache.js — the factory behind lib/deb-cache.js (Pi) and lib/win-cache.js (Windows).
+ * lib/package-cache.js — the factory behind lib/win-cache.js (Windows).
  * Every directory here is a fresh temp dir: the in-repo fallback (<repo>/native/dist) is never read,
  * because each instance's env override points at an empty dir, so a developer's local build cannot
  * change a result.
@@ -16,17 +16,14 @@ const crypto = require('node:crypto');
 
 const ROOT = path.join(os.tmpdir(), 'st-pkgcache-' + crypto.randomBytes(4).toString('hex'));
 const DATA_DIR = path.join(ROOT, 'data');
-const PI_DIST = path.join(ROOT, 'pi-dist');
 const WIN_DIST = path.join(ROOT, 'win-dist');
-for (const d of [DATA_DIR, PI_DIST, WIN_DIST]) fs.mkdirSync(d, { recursive: true });
+for (const d of [DATA_DIR, WIN_DIST]) fs.mkdirSync(d, { recursive: true });
 process.env.DATA_DIR = DATA_DIR;
-process.env.PI_DIST_DIR = PI_DIST;
 process.env.WIN_DIST_DIR = WIN_DIST;
 process.env.SELF_HOSTED = 'true';
 process.env.NODE_ENV = 'test';
 
 const { createPackageCache, REPO_DIST } = require('../lib/package-cache');
-const debCache = require('../lib/deb-cache');
 const winCache = require('../lib/win-cache');
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 
@@ -39,10 +36,9 @@ test('the factory validates its regex and reads the env override at refresh time
   assert.ok(REPO_DIST.endsWith(path.join('native', 'dist')));
 });
 
-test('both instances are hermetic here — neither searches the real <repo>/native/dist', () => {
-  assert.deepEqual(debCache.candidateDirs(), [DATA_DIR, PI_DIST]);
+test('the instance is hermetic here — it does not search the real <repo>/native/dist', () => {
   assert.deepEqual(winCache.candidateDirs(), [DATA_DIR, WIN_DIST]);
-  for (const c of [debCache, winCache]) assert.ok(!c.candidateDirs().includes(REPO_DIST));
+  assert.ok(!winCache.candidateDirs().includes(REPO_DIST));
 });
 
 test('the Windows installer regex: X.Y.Z and X.Y.Z~rcN / -rcN, nothing else', () => {
@@ -52,8 +48,6 @@ test('the Windows installer regex: X.Y.Z and X.Y.Z~rcN / -rcN, nothing else', ()
     'ScreenTinker-Setup-1.2.3.exe.part', 'ScreenTinker-Setup-v1.2.3.exe', 'screentinker-pi_1.2.3_all.deb']) {
     assert.equal(winCache.EXE_RE.exec(n), null, n);
   }
-  // And the two instances do not see each other's packages.
-  assert.equal(debCache.pickNewest(['ScreenTinker-Setup-9.9.9.exe']), null);
   assert.equal(winCache.pickNewest(['screentinker-pi_9.9.9_all.deb']), null);
 });
 
@@ -91,14 +85,4 @@ test('win-cache: DATA_DIR beats the override dir, hashes once, and never adverti
 
   fs.unlinkSync(f); fs.unlinkSync(inDist);
   assert.equal(winCache.refresh().exists, false);
-});
-
-test('the two caches are independent instances', async () => {
-  fs.writeFileSync(path.join(DATA_DIR, 'screentinker-pi_4.0.0_all.deb'), Buffer.from('deb'));
-  debCache.refresh(); winCache.refresh();
-  await debCache.ready();
-  assert.equal(debCache.get().version, '4.0.0');
-  assert.equal(winCache.get().exists, false, 'a .deb is not a Windows installer');
-  fs.unlinkSync(path.join(DATA_DIR, 'screentinker-pi_4.0.0_all.deb'));
-  debCache.refresh();
 });

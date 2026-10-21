@@ -28,7 +28,6 @@ fs.mkdirSync(SRV_DIR, { recursive: true });
 fs.mkdirSync(EMPTY, { recursive: true });
 process.env.DATA_DIR = SRV_DIR;
 // ⚠️ Hermetic: never the real <repo>/native/dist, for either package.
-process.env.PI_DIST_DIR = EMPTY;
 process.env.WIN_DIST_DIR = EMPTY;
 process.env.SELF_HOSTED = 'true';
 process.env.NODE_ENV = 'test';
@@ -147,12 +146,6 @@ test('/download lists the native Windows installer and keeps the kiosk script', 
   assert.ok(html.includes('v1.1.0'));
   assert.ok(html.includes('href="/download/win"'));
   assert.ok(html.includes('id="windows"'), 'the kiosk-browser row stays');
-});
-
-test('the Pi route is unaffected by the Windows one', async () => {
-  const r = await (await fetch(`${BASE}/api/pi/update/check?version=1.0.0&device_id=pi-x`)).json();
-  assert.equal(r.reason, 'deb-missing', 'no .deb hosted here, and the .exe is not one');
-  assert.equal((await fetch(BASE + '/download/pi')).status, 404);
 });
 
 test('with no installer hosted: exe-missing (lookup too) and a 404', async () => {

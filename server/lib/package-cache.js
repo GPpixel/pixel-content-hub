@@ -1,11 +1,11 @@
 'use strict';
 
 /*
- * Resolve a native player's self-update package — the Raspberry Pi .deb (lib/deb-cache.js) and the
- * Windows installer (lib/win-cache.js) — for its /api/<x>/update/check and /download/<x> routes.
+ * Resolve a native player's self-update package — the Windows installer (lib/win-cache.js) — for
+ * its /api/<x>/update/check and /download/<x> routes.
  *
- * One factory, two instances, because the two packages differ only in their filename and where an
- * operator may point the in-repo fallback. Everything below is the same rule for both:
+ * A factory, so another native package differs only in its filename and where an operator may
+ * point the in-repo fallback. Everything below is the same rule for every instance:
  *
  * The same shape as lib/apk-cache.js and lib/ipk-cache.js: what is on disk is resolved once at boot
  * and refreshed on an interval, never with a per-request statSync — an update check is the one
@@ -41,7 +41,7 @@
  * BELOW 1.2.0 in dpkg, exactly as semver's `-beta1` does) and normalises it to `-` so ota-breaker's
  * comparator — the one every other OTA path uses — can order it. A Debian revision (`1.2.0-1`) parses
  * as a prerelease under semver, which would sort it BELOW 1.2.0; neither build emits revisions, and
- * this is called out in docs/pi-native-player.md rather than half-supported here.
+ * this is called out in ScreenTinker's docs/pi-native-player.md rather than half-supported here.
  */
 
 const fs = require('fs');

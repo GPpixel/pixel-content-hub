@@ -1,8 +1,8 @@
 'use strict';
 
 /*
- * Native player self-update — one factory, mounted for the Pi and Windows (routes/pi-update.js,
- * routes/win-update.js), and download-only for macOS (routes/mac-update.js):
+ * Native player self-update — one factory, mounted for Windows (routes/win-update.js), and
+ * download-only for macOS (routes/mac-update.js):
  *
  *   GET /api/<kind>/update/check?version=&device_id=[&forced=1]
  *     -> { update_available, latest_version, current_version, download_url, sha256, size, reason }

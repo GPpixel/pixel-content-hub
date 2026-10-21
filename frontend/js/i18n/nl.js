@@ -2602,7 +2602,6 @@ export default {
     'add_display.need_player': 'Een speler-app nodig? Installeer er één om een koppelcode te krijgen:',
     'add_display.android_apk': 'Android-APK',
     'add_display.web_player': 'Webspeler',
-    'add_display.raspberry_pi': 'Raspberry Pi',
     'add_display.windows': 'Windows',
     'add_display.owner_prompt':
         'Een nieuw of naar fabrieksinstellingen teruggezet Android-scherm configureren? Registreer het als apparaateigenaar voor stille updates, herstarten en kiosk:',

@@ -1,6 +1,6 @@
-# ScreenTinker native player — Raspberry Pi, Windows and macOS
+# ScreenTinker native player — Windows and macOS
 
-One native player with Android-app parity, three operating systems (macOS is beta — see
+One native player with Android-app parity, two operating systems (macOS is beta — see
 `docs/macos-player.md`). It is not the web player in a
 browser: playback, zones, transitions, sync, triggers and device control are native Python/Qt code,
 and QtWebEngine is used only where Android uses a WebView (widgets, YouTube, HTML bundles, and the
@@ -12,47 +12,11 @@ WebRTC intercom/live view).
   above `platform/` may test the OS itself.
 - **Stack:** Python + **PySide6** (Qt for Python, **LGPL-3.0**). ⚠️ Never PyQt6 — it is GPL-3.0, and
   ScreenTinker ships no GPL code. python-socketio, aiohttp.
-- **Raspberry Pi:** Pi 4 / Pi 5 / Pi 400 / CM4 on **Pi OS Trixie (Debian 13)**, 64-bit, Lite or
-  Desktop — the first Debian that packages PySide6. A `.deb` (`Architecture: all`) whose dependencies
-  all come from the distribution. Bookworm Pis: upgrade, or use the web-kiosk installer.
 - **Windows:** Windows 10 1809+ / 11, x64. An Inno Setup installer bundling everything (PyInstaller),
   plus the `ScreenTinkerHelper` service.
 - **macOS (beta):** macOS 12+. `ScreenTinker.app` in a .dmg (PyInstaller), started at login by a
   per-user LaunchAgent. No privileged helper, so no reboot/clock/install from the dashboard, and it does
   not update itself. `native/packaging/macos/build.sh`; details in `docs/macos-player.md`.
-
-## Install — Raspberry Pi
-On the Pi, pointing at your ScreenTinker server:
-
-```sh
-curl -sSL https://your-server/scripts/raspberry-pi-setup.sh | sudo bash -s -- --native https://your-server
-```
-
-That downloads the player from your server (`/download/pi`), installs it with apt (which pulls the
-Qt/GStreamer dependencies), and runs `screentinker-pi setup`. A pairing code appears on the display;
-enter it in the dashboard under **Displays → Add display**.
-
-Manual equivalent:
-
-```sh
-curl -fLo /tmp/st.deb https://your-server/download/pi
-sudo apt install /tmp/st.deb
-sudo screentinker-pi setup https://your-server              # mode detected: desktop if the Pi boots to one, else lite
-sudo screentinker-pi setup https://your-server --mode desktop --user pi   # force: inside the desktop
-```
-
-### Run modes
-
-| | Lite (recommended) | Desktop |
-|---|---|---|
-| Draws with | KMS/eglfs, no compositor | the desktop session (labwc, wayfire or X11) |
-| Runs as | dedicated `screentinker` user (no sudo) | the desktop user |
-| Started by | `screentinker-pi.service` | `/etc/xdg/autostart/screentinker-pi.desktop` |
-| State | `/var/lib/screentinker-pi` | `~/.local/state/screentinker-pi` |
-
-⚠️ **Overlay filesystem:** the state directory holds the pairing. With Pi OS's read-only overlay on,
-it is discarded at every boot and the panel re-pairs. Point `ST_STATE_DIR` at a persistent partition,
-or pair and then enable the overlay knowing a re-pair follows any wipe.
 
 ## Install — Windows
 
@@ -73,7 +37,7 @@ next sign-in.
 ## What it does (parity with the Android app)
 
 Everything the Android player declares, plus `system.pty`. The authoritative, per-row status is
-`docs/player-parity.md`; the device protocol additions are in `docs/pi-native-player.md`.
+`docs/player-parity.md`.
 
 - Playback: images, video (incl. HLS/RTSP live streams), widgets, YouTube, HTML bundles, multi-zone
   layouts, GL transitions (the shared library, baked for Qt with `qsb`), PiP, slide voiceover and music.
@@ -97,14 +61,7 @@ Everything the Android player declares, plus `system.pty`. The authoritative, pe
   running as the same user (including the dashboard's own remote shell) is refused. An installer runs
   only if its sha256 matches what the ADMIN-configured server announces (the helper asks the server
   itself); anything else needs `/ALLOWPACKAGES=1`. See `docs/windows-native-player.md`.
-- **Pi:** the player runs **unprivileged**. Root-only actions go through `/usr/lib/screentinker-pi/st-helper`,
-  a fixed verb list with every argument re-validated, granted by `/etc/sudoers.d/screentinker-pi` to the
-  `screentinker` group and nothing else. There is no generic "run as root" verb, and there must never be.
-- The remote shell and the interactive terminal run as the player's user. In Lite mode that is a
-  system user without sudo. In Desktop mode it is the desktop user: **if that user has sudo, so does the
-  dashboard's terminal** (`setup` says so).
-- `install_apk {url}` installs the player's own package freely, but any other `.deb` only when setup
-  was run with `--allow-package-install` — a package's maintainer scripts run as root.
+- The remote shell and the interactive terminal run as the player's user.
 - `http_request` refuses cloud-metadata addresses before and after DNS resolution and pins the
   connection to the vetted address.
 
@@ -118,7 +75,6 @@ python3 -m pytest -q                               # logic ports (shared vectors
 export ST_TEST_NO_SYSTEM_AUDIO=1 PULSE_SERVER=unix:/nonexistent PIPEWIRE_REMOTE=/nonexistent
 QT_QPA_PLATFORM=offscreen python3 -m screentinker_native --server http://localhost:3001 \
     --state-dir /tmp/st-dev --windowed -v          # headless (software scene graph: transitions crossfade)
-packaging/linux/build-deb.sh                       # -> native/dist/screentinker-pi_<VERSION>_all.deb
 ```
 
 Windows (on a Windows machine with Python 3.12 x64 and Inno Setup 6):
@@ -127,10 +83,6 @@ Windows (on a Windows machine with Python 3.12 x64 and Inno Setup 6):
 powershell -ExecutionPolicy Bypass -File native\packaging\windows\build.ps1 [-Version X.Y.Z]
 # -> native\dist\ScreenTinker-Setup-<VERSION>.exe (served at /download/win, /api/win/update/check)
 ```
-
-A server serves the newest `screentinker-pi_<ver>_all.deb` it finds in `DATA_DIR`, then `native/dist/`,
-at `/download/pi` and to `/api/pi/update/check`. Versions are `X.Y.Z` or `X.Y.Z~rcN` — never a Debian
-revision (`X.Y.Z-1` would read as a prerelease and never be offered).
 
 Layout:
 
@@ -143,5 +95,5 @@ screentinker_native/
   system/           display power, audio, brightness, shell + PTY, power schedule, updater, root helper door
   logic/            pure ports held to shared/*-vectors.json and the Kotlin unit tests
   ui/               Stage (QML bridge), QML scene, slide audio, trigger overlay, WebRTC page
-packaging/          build-deb.sh, st-helper, systemd unit, autostart, sudoers, the CLI
+packaging/          the Windows installer, the macOS app bundle, the audience-counting add-on
 ```

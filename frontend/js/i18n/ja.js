@@ -1821,7 +1821,6 @@ export default {
   'add_display.need_player': "プレーヤーアプリが必要ですか?インストールしてペアリング コードを取得します:",
   'add_display.android_apk': "Android APK",
   'add_display.web_player': "ウェブプレーヤー",
-  'add_display.raspberry_pi': "ラズベリーパイ",
   'add_display.windows': "Windows",
   'add_display.owner_prompt': "新しい/出荷時設定にリセットされた Android パネルをプロビジョニングしますか?サイレント アップデート、再起動、キオスクのデバイス所有者として登録します:",
   'add_display.owner_qr_btn': "デバイス所有者の QR を表示",

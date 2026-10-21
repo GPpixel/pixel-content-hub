@@ -8,7 +8,7 @@ Pixel Inspiration's digital signage portal. Upload content, build playlists and 
 
 ## What it does
 
-- **Screens:** pair a TV, Raspberry Pi or any browser with a 6-digit code, then see each screen's live preview, health and what it's playing.
+- **Screens:** pair a TV, PC or any browser with a 6-digit code, then see each screen's live preview, health and what it's playing.
 - **Content library:** upload images, video, audio and PDFs, or add web pages, YouTube and live streams. Folders, tags and search keep it tidy.
 - **Playlists:** put content in running order, set how long each item shows, and give items start and end dates. One playlist can play on many screens.
 - **Schedules:** a weekly calendar for what plays when, per screen or per group of screens.
@@ -37,7 +37,7 @@ Pixel Inspiration's digital signage portal. Upload content, build playlists and 
 
 ## Install
 
-[`docs/pixel-pi-install.md`](docs/pixel-pi-install.md) covers installing, running, updating and removing it on a Raspberry Pi. It runs on port **2004** in its own folder, so it can sit next to an existing ScreenTinker install without touching it.
+[`docs/pixel-install.md`](docs/pixel-install.md) covers installing, running, updating and removing it on a Linux machine. It runs on port **2004** in its own folder, so it can sit next to an existing ScreenTinker install without touching it.
 
 You need Node.js 22.14 or newer. The first account registered becomes the admin.
 

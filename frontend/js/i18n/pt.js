@@ -1310,7 +1310,6 @@ export default {
   'add_display.need_player': 'Precisa de um app player? Instale um para obter um código:',
   'add_display.android_apk': 'APK Android',
   'add_display.web_player': 'Player web',
-  'add_display.raspberry_pi': 'Raspberry Pi',
   'add_display.windows': 'Windows',
   'add_display.pair_btn': 'Conectar tela',
   // --- 2.0.1: checklist inicial, novidades ---

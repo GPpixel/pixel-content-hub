@@ -1,6 +1,6 @@
 # macOS native player (beta)
 
-The Raspberry Pi and Windows native player, running on a Mac: the same engine
+The Windows native player, running on a Mac: the same engine
 (`native/screentinker_native/`) with a third OS backend, `platform/macos/`. macOS 12 or later, Apple
 Silicon (the CI build) or Intel (built on an Intel Mac).
 
@@ -25,7 +25,7 @@ Silicon (the CI build) or Intel (built on an Intel Mac).
 4. Pair: the code appears full screen; enter it under **Displays → Add display**.
 
 Fleet pre-configuration: an admin (or an MDM profile) can drop `/Library/Application Support/ScreenTinker/config.json`
-— the same keys as the Pi's `/etc/screentinker-pi/config.json` — and the player seeds from it on first run.
+— the same keys as the Windows player's `%ProgramData%\ScreenTinker\config.json` — and the player seeds from it on first run.
 
 ## Unattended
 
