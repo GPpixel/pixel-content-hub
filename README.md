@@ -13,8 +13,27 @@ Pixel Inspiration's digital signage portal. Upload content, build playlists and 
 - **Playlists:** put content in running order, set how long each item shows, and give items start and end dates. One playlist can play on many screens.
 - **Schedules:** a weekly calendar for what plays when, per screen or per group of screens.
 - **Layouts, video walls and widgets:** split a screen into zones, join screens into one wall, and add clocks, weather, tickers and web pages.
-- **Simple and Advanced views:** Simple walks new users through the basics; Advanced shows every tool.
 - **Web player:** screens open `http://<server>:<port>/player` in a browser. No app to install.
+
+## Simple and Advanced
+
+The portal has two views, and each person picks the one that suits them. Switch with the **Simple | Advanced** buttons, at the top right in Simple and in the sidebar in Advanced. The choice is saved to your account.
+
+- **Simple** is for staff who just want to change what a screen shows. Each task is a short guided step: add a screen, upload photos, make a sign, show news headlines, share your screen or invite a colleague.
+- **Advanced** is the full dashboard, with playlists, schedules, layouts, video walls, widgets, reports and the admin settings.
+
+<table>
+  <tr>
+    <td><img src="docs/images/pixel-simple-home.png" alt="Simple view: big task tiles under 'What would you like to do?'" width="420"></td>
+    <td><img src="docs/images/pixel-dashboard.png" alt="Advanced view: the full dashboard with the sidebar" width="420"></td>
+  </tr>
+  <tr>
+    <td align="center">Simple</td>
+    <td align="center">Advanced</td>
+  </tr>
+</table>
+
+## More screenshots
 
 <table>
   <tr>
