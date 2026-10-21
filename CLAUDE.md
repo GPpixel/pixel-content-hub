@@ -15,26 +15,27 @@ Pixel's digital signage server: a dashboard to manage screens, upload content, b
 
 ## Ground rules
 
-- **Don't change behaviour or looks unless that is the task.** Keep Pixel changes small and in the places listed under "Design language" below, so upstream fixes can still be merged in.
+- **Don't change behaviour or looks unless that is the task.** Keep Pixel changes small and in the places listed under "Design language" below, so upstream fixes can still be applied.
 - **Keep the licence and attribution.** `LICENSE` (MIT, ScreenTinker) stays as it is, and the README keeps saying where the code comes from.
 - **Node 22.14 or newer.** The server refuses to start on older Node.
 - **State lives under `DATA_DIR`** (default `server/`): `db/`, `uploads/`, `certs/` (including the generated JWT secret). Never commit it. Don't change the JWT secret on a running install: everyone is signed out and saved secrets become unreadable.
 - **Run the tests** before pushing: `cd server && npm test`. Add or update a test for any behaviour change.
 - **The player has a generated copy.** After editing `server/player/index.html`, run `cd server && npm run build:legacy-player` to regenerate `server/player/legacy.html`.
-- **Don't use the in-app "Update Now".** It upgrades to upstream ScreenTinker releases and would replace the Pixel changes. Bring upstream changes in with a git merge instead.
+- **Don't use the in-app "Update Now".** It upgrades to upstream ScreenTinker releases and would replace the Pixel changes. Bring upstream changes in as a patch instead (below).
 
 ## Bringing in ScreenTinker updates
 
-ScreenTinker's history is part of this repo's history (ScreenTinker 3.0.0 is a merge parent of `main`), so its later releases merge in normally:
+This repo's history starts at an import of ScreenTinker 3.0.0 (upstream commit `7eaa954`); upstream's own history isn't in it, so its releases don't merge. Apply the changes between two upstream releases as a patch instead:
 
 ```bash
 git remote add upstream https://github.com/screentinker/screentinker.git   # once
 git fetch upstream --tags
 git checkout -b upstream-sync main
-git merge v3.0.1          # the release tag to bring in
+git diff v3.0.0 v3.0.1 > /tmp/upstream.patch      # the release you have, then the one to bring in
+git apply --3way /tmp/upstream.patch
 ```
 
-Conflicts can come up wherever Pixel changed a file: the styles, the branding defaults, a few dashboard views and the player. Keep the Pixel side of each, re-run `npm run build:legacy-player` if the player changed, run the tests, and open a pull request into `main`.
+Conflicts can come up wherever Pixel changed a file: the styles, the branding defaults, a few dashboard views and the player. Keep the Pixel side of each, and drop changes to anything listed under "Removed from upstream" below. Re-run `npm run build:legacy-player` if the player changed, run the tests, and open a pull request into `main`.
 
 ## Writing docs
 
@@ -104,14 +105,16 @@ The dashboard doesn't show upstream's "Help show how widely ScreenTinker is depl
 
 Upstream's vendor "Support Access" (a support token on the sign-in page, a request-code section in Settings) is removed. The sign-in page and Settings don't show it, `routes/auth.js` answers every `/api/auth/support` endpoint with a 404, and `middleware/auth.js` refuses any support session. `docs/support-access.md` describes the upstream feature, which doesn't apply here. `test/pixel-no-support-access.test.js` checks it stays off.
 
-### No Raspberry Pi player
+### Removed from upstream
 
-Upstream's native Raspberry Pi player is removed: its packaging (`native/packaging/linux/`), `scripts/raspberry-pi-setup.sh`, the `/download/pi` and `/api/pi/update/check` routes (`routes/pi-update.js`, `lib/deb-cache.js`), the Pi build steps in the Dockerfile and the release, upgrade and Debian setup scripts, the Raspberry Pi button under Add display, and `docs/pi-native-player.md`. `test/download-index.test.js` checks the download page offers no Pi player. When merging upstream, delete these again rather than taking upstream's changes to them. Upstream's marketing pages (below) still mention the Pi.
+**Raspberry Pi player.** Upstream's native Raspberry Pi player is removed: its packaging (`native/packaging/linux/`), `scripts/raspberry-pi-setup.sh`, the `/download/pi` and `/api/pi/update/check` routes (`routes/pi-update.js`, `lib/deb-cache.js`), the Pi build steps in the Dockerfile and the release, upgrade and Debian setup scripts, the Raspberry Pi button under Add display, and `docs/pi-native-player.md`. `test/download-index.test.js` checks the download page offers no Pi player.
+
+**Marketing site.** Upstream's public website is removed: the landing page, `guides/`, `compare/`, `solutions/`, `integrations/`, the certified hardware pages and their submission form (`certified-hardware.json`, `lib/certified-hardware.js`, `routes/certified-hardware.js`, `routes/hardware-submissions.js`), the public template gallery (`/templates`), `sitemap.xml`, `llms.txt` and `marketing/`. `/` always opens the dashboard, `robots.txt` asks crawlers to stay out, and old links under `/guides/`, `/integrations/` and `/solutions/` get a 404. The download page's setup guide links go to ScreenTinker's website. The hardware submissions table stays in the database schema, unused, to keep the schema as upstream has it.
 
 ### Known fallbacks
 
 - **Glass needs `backdrop-filter`.** Without it, surfaces stay solid (the token values above).
-- **Upstream's marketing pages** (`frontend/landing.html`, `frontend/guides/`, `frontend/legal/` and similar) are not restyled. Run with `DISABLE_HOMEPAGE=true` so `/` opens the dashboard.
+- **Upstream's legal pages** (`frontend/legal/`) and the API reference (`/docs`) are not restyled.
 - **The sidebar is fixed to the edge**, not floating with `--radius-lg` as in the staff portal, to keep the dashboard's layout and mobile menu unchanged.
 
 When something can't follow the design language, use the nearest token from the table above and add it to this list.

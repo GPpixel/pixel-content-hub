@@ -46,11 +46,12 @@ You need Node.js 22.14 or newer. The first account registered becomes the admin.
 - **Pixel branding and design.** The dashboard, sign-in page and web player use the Pixel design language: grey glass, the crimson accent, Figtree and Cal Sans, and the Pixel Inspiration "Content Hub" logo. The fonts are served by the portal itself, so it works on a network with no internet.
 - **No Support Access.** ScreenTinker's vendor support login is removed from the sign-in page, Settings and the server.
 - **No ScreenTinker prompts.** The usage-statistics prompt is hidden, and the sponsor request is turned off with `ST_HIDE_SPONSOR=true`.
+- **No public website.** ScreenTinker's marketing pages are removed, and `/` opens the dashboard. Search engines are asked not to index the portal.
 - **No in-app "Update Now".** It would install a ScreenTinker release over the Pixel changes. ScreenTinker updates are brought in with git instead.
 
 ## Working on it
 
-Read [`CLAUDE.md`](CLAUDE.md) first. It covers the ground rules, how the design language maps onto the dashboard, and how to merge in new ScreenTinker releases. The company design files are in [`design/`](design/).
+Read [`CLAUDE.md`](CLAUDE.md) first. It covers the ground rules, how the design language maps onto the dashboard, and how to bring in changes from new ScreenTinker releases. The company design files are in [`design/`](design/).
 
 - `server/`: Node.js server (Express, Socket.IO, SQLite). Run the tests with `cd server && npm test`.
 - `frontend/`: the dashboard, served as static files.

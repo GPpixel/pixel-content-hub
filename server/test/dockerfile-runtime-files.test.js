@@ -112,9 +112,9 @@ test('every repo-root path the server resolves is copied into the image', () => 
     + 'every containerised install while the tests pass from the source tree');
 });
 
-test('the three known instances are each covered', () => {
+test('the known instances are each covered', () => {
   // Named explicitly, because a regex that stops matching is a test that silently passes.
-  for (const f of ['release-notes.json', 'certified-hardware.json', 'VERSION']) {
+  for (const f of ['release-notes.json', 'VERSION']) {
     assert.match(DOCKERFILE, new RegExp(`COPY ${f.replace(/\./g, '\\.')} `), `${f} is not COPYed`);
   }
   assert.match(DOCKERFILE, /COPY docs\/openapi\.yaml /);
@@ -133,16 +133,4 @@ test('⚠️ an artifact the DEPLOYMENT supplies is not expected in the image', 
   }
   const ipk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ipk-cache.js'), 'utf8');
   assert.match(ipk, /dataDir/, 'the operator mount is what makes absence from the image acceptable');
-});
-
-test('the certified-hardware page degrades to the static file rather than erroring', () => {
-  /*
-   * The fallback is correct and stays — a contractual page should degrade to "our entries only" rather
-   * than to a 500. ⚠️ But it is precisely what made the missing file invisible for so long, so the
-   * failure has to be loud in the log even though it is quiet on the page.
-   */
-  const route = fs.readFileSync(path.join(__dirname, '..', 'routes', 'certified-hardware.js'), 'utf8');
-  assert.match(route, /res\.sendFile\(OUT\)/, 'the static fallback should remain');
-  assert.match(route, /console\.error\('\[certified-hardware\] falling back/,
-    'a silent fallback is how this went unnoticed');
 });

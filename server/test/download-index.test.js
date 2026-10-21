@@ -22,7 +22,6 @@ const path = require('node:path');
 
 const di = require('../lib/download-index');
 
-const GUIDE_DIR = path.join(__dirname, '..', '..', 'frontend', 'guides');
 const PLATFORM_GUIDES = [
   'windows-digital-signage.html',
   'mac-ipad-digital-signage.html',
@@ -44,7 +43,7 @@ test('every entry has the fields a row is rendered from', () => {
     assert.ok(e.name, `name for ${e.id}`);
     assert.ok(e.what, `what for ${e.id}`);
     assert.ok(e.guide, `guide link for ${e.id}`);
-    assert.match(e.guide, /^\/(guides|certified-hardware)/, `${e.id} guide is a local path`);
+    assert.match(e.guide, /^https:\/\/screentinker\.com\/guides\//, `${e.id} guide is ScreenTinker's guide`);
   }
 });
 
@@ -90,7 +89,7 @@ test('Roku is listed but never offered as a file', () => {
     assert.equal(roku.available, true);
     assert.equal(roku.url, 'https://my.roku.com/account/add/Screentinker');
     assert.equal(roku.file, null, 'Roku is never a download from this instance');
-    assert.equal(roku.guide, '/guides/roku-digital-signage.html');
+    assert.equal(roku.guide, 'https://screentinker.com/guides/roku-digital-signage.html');
     assert.equal(roku.external, true, 'the store link opens in a new tab');
   }
 });
@@ -129,65 +128,6 @@ test('formatSize reads as a size, and nothing is printed for a missing one', () 
   assert.equal(di.formatSize(undefined), null);
   assert.equal(di.formatSize(500 * 1024), '500 KB');
   assert.equal(di.formatSize(31 * 1024 * 1024), '31.0 MB');
-});
-
-test('every entry links to a guide page that exists', () => {
-  // The whole point of the refactor: ten platforms, ten real pages. A link to a guide that was never
-  // written is a 404 in the one place a new operator is guaranteed to look.
-  for (const e of di.entries(FULL)) {
-    if (e.guide === '/certified-hardware') continue;
-    const file = path.join(GUIDE_DIR, path.basename(e.guide));
-    assert.ok(fs.existsSync(file), `${e.id} links to ${e.guide}, which does not exist`);
-  }
-});
-
-test('the four new platform guides send people to this server for the player', () => {
-  for (const name of PLATFORM_GUIDES) {
-    const html = fs.readFileSync(path.join(GUIDE_DIR, name), 'utf8');
-    // One GitHub link is fine and expected — the footer's source link. What must not appear is a
-    // release download: that is the copy stamped with the wrong server URL.
-    assert.ok(
-      !/github\.com\/screentinker\/screentinker\/releases/.test(html),
-      `${name} must not link a release asset — the artifact is served by the instance`
-    );
-    assert.match(html, /href="\/download\//, `${name} should point at the instance's downloads`);
-  }
-});
-
-test('the new guides are indexable, canonical and in the sitemap', () => {
-  const sitemap = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'frontend', 'sitemap.xml'), 'utf8'
-  );
-  for (const name of PLATFORM_GUIDES) {
-    const html = fs.readFileSync(path.join(GUIDE_DIR, name), 'utf8');
-    assert.match(html, /name="robots" content="index, follow"/, `${name} robots`);
-    assert.match(
-      html,
-      new RegExp(`<link rel="canonical" href="https://screentinker\\.com/guides/${name.replace('.', '\\.')}">`),
-      `${name} canonical`
-    );
-    assert.ok(sitemap.includes(`/guides/${name}`), `${name} is missing from sitemap.xml`);
-  }
-});
-
-test('the landing page links every platform it claims, and certified hardware from the nav', () => {
-  const landing = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'frontend', 'landing.html'), 'utf8'
-  );
-  // Derived from the page's own claim rather than hardcoded: adding a platform without updating the
-  // social cards is the drift that left "9 platforms" on the page after Vega shipped.
-  const claimed = Number((landing.match(/across (\d+) platforms/) || [])[1]);
-  const tiles = landing.match(/class="platform-item"/g) || [];
-  assert.equal(tiles.length, claimed, `${tiles.length} tiles but the page claims ${claimed}`);
-  // Every tile is a link now — a tile that is a bare <div> is a platform with nowhere to go, which
-  // is what this change removed.
-  assert.equal(
-    (landing.match(/<a class="platform-item"/g) || []).length, claimed,
-    'every platform tile must be a link'
-  );
-  // Named in reseller agreements, and people were hunting for it: it belongs in the nav.
-  assert.match(landing, /<a href="\/certified-hardware">Certified Hardware<\/a>/);
-  assert.ok(!landing.includes('9 platforms'), 'the social cards must not still say 9 platforms');
 });
 
 /*

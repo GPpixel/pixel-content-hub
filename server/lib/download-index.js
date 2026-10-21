@@ -49,7 +49,7 @@ function entries(state = {}) {
       file: 'ScreenTinker.apk',
       what: 'The native player. Sideload it, or install it from this URL on the device.',
       url: '/download/apk',
-      guide: '/guides/digital-signage-android-tv.html',
+      guide: 'https://screentinker.com/guides/digital-signage-android-tv.html',
       available: !!apk.exists,
       version: apk.version || null,
       size: formatSize(apk.size),
@@ -64,7 +64,7 @@ function entries(state = {}) {
       // Built per request with THIS server's URL already inside it, which is exactly why it is
       // not a release asset.
       url: '/download/autorun.zip',
-      guide: '/guides/brightsign-digital-signage.html',
+      guide: 'https://screentinker.com/guides/brightsign-digital-signage.html',
       available: !!brightsign.exists,
       version: brightsign.version || null,
       size: null,
@@ -78,7 +78,7 @@ function entries(state = {}) {
       file: 'ScreenTinker.ipk',
       what: 'Installed from a USB stick or an SI server. Updates itself against this instance afterwards.',
       url: '/webos/ScreenTinker.ipk',
-      guide: '/guides/lg-webos-digital-signage.html',
+      guide: 'https://screentinker.com/guides/lg-webos-digital-signage.html',
       available: !!ipk.exists,
       version: ipk.version || null,
       size: formatSize(ipk.size),
@@ -91,7 +91,7 @@ function entries(state = {}) {
       file: 'ScreenTinker.wgt',
       what: 'Installed by the panel’s URL Launcher. Needs a Samsung partner-signed build to install on a retail panel.',
       url: '/tizen/ScreenTinker.wgt',
-      guide: '/guides/samsung-tv-digital-signage.html',
+      guide: 'https://screentinker.com/guides/samsung-tv-digital-signage.html',
       available: !!wgt.exists,
       version: wgt.version || null,
       size: formatSize(wgt.size),
@@ -110,7 +110,7 @@ function entries(state = {}) {
       file: exe.filename || 'ScreenTinker-Setup-<version>.exe',
       what: 'A native player for Windows 10/11. Run the installer as an administrator; it updates itself against this instance afterwards.',
       url: '/download/win',
-      guide: '/guides/windows-digital-signage.html',
+      guide: 'https://screentinker.com/guides/windows-digital-signage.html',
       available: !!exe.exists,
       version: exe.version || null,
       size: formatSize(exe.size),
@@ -123,7 +123,7 @@ function entries(state = {}) {
       file: 'windows-setup.bat',
       what: 'Creates a kiosk-mode browser shortcut and starts the player at login.',
       url: '/scripts/windows-setup.bat',
-      guide: '/guides/windows-digital-signage.html',
+      guide: 'https://screentinker.com/guides/windows-digital-signage.html',
       available: true,
       version: null,
       size: null,
@@ -139,7 +139,7 @@ function entries(state = {}) {
       file: dmg.filename || 'ScreenTinker-<version>.dmg',
       what: 'A native player for macOS 12 or later. Drag it to Applications; update it from here or with your device management (it does not update itself).',
       url: '/download/mac',
-      guide: '/guides/mac-ipad-digital-signage.html',
+      guide: 'https://screentinker.com/guides/mac-ipad-digital-signage.html',
       available: !!dmg.exists,
       version: dmg.version || null,
       size: formatSize(dmg.size),
@@ -154,7 +154,7 @@ function entries(state = {}) {
       // MDM/enterprise distribution) — a link to a file here could never install.
       what: 'Not a download. The ScreenTinker app is distributed by your organisation through TestFlight or device management; it shows this instance’s player full screen.',
       url: null,
-      guide: '/guides/mac-ipad-digital-signage.html',
+      guide: 'https://screentinker.com/guides/mac-ipad-digital-signage.html',
       available: false,
       version: null,
       size: null,
@@ -167,7 +167,7 @@ function entries(state = {}) {
       file: null,
       what: 'No install. Open the player URL on the screen and claim the pairing code.',
       url: '/player',
-      guide: '/guides/chromeos-digital-signage.html',
+      guide: 'https://screentinker.com/guides/chromeos-digital-signage.html',
       available: true,
       version: null,
       size: null,
@@ -181,7 +181,7 @@ function entries(state = {}) {
       // read as a recommendation.
       what: 'Not a download. Built from source and installed with Amazon’s Vega tooling, and this hardware is not certified.',
       url: null,
-      guide: '/guides/digital-signage-vega.html',
+      guide: 'https://screentinker.com/guides/digital-signage-vega.html',
       available: false,
       version: null,
       size: null,
@@ -198,7 +198,7 @@ function entries(state = {}) {
       url: ROKU_STORE_URL,
       external: true,
       action_label: 'Add to your Roku',
-      guide: '/guides/roku-digital-signage.html',
+      guide: 'https://screentinker.com/guides/roku-digital-signage.html',
       available: true,
       version: null,
       size: null,
@@ -289,7 +289,6 @@ ${rows}
 <footer>
   Nothing here needs a GitHub account. Source and release notes:
   <a href="https://github.com/screentinker/screentinker" rel="noopener">github.com/screentinker/screentinker</a>.
-  Choosing hardware? <a href="/certified-hardware">Certified hardware</a>.
 </footer>
 </div>
 </body>

@@ -23,7 +23,7 @@ const DATA_DIR = path.join(os.tmpdir(), 'st-cdn-' + crypto.randomBytes(4).toStri
 const LOG = path.join(os.tmpdir(), 'st-cdn-' + crypto.randomBytes(4).toString('hex') + '.log');
 
 const BROWSER_ACCEPT = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8';
-const GUIDE = '/guides/brightsign-digital-signage.html';
+const GUIDE = '/legal/terms.html';
 
 // "May a shared cache store this?" — the question Cloudflare answers from Cache-Control.
 const sharedCacheable = (cc) => !/\b(private|no-store)\b/i.test(cc || '');
@@ -51,7 +51,7 @@ const get = (p, accept) => fetch(BASE + p, { headers: accept ? { Accept: accept 
 test('⚠️ an HTML URL answers HTML whatever Accept says: one answer per URL', async () => {
   // `private, no-store` on a negotiated reply is NOT enough: the zone's cache rule for the marketing
   // pages overrides origin headers, and the edge cached a no-store markdown reply on alpha anyway.
-  for (const p of [GUIDE, '/']) {
+  for (const p of [GUIDE]) {
     for (const accept of ['text/markdown', 'text/x-markdown', 'text/markdown;q=0.9,text/html;q=0.8']) {
       const r = await get(p, accept);
       assert.equal(r.status, 200, p);

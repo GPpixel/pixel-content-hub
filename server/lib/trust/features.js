@@ -79,7 +79,7 @@ const FILES = {
   'lib/go2rtc.js': 'live_video', 'lib/live-publish.js': 'live_video', 'lib/live-publish-ws.js': 'live_video',
   'lib/telemetry.js': 'telemetry',
   'lib/ghcr-check.js': 'updates',
-  'routes/templates.js': 'template_catalog', 'routes/templates-gallery.js': 'template_catalog',
+  'routes/templates.js': 'template_catalog',
   'routes/mcp.js': 'mcp',
   'services/mesh-uplink.js': 'mesh', 'routes/mesh-enroll.js': 'mesh', 'routes/mesh.js': 'mesh',
   'routes/storage-profiles.js': 'storage',

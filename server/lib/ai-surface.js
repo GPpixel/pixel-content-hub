@@ -237,7 +237,6 @@ function linkHeader(base, { markdownOf = null } = {}) {
     // landed on any URL should be able to find out how to authenticate without a second discovery
     // hop it may not know to make.
     `<${base}/auth.md>; rel="service-meta"; type="text/markdown"`,
-    `<${base}/llms.txt>; rel="describedby"; type="text/plain"`,
   ];
   if (markdownOf) {
     links.unshift(`<${base}${markdownOf}>; rel="alternate"; type="text/markdown"`);
@@ -252,21 +251,12 @@ function linkHeader(base, { markdownOf = null } = {}) {
 function markdownSource(frontendDir, urlPath) {
   // Strip the extension we added, then resolve inside frontendDir only.
   const rel = urlPath.replace(/\.md$/, '');
-  /*
-   * ⚠️ `/` AND `/index` BOTH MEAN THE LANDING PAGE, NOT index.html. On this site index.html is the
-   * dashboard SPA shell — a few hundred bytes of module loader with no prose in it — and `/` is
-   * served from landing.html. Resolving `/index.md` by filename would hand an agent the app shell and
-   * call it our homepage.
-   */
-  if (rel === '/' || rel === '' || rel === '/index') {
-    const landing = path.join(frontendDir, 'landing.html');
-    try { return fs.statSync(landing).isFile() ? landing : null; } catch (e) { return null; }
-  }
+  // `/` and `/index` would be the homepage. There is none (`/` opens the dashboard), and index.html is
+  // the dashboard shell, which has no prose to render.
+  if (rel === '/' || rel === '' || rel === '/index') return null;
   if (/^\/index(\.html)?$/.test(rel)) return null;
   const bare = rel.replace(/^\/+/, '');
-  // A trailing slash is a directory index (/integrations/ -> integrations/index.html). Without this
-  // the section landing pages are the only published pages with no Markdown rendition, which is both
-  // arbitrary and invisible.
+  // A trailing slash is a directory index (/dir/ -> dir/index.html).
   const candidates = rel.endsWith('/')
     ? [bare + 'index.html']
     : [bare + '.html', bare, bare + '/index.html'];

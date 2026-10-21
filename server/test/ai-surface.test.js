@@ -95,9 +95,6 @@ test('⚠️ the capability catalogue lists only things we serve', () => {
   // ⚠️ CORS is part of the spec here: browser-side agents read this, and without the header the
   // document exists and is unreadable by half the clients it is published for.
   assert.match(SERVER_SRC, /ai-catalog\.json[\s\S]{0,240}Access-Control-Allow-Origin/);
-  // robots.txt points at it, which is the other way the scanner and a crawler find it.
-  const robots = fs.readFileSync(path.join(FRONTEND, 'robots.txt'), 'utf8');
-  assert.match(robots, /^Agentmap: https:\/\/screentinker\.com\/\.well-known\/ai-catalog\.json$/m);
 });
 
 // ───────────────────────────── protected resource metadata ─────────────────────────────
@@ -239,21 +236,13 @@ test('the discovery documents point at the root copy we actually serve', () => {
 
 // ───────────────────────────── which pages have a rendition ─────────────────────────────
 
-test('published pages resolve, including directory indexes', () => {
-  assert.ok(ai.markdownSource(FRONTEND, '/guides/brightsign-digital-signage.md'));
-  assert.ok(ai.markdownSource(FRONTEND, '/certified-hardware.md'));
-  assert.ok(ai.markdownSource(FRONTEND, '/integrations/'), 'a section index is a published page too');
-  assert.ok(ai.markdownSource(FRONTEND, '/solutions/'), 'the solutions hub is a section index too');
-  assert.ok(ai.markdownSource(FRONTEND, '/solutions/emergency-alert-digital-signage.md'));
+test('published pages resolve', () => {
   assert.ok(ai.markdownSource(FRONTEND, '/legal/terms.md'));
 });
 
-test('⚠️ / and /index mean the LANDING page, not the dashboard shell', () => {
-  // index.html is the SPA shell: a module loader with no prose in it. Resolving /index.md by filename
-  // would hand an agent that file and call it our homepage.
-  const home = ai.markdownSource(FRONTEND, '/');
-  assert.ok(home.endsWith('landing.html'));
-  assert.equal(ai.markdownSource(FRONTEND, '/index.md'), home);
+test('⚠️ / and /index resolve to nothing: there is no homepage, and the dashboard shell is not a document', () => {
+  assert.equal(ai.markdownSource(FRONTEND, '/'), null);
+  assert.equal(ai.markdownSource(FRONTEND, '/index.md'), null);
   assert.equal(ai.markdownSource(FRONTEND, '/index.html'), null, 'the app shell is not a document');
 });
 
@@ -270,7 +259,7 @@ test('a page that does not exist resolves to nothing rather than an empty docume
 
 // ───────────────────────────── the rendition itself ─────────────────────────────
 
-const GUIDE = fs.readFileSync(path.join(FRONTEND, 'guides', 'brightsign-digital-signage.html'), 'utf8');
+const GUIDE = fs.readFileSync(path.join(__dirname, 'fixtures', 'rendition-page.html'), 'utf8');
 const RENDERED = md.toMarkdown(GUIDE, { url: `${BASE}/guides/brightsign-digital-signage.html`, origin: BASE });
 
 test('⚠️ links survive, as absolute URLs', () => {
@@ -298,8 +287,8 @@ test('structure survives: headings, lists, code and the table', () => {
   assert.match(RENDERED, /^## /m);
   assert.match(RENDERED, /^- /m, 'list items');
   assert.match(RENDERED, /`roHtmlWidget`/, 'inline code');
-  assert.match(RENDERED, /^\| .* \| .* \|$/m, 'the command-parity table');
-  assert.match(RENDERED, /```/, 'the provisioning JSON block');
+  assert.match(RENDERED, /^\| .* \| .* \|$/m, 'the table');
+  assert.match(RENDERED, /```/, 'the code block');
 });
 
 test('nav, footer, scripts and inline SVG are gone', () => {
@@ -318,16 +307,6 @@ test('entities are decoded, including the ones this site actually uses', () => {
   // ⚠️ Ampersand last: decoding it first turns "&amp;lt;" into "<" and invents a tag.
   assert.equal(md.decodeEntities('&amp;lt;script&amp;gt;'), '&lt;script&gt;');
   assert.ok(!/&[a-z]+;/.test(RENDERED), `an undecoded entity reached the output: ${(RENDERED.match(/&[a-z]+;/) || [])[0]}`);
-});
-
-test('the homepage renders as prose, not as a script dump', () => {
-  const home = md.toMarkdown(fs.readFileSync(path.join(FRONTEND, 'landing.html'), 'utf8'),
-    { url: BASE + '/', origin: BASE });
-  assert.match(home, /Flat price, any screen/);
-  assert.match(home, /digital signage CMS/);
-  // The landing page carries JSON-LD and a pricing fetch; neither is prose.
-  assert.ok(!/@context|fetch\(|function /.test(home), 'script content leaked into the rendition');
-  assert.ok(home.length > 2000 && home.length < 60000, `implausible size: ${home.length}`);
 });
 
 // ───────────────────────────── the discovery documents ─────────────────────────────
@@ -377,60 +356,19 @@ test('the Link header advertises the catalogue, the spec and the rendition', () 
   assert.match(plain, /rel="api-catalog"/);
   assert.match(plain, /rel="service-desc"/);
   assert.match(plain, /rel="service-doc"/);
-  assert.match(plain, /rel="describedby"/);
   assert.ok(!/rel="alternate"/.test(plain), 'no markdown alternate for a page that has none');
 
-  const withMd = ai.linkHeader(BASE, { markdownOf: '/guides/x.md' });
-  assert.match(withMd, /<https:\/\/screentinker\.com\/guides\/x\.md>; rel="alternate"; type="text\/markdown"/);
+  const withMd = ai.linkHeader(BASE, { markdownOf: '/legal/terms.md' });
+  assert.match(withMd, /<https:\/\/screentinker\.com\/legal\/terms\.md>; rel="alternate"; type="text\/markdown"/);
   // Every URI reference in a Link header is angle-bracketed; an unbracketed one is silently dropped.
   for (const part of withMd.split(', ')) assert.match(part, /^<[^>]+>;/, `not bracketed: ${part}`);
 });
 
 // ───────────────────────────── robots.txt ─────────────────────────────
 
-test('robots.txt declares Content Signals without losing a single existing directive', () => {
+test('robots.txt keeps every crawler out of the whole portal', () => {
   const robots = fs.readFileSync(path.join(FRONTEND, 'robots.txt'), 'utf8');
-  assert.match(robots, /^Content-Signal: search=yes, ai-input=yes, ai-train=yes$/m);
-  // ⚠️ The signal must appear INSIDE the User-agent group as well as at the top: a parser that only
-  // reads groups would otherwise never see it.
-  const group = robots.slice(robots.indexOf('User-agent: *'));
-  assert.match(group, /^Content-Signal:/m);
-
-  // The directives that were already there are what keeps crawlers out of the app surfaces.
-  for (const d of ['User-agent: *', 'Allow: /', 'Disallow: /api/', 'Disallow: /app',
-                   'Disallow: /player', 'Disallow: /uploads/', 'Sitemap: https://screentinker.com/sitemap.xml']) {
-    assert.ok(robots.includes(d), `robots.txt lost: ${d}`);
-  }
-});
-
-test('llms.txt names every solutions and integrations page, and nothing that does not exist', () => {
-  const llms = fs.readFileSync(path.join(FRONTEND, 'llms.txt'), 'utf8');
-  for (const dir of ['solutions', 'integrations']) {
-    const linked = (llms.match(new RegExp(`https://screentinker\\.com/${dir}/[a-z0-9-]+\\.html`, 'g')) || [])
-      .map((u) => u.split('/').pop());
-    for (const g of new Set(linked)) {
-      assert.ok(fs.existsSync(path.join(FRONTEND, dir, g)), `llms.txt links ${dir}/${g}, which does not exist`);
-    }
-    for (const f of fs.readdirSync(path.join(FRONTEND, dir)).filter((f) => f.endsWith('.html') && f !== 'index.html')) {
-      assert.ok(linked.includes(f), `llms.txt does not mention ${dir}/${f}`);
-    }
-    assert.ok(llms.includes(`https://screentinker.com/${dir}/)`), `llms.txt should link the ${dir} hub`);
-  }
-});
-
-test('llms.txt names the guides that exist and no others', () => {
-  const llms = fs.readFileSync(path.join(FRONTEND, 'llms.txt'), 'utf8');
-  const guides = (llms.match(/https:\/\/screentinker\.com\/guides\/[a-z0-9-]+\.html/g) || [])
-    .map((u) => u.split('/').pop());
-  assert.ok(guides.length >= 9, `expected every guide to be listed, found ${guides.length}`);
-  for (const g of new Set(guides)) {
-    assert.ok(fs.existsSync(path.join(FRONTEND, 'guides', g)), `llms.txt links a guide that does not exist: ${g}`);
-  }
-  // And the reverse: a guide nobody links from here is a guide an agent will not find.
-  for (const f of fs.readdirSync(path.join(FRONTEND, 'guides')).filter((f) => f.endsWith('.html'))) {
-    assert.ok(guides.includes(f), `llms.txt does not mention guides/${f}`);
-  }
-  assert.match(llms, /append `\.md`/, 'it should say how to get the plain-text form');
-  // ⚠️ and must not promise Accept negotiation: page URLs answer HTML only (cdn-cache-poisoning.test.js).
-  assert.doesNotMatch(llms, /send\s+`Accept: text\/markdown`/, 'Accept negotiation was removed; do not advertise it');
+  assert.match(robots, /^User-agent: \*$/m);
+  assert.match(robots, /^Disallow: \/$/m);
+  assert.doesNotMatch(robots, /^(Allow|Sitemap):/m);
 });

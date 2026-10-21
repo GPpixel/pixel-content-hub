@@ -81,7 +81,7 @@ Getting a screen playing: which device to use, and which player it needs.
 
 ## Pick the hardware first
 
-${base}/certified-hardware.html lists what has actually been tested, what each device really does,
+https://screentinker.com/certified-hardware lists what has actually been tested, what each device really does,
 and what to avoid. ⚠️ It distinguishes **Certified** (tested, supported) from **Community reported**
 (someone got it working, no support commitment) and **Not supported**. Read it before recommending a
 purchase — several popular devices are on the third list for concrete reasons.

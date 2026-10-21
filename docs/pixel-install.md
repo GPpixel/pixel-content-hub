@@ -26,11 +26,11 @@ cd ~
 git clone https://github.com/GPpixel/pixel-content-hub.git
 cd ~/pixel-content-hub/server
 npm install
-printf 'SELF_HOSTED=true\nDISABLE_HOMEPAGE=true\nST_HIDE_SPONSOR=true\nPORT=2004\nHTTPS_PORT=3444\n' > .env
+printf 'SELF_HOSTED=true\nST_HIDE_SPONSOR=true\nPORT=2004\nHTTPS_PORT=3444\n' > .env
 cat .env
 ```
 
-`node -v` must print v22.14 or newer. `cat .env` should show the five lines, including `PORT=2004`.
+`node -v` must print v22.14 or newer. `cat .env` should show the four lines, including `PORT=2004`.
 
 ## Run it
 

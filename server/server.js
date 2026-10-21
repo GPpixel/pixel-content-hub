@@ -192,11 +192,9 @@ app.use(helmet({
 // CSP (set by helmet above) applies everywhere except routes that legitimately need inline scripts:
 // - widget/kiosk renders (public, fetched by devices, intentionally inline)
 // - /player (the web player has inline JS, served to display devices)
-// - /         (landing page has inline JSON-LD + a pricing fetch script)
 // The dashboard at /app uses ES modules only and gets the strict policy.
 app.use((req, res, next) => {
   const exempt = () => { res.removeHeader('Content-Security-Policy'); return next(); };
-  if (req.path === '/' || req.path === '/landing.html') return exempt();
   if (req.path.startsWith('/player')) return exempt();
   if (req.path.startsWith('/view/')) return exempt(); // view-only display page: the web player (routes/view.js)
   if (req.path === '/docs') return exempt(); // Redoc API reference needs a relaxed CSP
@@ -473,7 +471,7 @@ app.get('/.well-known/mcp/server-card.json', (req, res) => {
         + 'There is no programmatic registration.',
       documentation: `${base}/auth.md`,
     },
-    documentation: `${base}/guides/mcp-digital-signage.html`,
+    documentation: 'https://screentinker.com/guides/mcp-digital-signage.html',
   });
 });
 
@@ -525,7 +523,7 @@ app.get('/.well-known/auth.md', serveAuthMarkdown);
  * `private, no-store` did NOT help: the zone's cache rule for the marketing pages overrides origin
  * headers, and the edge cached the no-store reply all the same. Any answer that varies by request
  * header on a URL that edge caches is poisonable, so there is only one answer per URL. Agents find
- * the `.md` URL from the Link header on every page, and from llms.txt and robots.txt.
+ * the `.md` URL from the Link header on every page.
  *
  * ⚠️ MOUNTED HERE: ABOVE app.get('/'), the static middleware AND the SPA catch-all. Below static or
  * the catch-all, `.md` falls through to index.html with a 200, which is this deployment's documented
@@ -550,17 +548,6 @@ function sendMarkdown(req, res, file, canonicalPath) {
     return res.status(404).type('text/plain').send('not found');
   }
 }
-
-// /templates is rendered from the live catalog, so its rendition is too (the file on disk is only
-// the shell and its fallback copy).
-app.get('/templates.md', (req, res) => {
-  if (config.disableHomepage) return res.status(404).type('text/plain').send('not found');
-  const base = aiSurface.origin(req);
-  res.type('text/markdown; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Link', aiSurface.linkHeader(base));
-  res.send(mdRendition.toMarkdown(require('./routes/templates-gallery').build(), { url: `${base}/templates`, origin: base }));
-});
 
 app.get(/\.md$/, (req, res, next) => {
   const file = aiSurface.markdownSource(config.frontendDir, req.path);
@@ -588,14 +575,9 @@ app.use((req, res, next) => {
   return next();
 });
 
-// Landing page BEFORE static middleware (so / doesn't serve index.html).
-// When DISABLE_HOMEPAGE is set, redirect to the app instead - for self-hosted
-// internal deployments that don't want the public marketing page. 302 (not
-// 301) so flipping the var back later isn't hard-cached by browsers.
-app.get('/', (req, res) => {
-  if (config.disableHomepage) return res.redirect(302, '/app');
-  res.sendFile(path.join(config.frontendDir, 'landing.html'));
-});
+// / opens the dashboard: Pixel Content Hub has no public homepage. 302 (not 301) so the target can
+// change later without browsers having cached it.
+app.get('/', (req, res) => res.redirect(302, '/app'));
 
 // Dashboard app. Inject the resolved instance / custom-domain branding into the
 // shell as a <meta> (#76) so brand-prime can apply it before first paint when the
@@ -631,13 +613,8 @@ app.get(['/share', '/share/'], (req, res) => {
   res.sendFile(path.join(config.frontendDir, 'share.html'));
 });
 
-// Sitemap and robots — served explicitly so the Content-Type is guaranteed
-// and these endpoints are immune to any future static-middleware reshuffle.
-app.get('/sitemap.xml', (req, res) => {
-  res.type('application/xml');
-  res.setHeader('Cache-Control', 'public, max-age=3600'); // 1h, sitemap rarely changes
-  res.sendFile(path.join(config.frontendDir, 'sitemap.xml'));
-});
+// robots.txt — served explicitly so the Content-Type is guaranteed
+// and this endpoint is immune to any future static-middleware reshuffle.
 app.get('/robots.txt', (req, res) => {
   res.type('text/plain');
   res.setHeader('Cache-Control', 'public, max-age=3600');
@@ -656,45 +633,10 @@ app.get('/openapi.yaml', (req, res) => {
 app.get('/docs', (req, res) => {
   res.sendFile(path.join(config.frontendDir, 'api-docs.html'));
 });
-// Certified Hardware. ⚠️ EXTENSION-LESS ON PURPOSE: reseller agreements name this URL, so it must
-// not encode how the page happens to be built today. ByteTinker's own entries come from the
-// committed certified-hardware.json; approved community reports are merged in from the database.
-// The router falls back to the committed static page if that merge fails, because a URL named in a
-// contract should degrade to "our entries only" rather than to an error.
-app.use('/certified-hardware', require('./routes/certified-hardware'));
-// The public template gallery: the committed shell plus cards from the live official catalog.
-// Exact paths only, so nothing under /templates/ is claimed from the static files.
-app.get('/templates.html', (req, res) => res.redirect(301, '/templates'));
-app.get('/templates', require('./routes/templates-gallery').page);
-app.get('/certified-hardware/submit', (req, res) => {
-  res.sendFile(path.join(config.frontendDir, 'certified-hardware-submit.html'));
-});
-// Public and unauthenticated by design: the page asks people to report what runs, and requiring an
-// account would mean only customers could answer. Nothing posted here can publish as certified.
-// A plain <form> posts urlencoded, so that parser is mounted here rather than globally.
-app.use('/api/hardware-submissions', rateLimit(3600000, 5)); // 5 reports per hour per IP
-app.use('/api/hardware-submissions', express.urlencoded({ extended: false, limit: '32kb' }),
-  require('./routes/hardware-submissions'));
-app.use('/hardware-submissions', require('./routes/hardware-submissions'));
-
 // #73: the standalone agency portal (token-auth, NOT the JWT dashboard SPA). Served as its
 // own page so the agency never touches the dashboard login.
 app.get('/agency', (req, res) => {
   res.sendFile(path.join(config.frontendDir, 'agency.html'));
-});
-
-// The integrations hub is a directory index. express.static below runs with index:false,
-// so a bare /integrations/ would otherwise fall through to the SPA catch-all (login page).
-// Serve it explicitly (the spoke pages are real .html files and static already handles them).
-app.get(['/integrations', '/integrations/'], (req, res) => {
-  if (req.path === '/integrations') return res.redirect(301, '/integrations/');
-  res.sendFile(path.join(config.frontendDir, 'integrations', 'index.html'));
-});
-// The solutions hub (use cases: emergency alerts, meeting rooms, menu boards...) is served the same
-// way, for the same reason: static runs with index:false.
-app.get(['/solutions', '/solutions/'], (req, res) => {
-  if (req.path === '/solutions') return res.redirect(301, '/solutions/');
-  res.sendFile(path.join(config.frontendDir, 'solutions', 'index.html'));
 });
 
 // Express 5 (send 1.x) ignores dotfile paths by default: certbot webroot needs this mount.
@@ -3445,11 +3387,8 @@ app.get(['/tizen', '/tizen/'], (req, res) => {
  * a genuine 404 rather than an app route.
  *
  * The dashboard is hash-routed: every app route is `/#/something`, and the path is always `/`.
- * Nothing legitimate lives under these. Before this, an unknown /guides/* fell through to the SPA
- * and answered 200 with 60KB of dashboard HTML, which is a textbook soft-404. That is worse than a
- * missing page: sitemap.xml lists six guide URLs, and a crawler that finds a typo'd or retired one
- * answering 200 with unrelated markup learns to distrust the whole directory. Flagged in
- * docs/seo-directory-listings.md and unfixed until now.
+ * Nothing legitimate lives under these. They held upstream's marketing pages, which Pixel Content
+ * Hub does not ship, so an old link answers 404 rather than 200 with the dashboard shell (a soft-404).
  */
 const CONTENT_PREFIXES = ['/guides/', '/integrations/', '/solutions/'];
 
@@ -3468,15 +3407,14 @@ const ASSET_EXTENSION = /\.(m?js|css|map|json|wasm|png|jpe?g|gif|svg|ico|webp|av
 const NOT_FOUND_PAGE = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
   + '<meta name="viewport" content="width=device-width,initial-scale=1">'
   + '<meta name="robots" content="noindex">'
-  + '<title>Page not found | ScreenTinker</title>'
+  + '<title>Page not found | Pixel Content Hub</title>'
   + '<style>body{font-family:-apple-system,system-ui,sans-serif;display:flex;justify-content:center;'
-  + 'align-items:center;min-height:100vh;margin:0;background:#0f172a;color:#e2e8f0}'
+  + 'align-items:center;min-height:100vh;margin:0;background:#232323;color:#f2f2f2}'
   + 'div{text-align:center;max-width:460px;padding:32px 24px}h1{font-size:22px;margin:0 0 8px}'
-  + 'p{line-height:1.6;color:#94a3b8;font-size:14px}a{color:#3b82f6;text-decoration:none}'
+  + 'p{line-height:1.6;color:#bbbbbb;font-size:14px}a{color:#ec8f9c;text-decoration:none}'
   + 'a:hover{text-decoration:underline}</style></head><body><div>'
   + '<h1>Page not found</h1>'
-  + '<p>That page does not exist. Try the <a href="/">home page</a>, or the '
-  + '<a href="/guides/what-is-digital-signage.html">guides</a>.</p>'
+  + '<p>That page does not exist. Go to the <a href="/">dashboard</a>.</p>'
   + '</div></body></html>';
 
 // SPA fallback for app routes. Unmatched /api/ paths return 404 so misrouted

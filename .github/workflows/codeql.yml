@@ -39,7 +39,6 @@ jobs:
             paths-ignore:
               - '**/node_modules/**'
               - frontend/vendor/**
-              - marketing/**
               - '**/*.min.js'
               - server/test/**
               - native/tests/**
