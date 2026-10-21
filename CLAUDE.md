@@ -11,7 +11,7 @@ Pixel's digital signage server: a dashboard to manage screens, upload content, b
 - `server/player/` is the web player the screens run.
 - The native players (`android/`, `native/`, `tizen/`, `webos/`, `roku/` and so on) are upstream's and still say ScreenTinker.
 
-`ARCHITECTURE.md`, `README.md` and `docs/` describe the upstream product. `docs/pixel-pi-install.md` is how Pixel installs it.
+`README.md` describes Pixel Content Hub, with screenshots in `docs/images/`. `ARCHITECTURE.md` and the rest of `docs/` describe the upstream product. `docs/pixel-pi-install.md` is how Pixel installs it.
 
 ## Ground rules
 
