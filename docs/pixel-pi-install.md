@@ -14,6 +14,7 @@ Each has its own database and its own accounts: register again on Pixel Content 
 ## Needs
 
 - Node 22.14 or newer. On the Pi it comes from nvm in `~/.config/nvm`; the system Node is too old.
+- Emoji and symbol fonts for the browser on the Pi. Some buttons (the designer tools, Talk, close ✕) use emoji as their icon, and Raspberry Pi OS doesn't include an emoji font, so they show as empty boxes without it: `sudo apt install -y fonts-noto-color-emoji fonts-dejavu-core`, then close and reopen Chromium.
 - Access to the private GitHub repository. When `git clone` asks for a password, use a GitHub personal access token (GitHub → Settings → Developer settings → Personal access tokens), not your GitHub password.
 
 ## Install
