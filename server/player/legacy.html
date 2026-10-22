@@ -143,7 +143,7 @@
   <!-- BrightSign native sync (SyncManager). Inert without the platform module, so the player
        falls back to its own clock-derived group sync. -->
   <script src="/player/st-sync.js"></script>
-  <title>Pixel Content Hub Player</title>
+  <title>Pixel Web Player</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -175,7 +175,7 @@
       position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #232323; display: flex; flex-direction: column;
       align-items: center; justify-content: center; z-index: 1000; color: #f1f5f9;
     }
-    #setupScreen h1 { font-size: 3.6rem; color: #c0394b; margin-bottom: 0.8rem; }
+    #setupScreen h1 { font-size: 3.6rem; color: #c0394b; margin-bottom: 2.4rem; }
     #setupScreen .subtitle { color: #bbbbbb; font-size: 1.6rem; margin-bottom: 4.8rem; }
     #setupScreen .form { width: 40rem; max-width: 90vw; }
     #setupScreen label { display: block; font-size: 1.4rem; color: #bbbbbb; margin-bottom: 0.8rem; }
@@ -277,8 +277,7 @@
 <body>
   <!-- Setup Screen -->
   <div id="setupScreen">
-    <h1>Pixel Content Hub</h1>
-    <div class="subtitle">Web Player</div>
+    <h1>Pixel Web Player</h1>
     <div class="form" id="urlForm">
       <label>Server URL</label>
       <input type="url" id="serverUrl" placeholder="https://sign.yourdomain.com" autofocus>
@@ -312,7 +311,7 @@
   <!-- Status Overlay -->
   <div id="statusOverlay" style="display:none">
     <div class="spinner"></div>
-    <h2>Pixel Content Hub</h2>
+    <h2>Pixel Web Player</h2>
     <p id="statusText" data-i18n="connecting">Connecting...</p>
   </div>
 
@@ -384,7 +383,7 @@ const PLAYER_I18N = {
     pairing_hint: "Enter this code in the dashboard to pair this display",
     connecting: "Connecting...",
     connecting_muted: "Connecting (audio muted)...",
-    info_title: "Pixel Content Hub Web Player",
+    info_title: "Pixel Web Player",
     info_close_hint: "Press Back again or click to close",
     info_device_id: "Device ID",
     info_device_name: "Device Name",
@@ -426,7 +425,7 @@ const PLAYER_I18N = {
     pairing_hint: "Ingresa este c\xF3digo en el panel para vincular esta pantalla",
     connecting: "Conectando...",
     connecting_muted: "Conectando (audio silenciado)...",
-    info_title: "Reproductor web ScreenTinker",
+    info_title: "Reproductor web Pixel",
     info_close_hint: "Presiona Atr\xE1s de nuevo o haz clic para cerrar",
     info_device_id: "ID del dispositivo",
     info_device_name: "Nombre del dispositivo",
@@ -463,7 +462,7 @@ const PLAYER_I18N = {
     pairing_hint: "Saisissez ce code dans le tableau de bord pour apparier cet \xE9cran",
     connecting: "Connexion...",
     connecting_muted: "Connexion (audio coup\xE9)...",
-    info_title: "Lecteur web ScreenTinker",
+    info_title: "Lecteur web Pixel",
     info_close_hint: "Appuyez \xE0 nouveau sur Retour ou cliquez pour fermer",
     info_device_id: "ID de l\u2019appareil",
     info_device_name: "Nom de l\u2019appareil",
@@ -500,7 +499,7 @@ const PLAYER_I18N = {
     pairing_hint: "Geben Sie diesen Code im Dashboard ein, um diesen Bildschirm zu koppeln",
     connecting: "Verbindung wird hergestellt...",
     connecting_muted: "Verbindung (Audio stummgeschaltet)...",
-    info_title: "ScreenTinker Web-Player",
+    info_title: "Pixel Web-Player",
     info_close_hint: "Erneut Zur\xFCck dr\xFCcken oder klicken zum Schlie\xDFen",
     info_device_id: "Ger\xE4te-ID",
     info_device_name: "Ger\xE4tename",
@@ -537,7 +536,7 @@ const PLAYER_I18N = {
     pairing_hint: "Digite este c\xF3digo no painel para parear esta tela",
     connecting: "Conectando...",
     connecting_muted: "Conectando (\xE1udio mudo)...",
-    info_title: "Player web ScreenTinker",
+    info_title: "Player web Pixel",
     info_close_hint: "Pressione Voltar novamente ou clique para fechar",
     info_device_id: "ID do dispositivo",
     info_device_name: "Nome do dispositivo",
@@ -2421,7 +2420,7 @@ if (VIEWER_MODE) {
     {
       const tapOverlay = document.createElement("div");
       tapOverlay.style.cssText = "position:fixed;top:0;right:0;bottom:0;left:0;background:#232323;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer";
-      tapOverlay.innerHTML = '\n          <h1 style="color:#c0394b;font-size:3.6rem;font-family:sans-serif;margin-bottom:1.2rem">Pixel Content Hub</h1>\n          <p style="color:#bbbbbb;font-size:1.8rem;font-family:sans-serif">Tap anywhere to start</p>\n          <p style="color:#9a9a9a;font-size:1.3rem;font-family:sans-serif;margin-top:2.4rem">Audio requires user interaction</p>\n        ';
+      tapOverlay.innerHTML = '\n          <h1 style="color:#c0394b;font-size:3.6rem;font-family:sans-serif;margin-bottom:1.2rem">Pixel Web Player</h1>\n          <p style="color:#bbbbbb;font-size:1.8rem;font-family:sans-serif">Tap anywhere to start</p>\n          <p style="color:#9a9a9a;font-size:1.3rem;font-family:sans-serif;margin-top:2.4rem">Audio requires user interaction</p>\n        ';
       tapOverlay.onclick = () => {
         unlockAudio();
         tapOverlay.remove();
@@ -7738,7 +7737,7 @@ function renderCaptureCanvas() {
       ctx.fillStyle = "#c0394b";
       ctx.font = "bold 28px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("ScreenTinker Web Player", W / 2, H / 2 - 40);
+      ctx.fillText("Pixel Web Player", W / 2, H / 2 - 40);
       ctx.fillStyle = "#bbbbbb";
       ctx.font = "16px sans-serif";
       const item = playlist[currentIndex];

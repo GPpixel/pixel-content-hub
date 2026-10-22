@@ -135,4 +135,27 @@ test('a code from a screen already in use is refused', async () => {
   assert.ok(row('c') && row('d'));
 });
 
+test('the layout, its zone content, orientation, playlist and video wall place survive a reset and a new player', async () => {
+  screen('l');
+  db.prepare("INSERT INTO layouts (id, user_id, name) VALUES ('lay-1', ?, 'Split')").run(U);
+  db.prepare("INSERT INTO layout_zones (id, layout_id, name) VALUES ('zone-1', 'lay-1', 'Left')").run();
+  db.prepare("INSERT INTO playlists (id, user_id, workspace_id, name) VALUES ('pl-1', ?, ?, 'Menu')").run(U, WS);
+  db.prepare("UPDATE devices SET layout_id = 'lay-1', orientation = 'portrait', playlist_id = 'pl-1' WHERE id = 'l'").run();
+  db.prepare("INSERT INTO video_walls (id, user_id, name, grid_cols, grid_rows, bezel_h_mm, bezel_v_mm, screen_w_mm, screen_h_mm, sync_mode, workspace_id) VALUES ('wall-1', ?, 'Foyer', 2, 1, 0, 0, 1000, 560, 'leader', ?)").run(U, WS);
+  db.prepare("INSERT INTO video_wall_devices (wall_id, device_id, grid_col, grid_row, rotation) VALUES ('wall-1', 'l', 1, 0, 0)").run();
+  const asId = db.prepare("INSERT INTO assignments (device_id, zone_id, sort_order) VALUES ('l', 'zone-1', 0)").run().lastInsertRowid;
+
+  assert.equal((await post('/l/detach-player')).status, 200);
+  let d = row('l');
+  assert.deepEqual([d.layout_id, d.orientation, d.playlist_id], ['lay-1', 'portrait', 'pl-1'], 'kept while it waits');
+
+  waitingPlayer('p3', '310457');
+  const r = await post('/l/attach-player', { pairing_code: '310457' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  d = row('p3');
+  assert.deepEqual([d.layout_id, d.orientation, d.playlist_id], ['lay-1', 'portrait', 'pl-1'], 'kept on the new player');
+  assert.equal(db.prepare('SELECT device_id FROM assignments WHERE id = ?').get(asId).device_id, 'p3', 'zone content follows the screen');
+  assert.deepEqual(db.prepare("SELECT device_id, grid_col FROM video_wall_devices WHERE wall_id = 'wall-1'").get(), { device_id: 'p3', grid_col: 1 }, 'wall place follows the screen');
+});
+
 test.after(() => server.close());

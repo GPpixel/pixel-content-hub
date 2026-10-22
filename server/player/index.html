@@ -143,7 +143,7 @@
   <!-- BrightSign native sync (SyncManager). Inert without the platform module, so the player
        falls back to its own clock-derived group sync. -->
   <script src="/player/st-sync.js"></script>
-  <title>Pixel Content Hub Player</title>
+  <title>Pixel Web Player</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -175,7 +175,7 @@
       position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #232323; display: flex; flex-direction: column;
       align-items: center; justify-content: center; z-index: 1000; color: #f1f5f9;
     }
-    #setupScreen h1 { font-size: 3.6rem; color: #c0394b; margin-bottom: 0.8rem; }
+    #setupScreen h1 { font-size: 3.6rem; color: #c0394b; margin-bottom: 2.4rem; }
     #setupScreen .subtitle { color: #bbbbbb; font-size: 1.6rem; margin-bottom: 4.8rem; }
     #setupScreen .form { width: 40rem; max-width: 90vw; }
     #setupScreen label { display: block; font-size: 1.4rem; color: #bbbbbb; margin-bottom: 0.8rem; }
@@ -277,8 +277,7 @@
 <body>
   <!-- Setup Screen -->
   <div id="setupScreen">
-    <h1>Pixel Content Hub</h1>
-    <div class="subtitle">Web Player</div>
+    <h1>Pixel Web Player</h1>
     <div class="form" id="urlForm">
       <label>Server URL</label>
       <input type="url" id="serverUrl" placeholder="https://sign.yourdomain.com" autofocus>
@@ -312,7 +311,7 @@
   <!-- Status Overlay -->
   <div id="statusOverlay" style="display:none">
     <div class="spinner"></div>
-    <h2>Pixel Content Hub</h2>
+    <h2>Pixel Web Player</h2>
     <p id="statusText" data-i18n="connecting">Connecting...</p>
   </div>
 
@@ -352,7 +351,7 @@
         pairing_hint: 'Enter this code in the dashboard to pair this display',
         connecting: 'Connecting...',
         connecting_muted: 'Connecting (audio muted)...',
-        info_title: 'Pixel Content Hub Web Player',
+        info_title: 'Pixel Web Player',
         info_close_hint: 'Press Back again or click to close',
         info_device_id: 'Device ID',
         info_device_name: 'Device Name',
@@ -386,22 +385,22 @@
         share_code_hint: 'Go to {url} and enter',
       },
       es: {
-        web_player: 'Reproductor web', server_url: 'URL del servidor', server_url_placeholder: 'https://signage.tudominio.com', connect: 'Conectar', pairing_code: 'Código de vinculación', pairing_hint: 'Ingresa este código en el panel para vincular esta pantalla', connecting: 'Conectando...', connecting_muted: 'Conectando (audio silenciado)...', info_title: 'Reproductor web ScreenTinker', info_close_hint: 'Presiona Atrás de nuevo o haz clic para cerrar', info_device_id: 'ID del dispositivo', info_device_name: 'Nombre del dispositivo', info_server: 'Servidor', info_status: 'Estado', info_now_playing: 'Reproduciendo', info_resolution: 'Resolución', info_uptime: 'Tiempo activo', info_platform: 'Plataforma', info_cache: 'Caché', info_connected: 'Conectado', info_disconnected: 'Desconectado', info_active: 'Activo', info_inactive: 'Inactivo', info_nothing: 'Nada', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'No hay nada programado en este momento', preview_webpage_blocked: 'Si esta área está en blanco, el sitio bloquea la inserción y tampoco se mostrará en el dispositivo. Prueba con una página que permita la inserción.',
+        web_player: 'Reproductor web', server_url: 'URL del servidor', server_url_placeholder: 'https://signage.tudominio.com', connect: 'Conectar', pairing_code: 'Código de vinculación', pairing_hint: 'Ingresa este código en el panel para vincular esta pantalla', connecting: 'Conectando...', connecting_muted: 'Conectando (audio silenciado)...', info_title: 'Reproductor web Pixel', info_close_hint: 'Presiona Atrás de nuevo o haz clic para cerrar', info_device_id: 'ID del dispositivo', info_device_name: 'Nombre del dispositivo', info_server: 'Servidor', info_status: 'Estado', info_now_playing: 'Reproduciendo', info_resolution: 'Resolución', info_uptime: 'Tiempo activo', info_platform: 'Plataforma', info_cache: 'Caché', info_connected: 'Conectado', info_disconnected: 'Desconectado', info_active: 'Activo', info_inactive: 'Inactivo', info_nothing: 'Nada', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'No hay nada programado en este momento', preview_webpage_blocked: 'Si esta área está en blanco, el sitio bloquea la inserción y tampoco se mostrará en el dispositivo. Prueba con una página que permita la inserción.',
         // 3.0: display link refused, screen share
         enrol_key_refused: 'Esta pantalla se abrió con un enlace de pantalla (el código k= de su dirección) que este servidor no reconoce. Puede que la pantalla se haya eliminado, que su enlace se haya cambiado o que el enlace se creara en otro servidor. Vincúlela con el código de arriba o abra el enlace actual de la pantalla desde el panel.', share_shared_by: 'Compartido por {name}', share_guest: 'invitado', share_connecting: 'Conectando con {name}…', share_code_title: 'Comparta su pantalla aquí', share_code_hint: 'Vaya a {url} e introduzca',
       },
       fr: {
-        web_player: 'Lecteur web', server_url: 'URL du serveur', server_url_placeholder: 'https://signage.votredomaine.com', connect: 'Connecter', pairing_code: 'Code d’appairage', pairing_hint: 'Saisissez ce code dans le tableau de bord pour apparier cet écran', connecting: 'Connexion...', connecting_muted: 'Connexion (audio coupé)...', info_title: 'Lecteur web ScreenTinker', info_close_hint: 'Appuyez à nouveau sur Retour ou cliquez pour fermer', info_device_id: 'ID de l’appareil', info_device_name: 'Nom de l’appareil', info_server: 'Serveur', info_status: 'État', info_now_playing: 'En lecture', info_resolution: 'Résolution', info_uptime: 'Disponibilité', info_platform: 'Plateforme', info_cache: 'Cache', info_connected: 'Connecté', info_disconnected: 'Déconnecté', info_active: 'Actif', info_inactive: 'Inactif', info_nothing: 'Rien', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'Rien de programmé pour le moment', preview_webpage_blocked: 'Si cette zone est vide, le site bloque l’intégration et ne s’affichera pas non plus sur l’appareil. Essayez une page qui l’autorise.',
+        web_player: 'Lecteur web', server_url: 'URL du serveur', server_url_placeholder: 'https://signage.votredomaine.com', connect: 'Connecter', pairing_code: 'Code d’appairage', pairing_hint: 'Saisissez ce code dans le tableau de bord pour apparier cet écran', connecting: 'Connexion...', connecting_muted: 'Connexion (audio coupé)...', info_title: 'Lecteur web Pixel', info_close_hint: 'Appuyez à nouveau sur Retour ou cliquez pour fermer', info_device_id: 'ID de l’appareil', info_device_name: 'Nom de l’appareil', info_server: 'Serveur', info_status: 'État', info_now_playing: 'En lecture', info_resolution: 'Résolution', info_uptime: 'Disponibilité', info_platform: 'Plateforme', info_cache: 'Cache', info_connected: 'Connecté', info_disconnected: 'Déconnecté', info_active: 'Actif', info_inactive: 'Inactif', info_nothing: 'Rien', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'Rien de programmé pour le moment', preview_webpage_blocked: 'Si cette zone est vide, le site bloque l’intégration et ne s’affichera pas non plus sur l’appareil. Essayez une page qui l’autorise.',
         // 3.0: display link refused, screen share
         enrol_key_refused: 'Cet écran a été ouvert avec un lien d’affichage (le code k= de son adresse) que ce serveur ne reconnaît pas. L’écran a peut-être été supprimé, son lien remplacé, ou le lien créé sur un autre serveur. Associez-le avec le code ci-dessus, ou ouvrez le lien actuel de l’écran depuis le tableau de bord.', share_shared_by: 'Partagé par {name}', share_guest: 'invité', share_connecting: 'Connexion à {name}…', share_code_title: 'Partagez votre écran ici', share_code_hint: 'Allez sur {url} et saisissez',
       },
       de: {
-        web_player: 'Web-Player', server_url: 'Server-URL', server_url_placeholder: 'https://signage.ihredomain.com', connect: 'Verbinden', pairing_code: 'Kopplungscode', pairing_hint: 'Geben Sie diesen Code im Dashboard ein, um diesen Bildschirm zu koppeln', connecting: 'Verbindung wird hergestellt...', connecting_muted: 'Verbindung (Audio stummgeschaltet)...', info_title: 'ScreenTinker Web-Player', info_close_hint: 'Erneut Zurück drücken oder klicken zum Schließen', info_device_id: 'Geräte-ID', info_device_name: 'Gerätename', info_server: 'Server', info_status: 'Status', info_now_playing: 'Aktuelle Wiedergabe', info_resolution: 'Auflösung', info_uptime: 'Betriebszeit', info_platform: 'Plattform', info_cache: 'Cache', info_connected: 'Verbunden', info_disconnected: 'Getrennt', info_active: 'Aktiv', info_inactive: 'Inaktiv', info_nothing: 'Nichts', info_na: 'N/V', info_sw: 'Service Worker', nothing_scheduled: 'Derzeit ist nichts geplant', preview_webpage_blocked: 'Wenn dieser Bereich leer ist, blockiert die Website die Einbettung und wird auch auf dem Gerät nicht angezeigt. Verwenden Sie eine Seite, die dies erlaubt.',
+        web_player: 'Web-Player', server_url: 'Server-URL', server_url_placeholder: 'https://signage.ihredomain.com', connect: 'Verbinden', pairing_code: 'Kopplungscode', pairing_hint: 'Geben Sie diesen Code im Dashboard ein, um diesen Bildschirm zu koppeln', connecting: 'Verbindung wird hergestellt...', connecting_muted: 'Verbindung (Audio stummgeschaltet)...', info_title: 'Pixel Web-Player', info_close_hint: 'Erneut Zurück drücken oder klicken zum Schließen', info_device_id: 'Geräte-ID', info_device_name: 'Gerätename', info_server: 'Server', info_status: 'Status', info_now_playing: 'Aktuelle Wiedergabe', info_resolution: 'Auflösung', info_uptime: 'Betriebszeit', info_platform: 'Plattform', info_cache: 'Cache', info_connected: 'Verbunden', info_disconnected: 'Getrennt', info_active: 'Aktiv', info_inactive: 'Inaktiv', info_nothing: 'Nichts', info_na: 'N/V', info_sw: 'Service Worker', nothing_scheduled: 'Derzeit ist nichts geplant', preview_webpage_blocked: 'Wenn dieser Bereich leer ist, blockiert die Website die Einbettung und wird auch auf dem Gerät nicht angezeigt. Verwenden Sie eine Seite, die dies erlaubt.',
         // 3.0: display link refused, screen share
         enrol_key_refused: 'Dieser Bildschirm wurde mit einem Anzeige-Link (dem k=-Code in der Adresse) geöffnet, den dieser Server nicht kennt. Der Bildschirm wurde vielleicht gelöscht, sein Link ersetzt oder der Link auf einem anderen Server erstellt. Koppeln Sie ihn mit dem Code oben oder öffnen Sie den aktuellen Link des Bildschirms im Dashboard.', share_shared_by: 'Geteilt von {name}', share_guest: 'Gast', share_connecting: 'Verbindung mit {name} wird hergestellt…', share_code_title: 'Teilen Sie hier Ihren Bildschirm', share_code_hint: 'Öffnen Sie {url} und geben Sie ein',
       },
       pt: {
-        web_player: 'Player web', server_url: 'URL do servidor', server_url_placeholder: 'https://sign.seudominio.com', connect: 'Conectar', pairing_code: 'Código de pareamento', pairing_hint: 'Digite este código no painel para parear esta tela', connecting: 'Conectando...', connecting_muted: 'Conectando (áudio mudo)...', info_title: 'Player web ScreenTinker', info_close_hint: 'Pressione Voltar novamente ou clique para fechar', info_device_id: 'ID do dispositivo', info_device_name: 'Nome do dispositivo', info_server: 'Servidor', info_status: 'Status', info_now_playing: 'Reproduzindo', info_resolution: 'Resolução', info_uptime: 'Tempo ativo', info_platform: 'Plataforma', info_cache: 'Cache', info_connected: 'Conectado', info_disconnected: 'Desconectado', info_active: 'Ativo', info_inactive: 'Inativo', info_nothing: 'Nada', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'Nada programado no momento', preview_webpage_blocked: 'Se esta área estiver em branco, o site bloqueia a incorporação e também não será exibido no dispositivo. Tente uma página que a permita.',
+        web_player: 'Player web', server_url: 'URL do servidor', server_url_placeholder: 'https://sign.seudominio.com', connect: 'Conectar', pairing_code: 'Código de pareamento', pairing_hint: 'Digite este código no painel para parear esta tela', connecting: 'Conectando...', connecting_muted: 'Conectando (áudio mudo)...', info_title: 'Player web Pixel', info_close_hint: 'Pressione Voltar novamente ou clique para fechar', info_device_id: 'ID do dispositivo', info_device_name: 'Nome do dispositivo', info_server: 'Servidor', info_status: 'Status', info_now_playing: 'Reproduzindo', info_resolution: 'Resolução', info_uptime: 'Tempo ativo', info_platform: 'Plataforma', info_cache: 'Cache', info_connected: 'Conectado', info_disconnected: 'Desconectado', info_active: 'Ativo', info_inactive: 'Inativo', info_nothing: 'Nada', info_na: 'N/D', info_sw: 'Service Worker', nothing_scheduled: 'Nada programado no momento', preview_webpage_blocked: 'Se esta área estiver em branco, o site bloqueia a incorporação e também não será exibido no dispositivo. Tente uma página que a permita.',
         // 3.0: display link refused, screen share
         enrol_key_refused: 'Esta tela foi aberta com um link de tela (o código k= no endereço) que este servidor não reconhece. A tela pode ter sido excluída, o link substituído ou o link criado em outro servidor. Pareie com o código acima ou abra o link atual da tela pelo painel.', share_shared_by: 'Compartilhado por {name}', share_guest: 'convidado', share_connecting: 'Conectando a {name}…', share_code_title: 'Compartilhe sua tela aqui', share_code_hint: 'Acesse {url} e digite',
       },
@@ -2732,7 +2731,7 @@
         const tapOverlay = document.createElement('div');
         tapOverlay.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;background:#232323;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer';
         tapOverlay.innerHTML = `
-          <h1 style="color:#c0394b;font-size:3.6rem;font-family:sans-serif;margin-bottom:1.2rem">Pixel Content Hub</h1>
+          <h1 style="color:#c0394b;font-size:3.6rem;font-family:sans-serif;margin-bottom:1.2rem">Pixel Web Player</h1>
           <p style="color:#bbbbbb;font-size:1.8rem;font-family:sans-serif">Tap anywhere to start</p>
           <p style="color:#9a9a9a;font-size:1.3rem;font-family:sans-serif;margin-top:2.4rem">Audio requires user interaction</p>
         `;
@@ -9132,7 +9131,7 @@
           ctx.fillStyle = '#c0394b';
           ctx.font = 'bold 28px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText('ScreenTinker Web Player', W / 2, H / 2 - 40);
+          ctx.fillText('Pixel Web Player', W / 2, H / 2 - 40);
           ctx.fillStyle = '#bbbbbb';
           ctx.font = '16px sans-serif';
           const item = playlist[currentIndex];
