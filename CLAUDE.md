@@ -118,6 +118,10 @@ A screen can exist with no player behind it, so its playlists and schedules can 
 - `lib/device-player.js` does both. A reset drops the screen's device token, enrolment key and fingerprints, so the old player can't come back as it, and tells that player to show a new pairing code. Attaching reuses the org-import "pair into" merge (`lib/trust/import-screens.js`): the screen moves onto the new player's row id and keeps everything else.
 - API responses carry `player_attached` (`lib/device-sanitize.js`); the dashboard shows "No player" for a screen without one. `test/pixel-player-reset.test.js` covers it.
 
+### Screen previews
+
+Each screenshot costs the player, so previews aren't live by default. The Screens page refreshes previews every 2 minutes (`PIXEL_PREVIEW_REFRESH_MS` in `views/dashboard.js`), and each card has a refresh button. A screen's Now Playing preview refreshes once a minute (`PIXEL_PREVIEW_IDLE_MS` in `views/device-detail.js`), with "Refresh preview" for one on request and "Start live view" for a frame every 5 seconds plus the live video tile.
+
 ### Removed from upstream
 
 **Player rollouts page.** Platform admins' Player rollouts page is removed from the dashboard (`views/admin.js`); its place in the sidebar is "Player App Downloads", a link to the downloads page (`/download/`, titled "Download a Pixel Content Hub player"). The server's rollout logic is unchanged.

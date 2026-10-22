@@ -210,6 +210,25 @@ let shellHandler = null;
 let ptyState = null;
 let diagPollTimer = null; // polls a diag-smoothness widget's reported frame stats while the page is open
 let screenshotInterval = null;
+const PIXEL_PREVIEW_IDLE_MS = 60 * 1000;   // Pixel: how often the preview refreshes when not live
+
+/* Pixel: switch the Now Playing preview between live (every 5 s + WebRTC tile) and an occasional refresh. */
+function setPreviewLive(deviceId, live) {
+  if (screenshotInterval) clearInterval(screenshotInterval);
+  screenshotInterval = setInterval(() => {
+    if (!document.hidden) requestScreenshot(deviceId);
+  }, live ? 5000 : PIXEL_PREVIEW_IDLE_MS);
+  if (live) { requestScreenshot(deviceId); startLiveTile(deviceId); } else stopLiveTile();
+  const btn = document.getElementById('previewLiveBtn');
+  if (btn) {
+    btn.setAttribute('aria-pressed', live ? 'true' : 'false');
+    btn.textContent = t(live ? 'device.preview.live_stop' : 'device.preview.live_start');
+    btn.classList.toggle('btn-primary', live);
+    btn.classList.toggle('btn-secondary', !live);
+  }
+  const hint = document.getElementById('previewHint');
+  if (hint) hint.textContent = t(live ? 'device.preview.hint_live' : 'device.preview.hint_idle');
+}
 let liveViewer = null;        // #go2rtc WebRTC viewer for the Now Playing tile
 let liveViewerDispose = null; // IntersectionObserver disposer for the live tile
 let remoteActive = false;
@@ -869,6 +888,16 @@ async function loadDevice(deviceId, activeTab = null) {
               </div>`
           }
         </div>
+        ${/* Pixel: live preview is off until asked for; otherwise the preview refreshes now and then. */
+          can('remote.screenshot') && device.status === 'online' ? `
+        <div class="preview-controls">
+          <button class="btn btn-secondary btn-sm" id="previewLiveBtn" aria-pressed="false">${t('device.preview.live_start')}</button>
+          <button class="btn btn-secondary btn-sm preview-refresh" id="previewRefreshBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+            ${t('device.preview.refresh')}
+          </button>
+          <span class="preview-hint" id="previewHint">${t('device.preview.hint_idle')}</span>
+        </div>` : ''}
         <p id="nowPlayingInfo" style="color:var(--text-secondary);font-size:13px;">
           ${device.mirror_source ? esc(mirrorPlayingText(device))
             : device.assignments?.length ? tn('device.playlist_count', device.assignments.length) : t('device.no_content_assigned')}
@@ -1733,13 +1762,21 @@ async function loadDevice(deviceId, activeTab = null) {
     // because nothing re-requested it — the device only sends a frame on an explicit request or during
     // a live Remote session. Poll every 5s while this page is open so the Now Playing preview stays
     // current (cleared on view teardown). A Remote session streams at its own faster rate on top.
+    //
+    // Pixel: live (a frame every 5 s, plus the WebRTC tile) only after "Start live view", because each
+    // capture costs the player. Otherwise one frame now and one every PIXEL_PREVIEW_IDLE_MS, and
+    // "Refresh preview" asks for one on request.
     if (device.status === 'online') {
       requestScreenshot(deviceId);
-      if (screenshotInterval) clearInterval(screenshotInterval);
-      screenshotInterval = setInterval(() => {
-        if (!document.hidden) requestScreenshot(deviceId);
-      }, 5000);
-      startLiveTile(deviceId);
+      setPreviewLive(deviceId, false);
+      const liveBtn = document.getElementById('previewLiveBtn');
+      liveBtn?.addEventListener('click', () => setPreviewLive(deviceId, liveBtn.getAttribute('aria-pressed') !== 'true'));
+      const refreshBtn = document.getElementById('previewRefreshBtn');
+      refreshBtn?.addEventListener('click', () => {
+        requestScreenshot(deviceId);
+        refreshBtn.classList.add('is-spinning');
+        setTimeout(() => refreshBtn.classList.remove('is-spinning'), 1500);
+      });
     }
 
   } catch (err) {

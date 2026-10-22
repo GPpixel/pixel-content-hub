@@ -1076,6 +1076,11 @@ export default {
         'Herstart dit scherm eenmaal per dag op dit lokale tijdstip van het apparaat (laat leeg om uit te schakelen). Een correcte nachtelijke herstart ruimt geheugenlekken op en synchroniseert de klok opnieuw. Stil op schermen met apparaateigenaar; doet niets op schermen die zichzelf niet kunnen herstarten.',
     'device.form.save_settings': 'Instellingen opslaan',
     // #150 re-adopt: restore a removed device's saved settings onto this one
+    'device.preview.live_start': "Live weergave starten",
+    'device.preview.live_stop': "Live weergave stoppen",
+    'device.preview.refresh': "Voorbeeld vernieuwen",
+    'device.preview.hint_idle': "Het voorbeeld wordt elke minuut bijgewerkt.",
+    'device.preview.hint_live': "Live: het voorbeeld wordt om de paar seconden bijgewerkt.",
     'device.player.button': "Speler resetten of vervangen",
     'device.player.title': "Speler resetten of vervangen",
     'device.player.intro': "{name} houdt zijn naam, groepen, afspeellijsten, planningen en instellingen, wat je hier ook doet. Alleen de speler verandert.",

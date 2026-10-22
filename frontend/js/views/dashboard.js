@@ -63,6 +63,8 @@ let connectedHandler = null;
  * "Create Video Wall" builds two walls. Three visits, three of each.
  */
 let selectChangeHandler = null;
+let refreshShotHandler = null;
+const PIXEL_PREVIEW_REFRESH_MS = 2 * 60 * 1000;   // Pixel: a card's refresh-preview button
 let selectionActionHandler = null;
 let selectionGroupHandler = null;
 // device_id -> { content_name, duration_sec, started_at }
@@ -258,6 +260,9 @@ function renderDeviceCard(device) {
               <span>${t('dashboard.no_preview')}</span>
             </div>`
         }
+        ${canShot && device.status === 'online' ? `<button type="button" class="device-card-refresh" data-refresh-shot="${device.id}" title="${esc(t('device.preview.refresh'))}" aria-label="${esc(t('device.preview.refresh'))}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>` : ''}
         <div class="device-card-status is-liveness">
           ${(() => { const b = livenessBadge(device, { short: true }); return `<span class="device-status-badge ${b.state}" data-liveness="${b.state}" data-offline-reason="${esc(b.reason)}"${b.title ? ` title="${esc(b.title)}"` : ''}>${esc(b.label)}</span>`; })()}
         </div>
@@ -861,6 +866,7 @@ export function render(container) {
    * removeEventListener with a handler that was never added is a no-op.
    */
   if (selectChangeHandler) container.removeEventListener('change', selectChangeHandler);
+  if (refreshShotHandler) container.removeEventListener('click', refreshShotHandler, true);
   if (selectionActionHandler) container.removeEventListener('click', selectionActionHandler);
   if (selectionGroupHandler) container.removeEventListener('click', selectionGroupHandler);
 
@@ -873,6 +879,19 @@ export function render(container) {
     refreshSelectionBar();
   };
   container.addEventListener('change', selectChangeHandler);
+
+  // Pixel: refresh one card's preview on request. Capture phase, so the card's own click (open the
+  // screen) never sees it.
+  refreshShotHandler = (ev) => {
+    const btn = ev.target.closest?.('[data-refresh-shot]');
+    if (!btn) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    requestScreenshot(btn.dataset.refreshShot);
+    btn.classList.add('is-spinning');
+    setTimeout(() => btn.classList.remove('is-spinning'), 1500);
+  };
+  container.addEventListener('click', refreshShotHandler, true);
 
   const visibleDeviceCards = (bar) => [...bar.parentElement.querySelectorAll('.device-card[data-device-id]')]
     .filter(card => card.style.display !== 'none');
@@ -1032,7 +1051,9 @@ export function render(container) {
     });
   };
   setTimeout(pollScreenshots, 2000);
-  refreshInterval = setInterval(pollScreenshots, 30000);
+  // Pixel: every 2 minutes rather than 30 s, because each capture costs the player. A card's refresh
+  // button gets a fresh one on request.
+  refreshInterval = setInterval(() => { if (!document.hidden) pollScreenshots(); }, PIXEL_PREVIEW_REFRESH_MS);
 }
 
 function refreshSelectionBar() {
@@ -1871,10 +1892,12 @@ export function cleanup() {
   const host = document.getElementById('app');
   if (host) {
     if (selectChangeHandler) host.removeEventListener('change', selectChangeHandler);
+    if (refreshShotHandler) host.removeEventListener('click', refreshShotHandler, true);
     if (selectionActionHandler) host.removeEventListener('click', selectionActionHandler);
     if (selectionGroupHandler) host.removeEventListener('click', selectionGroupHandler);
   }
   selectChangeHandler = null;
+  refreshShotHandler = null;
   selectionActionHandler = null;
   selectionGroupHandler = null;
 

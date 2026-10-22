@@ -2700,6 +2700,11 @@ export default {
   'device.form.dither_none': 'None (threshold)',
   'device.form.dither_hint': 'Choose "None" for solid black areas without error-diffusion dots.',
   // #150 re-adopt: restore a removed device's saved settings onto this one
+  'device.preview.live_start': "Start live view",
+  'device.preview.live_stop': "Stop live view",
+  'device.preview.refresh': "Refresh preview",
+  'device.preview.hint_idle': "The preview updates once a minute.",
+  'device.preview.hint_live': "Live: the preview updates every few seconds.",
   'device.player.button': "Reset or replace player",
   'device.player.title': "Reset or replace player",
   'device.player.intro': "{name} keeps its name, groups, playlists, schedules and settings whatever you do here. Only the player behind it changes.",
