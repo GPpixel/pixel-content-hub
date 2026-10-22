@@ -5052,6 +5052,7 @@ export default {
   'migrate.simple.help_body': 'Haal je media, afspeellijsten, planningen en schermen over uit Xibo, Yodeck, ScreenCloud, Screenly, Anthias of een map met bestanden.',
   'library.add.src_migrate': 'Uit een ander signagesysteem',
   'library.add.src_migrate_desc': 'Importeer media, afspeellijsten, planningen en schermen uit Xibo, Yodeck, ScreenCloud en meer',
+  'nav.platform.downloads': 'Speler-apps downloaden',
   'nav.platform.privacy': 'Gegevens en privacy',
   'platform.tab.privacy': 'Gegevens en privacy',
   'trust.platform.title': 'Gegevens en privacy',

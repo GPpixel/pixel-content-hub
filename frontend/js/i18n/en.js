@@ -4962,6 +4962,7 @@ export default {
   'report.kiosk.col.errors': 'Ended by error',
   'report.kiosk.deleted_widget': '(deleted web page)',
   // Player rollouts (Platform; server lib/ota-rollout.js)
+  'nav.platform.downloads': 'Player App Downloads',
   'nav.platform.rollouts': 'Player rollouts',
   'platform.tab.rollouts': 'Player rollouts',
   'platform.rollouts.title': 'Player rollouts',

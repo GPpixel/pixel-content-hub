@@ -120,7 +120,7 @@ A screen can exist with no player behind it, so its playlists and schedules can 
 
 ### Removed from upstream
 
-**Player rollouts page.** Platform admins' Player rollouts page is removed from the dashboard (`views/admin.js`); its place in the sidebar links to the downloads page (`/download/`, titled "Download a Pixel Content Hub player"). The server's rollout logic is unchanged.
+**Player rollouts page.** Platform admins' Player rollouts page is removed from the dashboard (`views/admin.js`); its place in the sidebar is "Player App Downloads", a link to the downloads page (`/download/`, titled "Download a Pixel Content Hub player"). The server's rollout logic is unchanged.
 
 
 **Raspberry Pi player.** Upstream's native Raspberry Pi player is removed: its packaging (`native/packaging/linux/`), `scripts/raspberry-pi-setup.sh`, the `/download/pi` and `/api/pi/update/check` routes (`routes/pi-update.js`, `lib/deb-cache.js`), the Pi build steps in the Dockerfile and the release, upgrade and Debian setup scripts, the Raspberry Pi button under Add display, and `docs/pi-native-player.md`. `test/download-index.test.js` checks the download page offers no Pi player.
