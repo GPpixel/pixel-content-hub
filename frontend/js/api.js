@@ -459,6 +459,10 @@ export const api = {
   // and the re-adopt action that applies a snapshot onto a newly-paired device.
   getRemovedDevices: () => request('/devices/removed'),
   reAdoptDevice: (id, fingerprint) => request(`/devices/${id}/re-adopt`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
+  // Pixel: reset a screen without losing its setup, and attach a new player by pairing code.
+  createScreenWithoutPlayer: (name) => request('/devices/without-player', { method: 'POST', body: JSON.stringify({ name }) }),
+  detachPlayer: (id) => request(`/devices/${id}/detach-player`, { method: 'POST', body: '{}' }),
+  attachPlayer: (id, pairingCode, replace) => request(`/devices/${id}/attach-player`, { method: 'POST', body: JSON.stringify({ pairing_code: pairingCode, replace: !!replace }) }),
   setDevicePin: (id, body) => request(`/devices/${id}/settings-pin`, { method: 'POST', body: JSON.stringify(body) }),
 
   // #109 PiP overlay: push/clear a floating overlay on a device or group. `id` may be a

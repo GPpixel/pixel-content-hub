@@ -75,9 +75,9 @@ test('every device-row response in devices.js passes through the token filter', 
   assert.match(src, /stripSecretsForTokens\(device, req\.viaToken\)/,
     'GET /:id must filter the row for token callers');
 
-  // The two echo paths that return a device after a write.
+  // The echo paths that return a device after a write (rename, re-adopt, and Pixel's detach-player).
   const echoes = src.match(/res\.json\(stripSecretsForTokens\(stripDeviceSecrets\(updated\), req\.viaToken\)\)/g) || [];
-  assert.equal(echoes.length, 2, `expected both write echoes to filter, found ${echoes.length}`);
+  assert.equal(echoes.length, 3, `expected every write echo to filter, found ${echoes.length}`);
 
   // The narrower old name must not come back on a call site and quietly reinstate the gap.
   assert.ok(!/stripTriggerSecretForTokens\s*\(/.test(src),

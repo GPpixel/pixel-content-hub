@@ -7,6 +7,10 @@
 // before it leaves the server.
 function stripDeviceSecrets(d) {
   if (!d || typeof d !== 'object') return d;
+  // Pixel: whether a player holds this screen's identity (false after a reset, until one is attached).
+  // A replica's copy of a primary's screen carries neither the token nor the PIN, so a row with no PIN
+  // reads as attached, which is what the primary says for nearly all of them.
+  if ('device_token' in d) d.player_attached = !!d.device_token || !d.settings_pin;
   delete d.device_token;
   // View-only share link: only its own admin route reveals it (routes/devices.js GET /:id/view).
   delete d.view_token_hash;

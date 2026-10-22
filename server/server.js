@@ -3053,6 +3053,32 @@ app.post('/api/devices/web-player', requireAuth, resolveTenancy, checkDeviceLimi
   });
 });
 
+/*
+ * Pixel: create a screen with no player yet, so its playlists and schedules can be set up first. It
+ * has no device token or enrolment key, so nothing can connect as it until a player is attached from
+ * its page (POST /api/devices/:id/attach-player, lib/device-player.js).
+ */
+app.post('/api/devices/without-player', requireAuth, resolveTenancy, checkDeviceLimit, (req, res) => {
+  if (require('./lib/tenancy').denyReadOnly(req, res)) return;
+  if (!req.workspaceId) return res.status(400).json({ error: 'No active workspace' });
+  const { name } = req.body || {};
+  const id = require('uuid').v4();
+  const deviceName = (typeof name === 'string' && name.trim())
+    ? name.trim().slice(0, 200)
+    : 'Display ' + (db.prepare('SELECT COUNT(*) as count FROM devices WHERE user_id = ?').get(req.user.id).count + 1);
+  // 'offline', not 'provisioning': the sweep deletes unclaimed provisioning rows.
+  db.prepare(`INSERT INTO devices (id, name, user_id, workspace_id, status, settings_pin, created_at, updated_at)
+              VALUES (?, ?, ?, ?, 'offline', ?, strftime('%s','now'), strftime('%s','now'))`)
+    .run(id, deviceName, req.user.id, req.workspaceId, sixDigitCode());
+  const sanitize = require('./lib/device-sanitize');
+  const created = db.prepare('SELECT * FROM devices WHERE id = ?').get(id);
+  try {
+    const { workspaceRoom: wsRoom, emitToWorkspace: emitWs } = require('./lib/socket-rooms');
+    emitWs(io.of('/dashboard'), wsRoom(req.workspaceId), 'dashboard:device-added', sanitize.stripDeviceSecretsForList({ ...created }));
+  } catch (e) { /* the dashboard refreshes anyway */ }
+  res.status(201).json(sanitize.stripDeviceSecrets(created));
+});
+
 app.post('/api/provision/pair', requireAuth, resolveTenancy, checkDeviceLimit, (req, res) => {
   // ⚠️ A read-only member must not claim screens into the workspace. Checked before the lockout
   // bookkeeping so a viewer's attempts neither pair nor burn the IP's guess budget.

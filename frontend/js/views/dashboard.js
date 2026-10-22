@@ -672,12 +672,6 @@ export function render(container) {
     document.getElementById('pairingCodeInput').value = '';
     document.getElementById('deviceNameInput').value = '';
     document.getElementById('pairingCodeInput').focus();
-
-    const serverUrl = `${window.location.protocol}//${window.location.host}`;
-    const el = document.getElementById('addDeviceServerUrl');
-    if (el) el.textContent = serverUrl;
-    const tvEl = document.getElementById('addDeviceSmartTvUrl');
-    if (tvEl) tvEl.textContent = `${serverUrl}/player`;
   });
 
   // #device-owner: provision a fresh/factory-reset Android panel straight from Add Display.
@@ -754,17 +748,36 @@ export function render(container) {
   const noStorageBox = document.getElementById('addDeviceNoStorage');
   const codeGroup = document.getElementById('pairingCodeGroup');
   const introEl = document.getElementById('addDeviceIntro');
+  // Pixel: 'code' pairs a player now, 'noplayer' creates the screen and a player is attached later.
+  const addMode = () => (noStorageBox?.checked ? 'url'
+    : (document.querySelector('input[name="addDisplayMode"]:checked')?.value === 'noplayer' ? 'noplayer' : 'code'));
   const syncMode = () => {
-    const noStorage = !!noStorageBox?.checked;
-    if (codeGroup) codeGroup.style.display = noStorage ? 'none' : '';
-    if (introEl) introEl.textContent = noStorage ? t('add_display.intro_no_storage') : t('add_display.intro');
-    pairBtn.textContent = noStorage ? t('add_display.create_btn') : t('add_display.pair_btn');
+    const mode = addMode();
+    if (codeGroup) codeGroup.style.display = mode === 'code' ? '' : 'none';
+    const noStorageRow = noStorageBox?.closest('label');
+    if (noStorageRow) noStorageRow.style.display = mode === 'noplayer' ? 'none' : 'flex';
+    if (introEl) introEl.textContent = t({ url: 'add_display.intro_no_storage', noplayer: 'add_display.intro_no_player', code: 'add_display.intro' }[mode]);
+    pairBtn.textContent = t({ url: 'add_display.create_btn', noplayer: 'add_display.create_no_player_btn', code: 'add_display.pair_btn' }[mode]);
   };
   noStorageBox?.addEventListener('change', syncMode);
+  document.querySelectorAll('input[name="addDisplayMode"]').forEach((r) => r.addEventListener('change', syncMode));
   syncMode();
 
   pairBtn.onclick = async () => {
     const name = document.getElementById('deviceNameInput').value.trim();
+
+    if (addMode() === 'noplayer') {
+      try {
+        const created = await api.createScreenWithoutPlayer(name || undefined);
+        document.getElementById('addDeviceModal').style.display = 'none';
+        showToast(t('add_display.created_no_player'), 'success');
+        window.location.hash = `/device/${created.id}`;
+      } catch (err) {
+        if (err.planPromptShown) { document.getElementById('addDeviceModal').style.display = 'none'; return; }
+        showToast(err.message, 'error');
+      }
+      return;
+    }
 
     if (noStorageBox?.checked) {
       try {
@@ -828,6 +841,8 @@ export function render(container) {
     if (result) result.style.display = 'none';
     const pairBtnEl = document.getElementById('pairDeviceBtn');
     if (pairBtnEl) pairBtnEl.style.display = '';
+    const codeMode = document.querySelector('input[name="addDisplayMode"][value="code"]');
+    if (codeMode) codeMode.checked = true;
     const box = document.getElementById('addDeviceNoStorage');
     if (box) {
       box.checked = false;

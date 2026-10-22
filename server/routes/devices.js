@@ -1497,6 +1497,65 @@ router.post('/:id/re-adopt', (req, res) => {
   res.json(stripSecretsForTokens(stripDeviceSecrets(updated), req.viaToken));
 });
 
+// Pixel: reset a screen (let its player go, keep its setup) and attach a new player by pairing
+// code. See lib/device-player.js.
+const devicePlayer = require('../lib/device-player');
+
+router.post('/:id/detach-player', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (device.mirror_of) return res.status(400).json({ error: 'A mirror has no player of its own to reset' });
+  require('../lib/corporate/guard').auditMandatedAction(req, device, 'detach_player');
+  const hadPlayer = devicePlayer.hasPlayer(device);
+  devicePlayer.detach(db, device.id);
+  if (hadPlayer) devicePlayer.releasePlayer(req.app.get('io'), device.id);
+  require('../lib/audit').auditFromReq(req, 'device.player_detached', { workspace_id: device.workspace_id, device_id: device.id });
+  const updated = db.prepare('SELECT * FROM devices WHERE id = ?').get(device.id);
+  const io = req.app.get('io');
+  if (io) {
+    const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
+    emitToWorkspace(io.of('/dashboard'), workspaceRoom(device.workspace_id), 'dashboard:device-status', { device_id: device.id, status: 'offline' });
+  }
+  res.json(stripSecretsForTokens(stripDeviceSecrets(updated), req.viaToken));
+});
+
+router.post('/:id/attach-player', (req, res) => {
+  const device = checkDeviceOwnership(req, res);
+  if (!device) return;
+  if (device.mirror_of) return res.status(400).json({ error: 'A mirror has no player of its own to replace' });
+  const code = String((req.body || {}).pairing_code || '').trim();
+  if (!code) return res.status(400).json({ error: 'pairing_code required' });
+  // Replacing a working player has to be asked for, so a typo can't take a screen off its player.
+  const hadPlayer = devicePlayer.hasPlayer(device);
+  if (hadPlayer && !(req.body || {}).replace) {
+    return res.status(409).json({ error: 'This screen already has a player. Confirm to replace it.', code: 'has_player' });
+  }
+  const pairLockout = require('../lib/pair-lockout');
+  const ip = getClientIp(req);
+  if (pairLockout.isLocked(ip)) return res.status(429).json({ error: 'Too many failed pairing attempts. Try again in a few minutes.' });
+  require('../lib/corporate/guard').auditMandatedAction(req, device, 'attach_player');
+
+  const io = req.app.get('io');
+  const live = (id) => { try { const room = io.of('/device').adapter.rooms.get(id); return !!(room && room.size); } catch (_) { return false; } };
+  const r = devicePlayer.attach(db, device, code, { live });
+  if (r.error) {
+    if (r.guess) pairLockout.recordFailure(ip);
+    return res.status(r.status).json({ error: r.error });
+  }
+  pairLockout.reset(ip);
+
+  if (hadPlayer) devicePlayer.releasePlayer(io, device.id);
+  if (io) {
+    io.of('/device').to(r.device.id).emit('device:paired', { device_id: r.device.id, name: r.device.name, settings_pin: r.device.settings_pin || undefined });
+    const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
+    const room = workspaceRoom(r.device.workspace_id);
+    emitToWorkspace(io.of('/dashboard'), room, 'dashboard:device-removed', { device_id: r.previous_id });
+    emitToWorkspace(io.of('/dashboard'), room, 'dashboard:device-added', stripDeviceSecretsForList({ ...r.device }));
+  }
+  require('../lib/audit').auditFromReq(req, 'device.player_attached', { workspace_id: r.device.workspace_id, device_id: r.device.id, previous_id: r.previous_id, replaced: hadPlayer });
+  res.json(stripSecretsForTokens(stripDeviceSecrets({ ...r.device }), req.viaToken));
+});
+
 // Delete device
 router.delete('/:id', (req, res) => {
   const device = checkDeviceOwnership(req, res);

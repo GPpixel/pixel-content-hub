@@ -376,9 +376,9 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 1 0 0 20c.9 0 1.5-.7 1.5-1.5 0-.4-.1-.7-.4-1-.2-.3-.4-.6-.4-1 0-.8.7-1.5 1.5-1.5H16a6 6 0 0 0 6-6c0-4.4-4.5-8-10-8z"/></svg>
             <span data-i18n="nav.platform.branding">Branding</span>
           </a></li>
-          <li class="platform-nav" style="display:none"><a href="#/platform/rollouts" class="nav-link" data-view="platform-rollouts">
+          <li class="platform-nav" style="display:none"><a href="/download/" target="_blank" rel="noopener" class="nav-link">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
-            <span data-i18n="nav.platform.rollouts">Player rollouts</span>
+            <span data-i18n="add_display.all_downloads">All players &amp; downloads</span>
           </a></li>
           <li class="platform-nav" style="display:none"><a href="#/platform/system" class="nav-link" data-view="platform-system">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/></svg>
@@ -440,11 +440,15 @@
       <div class="modal-body">
        <div id="addDeviceForm">
         <!--
-          3.0: the one thing most people opening this dialog have is a code, so it comes first. The
-          player downloads, the server URL and the edge cases (players that cannot stay paired,
-          device-owner provisioning) are all still here, folded below in the order they are needed.
-          Every id is unchanged: dashboard.js and device-owner-qr-modal.js drive them as before.
+          Pixel: pair with a code, or create the screen now and attach a player later from its page
+          (Reset or replace player). The player downloads are one link to /download/, which lists
+          every player with its setup guide and this server's URL. The edge cases (players that
+          cannot stay paired, device-owner provisioning) are folded under Advanced options.
         -->
+        <div class="add-display-modes" role="radiogroup">
+          <label class="add-display-mode"><input type="radio" name="addDisplayMode" value="code" checked><span data-i18n="add_display.mode_code">I have a 6-digit code</span></label>
+          <label class="add-display-mode"><input type="radio" name="addDisplayMode" value="noplayer"><span data-i18n="add_display.mode_no_player">Don&#39;t have a code yet? Create without a player</span></label>
+        </div>
         <p class="modal-description" style="margin-bottom:16px" id="addDeviceIntro" data-i18n="add_display.intro">Enter the 6-digit pairing code shown on the display.</p>
         <div class="form-group" id="pairingCodeGroup">
           <label data-i18n="add_display.pairing_code">Pairing Code</label>
@@ -454,38 +458,10 @@
           <label data-i18n="add_display.display_name">Display Name (optional)</label>
           <input type="text" id="deviceNameInput" data-i18n-placeholder="add_display.name_placeholder" placeholder="e.g., Lobby TV" class="input">
         </div>
-        <details class="add-display-section" id="addDeviceGetPlayer">
-          <summary data-i18n="add_display.no_code_yet">Don't have a code yet? Get the player app</summary>
-          <p style="font-size:12px;color:var(--text-muted,#64748b);margin:10px 0" data-i18n="add_display.need_player">Need a player app? Install one to get a pairing code:</p>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
-            <a href="/player" target="_blank" class="btn btn-secondary btn-sm" style="text-decoration:none;justify-content:center;font-size:12px">
-              &#127760; <span data-i18n="add_display.web_player">Web Player</span>
-            </a>
-            <a href="/download/apk" class="btn btn-secondary btn-sm" style="text-decoration:none;justify-content:center;font-size:12px">
-              &#129302; <span data-i18n="add_display.android_apk">Android APK</span>
-            </a>
-            <a href="/scripts/windows-setup.bat" class="btn btn-secondary btn-sm" style="text-decoration:none;justify-content:center;font-size:12px">
-              &#128187; <span data-i18n="add_display.windows">Windows</span>
-            </a>
-          </div>
-           <!--
-             Every player this instance can hand out, and a setup guide for each. The three buttons
-             above cover the common cases; a BrightSign, an LG panel or a Samsung panel needs a
-             different artifact, and an operator holding one of those used to have nowhere to go
-             from here but the marketing site or a GitHub release page. /download is built by this
-             server, so the BrightSign archive it serves already has THIS address inside it.
-           -->
-           <p style="font-size:11px;color:var(--text-muted,#64748b);margin-top:10px;line-height:1.6">
-             <a href="/download/" target="_blank" style="color:var(--primary,#3b82f6);font-weight:600" data-i18n="add_display.all_downloads">All players &amp; downloads</a>
-             <span data-i18n="add_display.all_downloads_hint">&mdash; BrightSign, LG webOS, Samsung Tizen and more, each with a setup guide.</span>
-           </p>
-           <p style="font-size:11px;color:var(--text-muted,#64748b);margin-top:6px;line-height:1.5"><span data-i18n="add_display.smart_tv_prefix">Smart TVs (LG/Samsung): open the built-in browser and navigate to</span> <code id="addDeviceSmartTvUrl" style="background:var(--bg-input,#0f172a);padding:1px 4px;border-radius:3px;white-space:nowrap">/player</code></p>
-           <div style="background:var(--bg-input,#0f172a);border-radius:6px;padding:10px 12px;margin-top:12px;border:1px solid var(--border,#1e293b)">
-             <span style="font-size:11px;color:var(--text-muted,#64748b);font-weight:500" data-i18n="add_display.server_url_label">Server URL</span>
-             <code id="addDeviceServerUrl" style="display:block;font-size:13px;margin:2px 0;color:var(--primary,#3b82f6);word-break:break-all"></code>
-             <span style="font-size:11px;color:var(--text-muted,#64748b)" data-i18n="add_display.server_url_hint">Use this URL when configuring the Android app</span>
-           </div>
-        </details>
+        <div class="add-display-downloads">
+          <span data-i18n="add_display.downloads_hint">Need a player app? Every app and the web player, each with a setup guide.</span>
+          <a href="/download/" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" data-i18n="add_display.all_downloads">All players &amp; downloads</a>
+        </div>
         <details class="add-display-section" id="addDeviceAdvanced">
           <summary data-i18n="add_display.advanced_options">Advanced options</summary>
           <!--

@@ -775,9 +775,17 @@ async function loadDevice(deviceId, activeTab = null) {
           <button data-advanced-ui class="btn btn-secondary btn-sm" id="deviceOwnerBtn" title="${t('device.owner_provision.tip')}">${t('device.owner_provision.btn')}</button>` : ''}
           <button data-advanced-ui class="btn btn-secondary btn-sm" id="moveDeviceBtn">${t('move.button')}</button>
           <button data-advanced-ui class="btn btn-secondary btn-sm" id="blockDeviceBtn">${device.blocked ? 'Unblock' : 'Block'}</button>
+          ${!device.mirror_of ? `<button class="btn btn-secondary btn-sm" id="playerResetBtn">${t('device.player.button')}</button>` : ''}
           <button class="btn btn-danger btn-sm" id="deleteDeviceBtn">${t('device.remove')}</button>
         </div>
       </div>
+
+      ${/* Pixel: a reset screen waits for a player with its setup intact. */
+        device.player_attached === false && !device.mirror_of ? `
+      <div class="info-card" id="noPlayerBanner" style="margin:8px 0;padding:10px 14px;border-left:3px solid var(--accent);display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <span style="flex:1;min-width:220px">${esc(t('device.player.banner'))}</span>
+        <button class="btn btn-primary btn-sm" id="noPlayerAttachBtn">${t('device.player.banner_button')}</button>
+      </div>` : ''}
 
       ${/* tier===2 is kept alongside the capability: it is already an accurate RUNTIME signal from
             the panel, and a device-owner display that has not yet shipped a capability declaration
@@ -2636,6 +2644,79 @@ async function showReAdoptModal(device) {
   });
 }
 
+/*
+ * Pixel: reset the screen (let its player go, keep its setup) or attach a new player by pairing code.
+ * Attaching moves the screen onto the new player's id, so the page reopens at that id.
+ */
+function showPlayerModal(device) {
+  const name = device.name || '';
+  const hasPlayer = device.player_attached !== false;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.style.display = 'flex';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:520px;width:95vw">
+      <div class="modal-header">
+        <h3>${t('device.player.title')}</h3>
+        <button class="btn-icon" id="playerModalClose">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-muted);font-size:13px;margin-top:0">${esc(t('device.player.intro', { name }))}</p>
+        <h4 style="margin:16px 0 6px">${t('device.player.attach_heading')}</h4>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 8px">${t('device.player.attach_help')}</p>
+        <form id="playerAttachForm" style="display:flex;gap:8px">
+          <input id="playerAttachCode" class="input" inputmode="numeric" autocomplete="off" maxlength="32" placeholder="${t('device.player.code_placeholder')}" style="flex:1;letter-spacing:2px">
+          <button class="btn btn-primary" type="submit" id="playerAttachBtn">${t('device.player.attach')}</button>
+        </form>
+        ${hasPlayer ? `
+        <h4 style="margin:22px 0 6px">${t('device.player.reset_heading')}</h4>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 8px">${t('device.player.reset_help')}</p>
+        <button class="btn btn-danger btn-sm" id="playerDetachBtn">${t('device.player.reset')}</button>` : ''}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#playerModalClose').onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  const codeInput = overlay.querySelector('#playerAttachCode');
+  codeInput.focus();
+
+  overlay.querySelector('#playerAttachForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const code = codeInput.value.replace(/\s+/g, '');
+    if (!code) { codeInput.focus(); return; }
+    if (hasPlayer && !confirm(t('device.player.replace_confirm', { name, code }))) return;
+    const btn = overlay.querySelector('#playerAttachBtn');
+    btn.disabled = true;
+    try {
+      const updated = await api.attachPlayer(device.id, code, hasPlayer);
+      showToast(t('device.player.attached', { name: updated.name || name }), 'success');
+      close();
+      if (updated.id && updated.id !== device.id) window.location.hash = `/device/${updated.id}`;
+      else loadDevice(device.id);
+    } catch (err) {
+      showToast(err.message, 'error');
+      btn.disabled = false;
+    }
+  });
+
+  overlay.querySelector('#playerDetachBtn')?.addEventListener('click', async (e) => {
+    if (!confirm(t('device.player.reset_confirm', { name }))) return;
+    e.target.disabled = true;
+    try {
+      await api.detachPlayer(device.id);
+      showToast(t('device.player.reset_done', { name }), 'success');
+      close();
+      loadDevice(device.id);
+    } catch (err) {
+      showToast(err.message, 'error');
+      e.target.disabled = false;
+    }
+  });
+}
+
 function setupActions(device) {
   // #104 Preview button
   // PIN rotate / set. The response says whether the panel took it LIVE: an offline display
@@ -2838,6 +2919,8 @@ function setupActions(device) {
   // #150 re-adopt: apply a previously-removed device's saved settings onto THIS device (the
   // fallback for when the fingerprint changed and automatic restore couldn't fire).
   document.getElementById('reAdoptBtn')?.addEventListener('click', () => showReAdoptModal(device));
+  document.getElementById('playerResetBtn')?.addEventListener('click', () => showPlayerModal(device));
+  document.getElementById('noPlayerAttachBtn')?.addEventListener('click', () => showPlayerModal(device));
 
   // Publish / Discard from device detail
   const devicePublishBtn = document.getElementById('devicePublishBtn');

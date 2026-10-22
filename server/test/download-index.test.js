@@ -251,3 +251,10 @@ test('the native Windows installer is offered only when an .exe is hosted, and t
   assert.equal(hosted.version, '1.2.0');
   assert.ok(!/github/i.test(JSON.stringify(hosted)), 'never a GitHub release link for a player');
 });
+
+test('the downloads page is titled for Pixel Content Hub and links back to the dashboard', () => {
+  const html = di.renderPage({}, 'https://signage.example.com');
+  assert.match(html, /<title>Download a Pixel Content Hub player<\/title>/);
+  assert.match(html, /href="\/app"/);
+  assert.doesNotMatch(html, /ScreenTinker player/);
+});

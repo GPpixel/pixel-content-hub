@@ -249,7 +249,7 @@ function renderPage(state = {}, base = '') {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Download a ScreenTinker player</title>
+<title>Download a Pixel Content Hub player</title>
 <meta name="robots" content="noindex">
 <style>
 :root{--bg:#232323;--card:#2b2b2b;--border:#494949;--text:#f2f2f2;--muted:#bbbbbb;--accent:#c0394b}
@@ -287,8 +287,7 @@ footer a{color:var(--accent)}
 </div>
 ${rows}
 <footer>
-  Nothing here needs a GitHub account. Source and release notes:
-  <a href="https://github.com/screentinker/screentinker" rel="noopener">github.com/screentinker/screentinker</a>.
+  <a href="/app">Back to Pixel Content Hub</a>
 </footer>
 </div>
 </body>

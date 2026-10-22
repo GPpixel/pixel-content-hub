@@ -55,6 +55,10 @@ export function livenessBadge(data, opts = {}) {
   const state = livenessState(data);
   let label = t(LIVENESS_LABEL_KEY[state]);
   let title = '', reason = '';
+  // Pixel: a reset screen waiting for a player says so instead of Offline.
+  if (data && data.player_attached === false && state !== 'provisioning' && state !== 'healthy') {
+    return { state: 'offline', label: t('device.player.no_player'), title: t('device.player.no_player_tip'), reason: '' };
+  }
   if (state === 'offline') {                      // annotate Offline with the manner of death, if known
     const r = data && data.offline_reason, ct = data && data.client_type;
     const sub = offlineReasonLabel(r, ct, opts.short);

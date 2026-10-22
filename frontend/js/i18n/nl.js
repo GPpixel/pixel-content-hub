@@ -1076,6 +1076,24 @@ export default {
         'Herstart dit scherm eenmaal per dag op dit lokale tijdstip van het apparaat (laat leeg om uit te schakelen). Een correcte nachtelijke herstart ruimt geheugenlekken op en synchroniseert de klok opnieuw. Stil op schermen met apparaateigenaar; doet niets op schermen die zichzelf niet kunnen herstarten.',
     'device.form.save_settings': 'Instellingen opslaan',
     // #150 re-adopt: restore a removed device's saved settings onto this one
+    'device.player.button': "Speler resetten of vervangen",
+    'device.player.title': "Speler resetten of vervangen",
+    'device.player.intro': "{name} houdt zijn naam, groepen, afspeellijsten, planningen en instellingen, wat je hier ook doet. Alleen de speler verandert.",
+    'device.player.attach_heading': "Nieuwe speler koppelen",
+    'device.player.attach_help': "Typ de koppelcode die op de nieuwe speler staat. Elke app of de webspeler werkt.",
+    'device.player.code_placeholder': "Koppelcode",
+    'device.player.attach': "Koppelen",
+    'device.player.replace_confirm': "{name} heeft al een speler. Vervangen door de speler met code {code}?\n\nDe huidige speler wordt losgekoppeld en toont een nieuwe koppelcode.",
+    'device.player.attached': "Speler gekoppeld. {name} is klaar om af te spelen.",
+    'device.player.reset_heading': "Resetten zonder nieuwe speler",
+    'device.player.reset_help': "De huidige speler wordt losgekoppeld en toont een nieuwe koppelcode. Dit scherm blijft klaarstaan en je kunt de afspeellijsten en planningen blijven aanpassen. Het begint af te spelen zodra je een speler koppelt.",
+    'device.player.reset': "Scherm resetten",
+    'device.player.reset_confirm': "{name} resetten?\n\nDe huidige speler wordt losgekoppeld. Het scherm houdt zijn afspeellijsten, planningen en instellingen en wacht op een nieuwe speler.",
+    'device.player.reset_done': "{name} is gereset en wacht op een speler.",
+    'device.player.no_player': "Geen speler",
+    'device.player.no_player_tip': "Er is geen speler aan dit scherm gekoppeld. Het houdt zijn instellingen en begint af te spelen zodra je er een koppelt.",
+    'device.player.banner': "Er is geen speler aan dit scherm gekoppeld. De afspeellijsten, planningen en instellingen blijven bewaard en worden afgespeeld zodra je een speler koppelt.",
+    'device.player.banner_button': "Speler koppelen",
     'device.readopt.button': 'Herstellen vanaf verwijderd apparaat…',
     'device.readopt.button_hint':
         'Pas de opgeslagen instellingen van een eerder verwijderd apparaat toe op dit apparaat (voor een opnieuw gekoppeld scherm waarvan de fingerprint is gewijzigd)',
@@ -2035,6 +2053,7 @@ export default {
     // display that cannot come online until someone pastes its URL into the player.
     'onboarding.step.done.intro_url':
         'Je scherm is ingesteld. Plak de URL hieronder in de speler om het online te brengen.',
+    'onboarding.step.done.intro_no_player': "Je scherm staat klaar. Het begint af te spelen zodra je een speler koppelt: open het scherm en gebruik Speler resetten of vervangen.",
     'onboarding.step.done.intro': 'Je scherm is gekoppeld en toont je inhoud. Kijk maar!',
     // 2.0.1: the last step now offers the workspace's existing playlists, so a freshly paired
     // screen can leave the wizard playing something without a trip to Playlists.
@@ -2587,6 +2606,12 @@ export default {
     // Add Display modal (in index.html)
     'add_display.title': 'Scherm toevoegen',
     'add_display.intro': 'Vul de 6-cijferige code in die je scherm toont.',
+    'add_display.mode_code': "Ik heb een code van 6 cijfers",
+    'add_display.mode_no_player': "Nog geen code? Maak aan zonder speler",
+    'add_display.intro_no_player': "Maakt het scherm nu aan, zodat je de afspeellijsten en planningen kunt instellen. Is de speler klaar, open dan het scherm en gebruik Speler resetten of vervangen om hem met zijn koppelcode te koppelen.",
+    'add_display.create_no_player_btn': "Scherm aanmaken",
+    'add_display.created_no_player': "Scherm aangemaakt. Koppel een speler zodra je er een hebt.",
+    'add_display.downloads_hint': "Speler-app nodig? Alle apps en de webspeler, elk met een installatiegids.",
     'add_display.pairing_code': 'Koppelcode',
     'add_display.display_name': 'Schermnaam (optioneel)',
     'add_display.name_placeholder': 'bijv. TV inkomhal',

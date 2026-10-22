@@ -109,7 +109,19 @@ The dashboard never offers a ScreenTinker release, because installing one would 
 
 Upstream's vendor "Support Access" (a support token on the sign-in page, a request-code section in Settings) is removed. The sign-in page and Settings don't show it, `routes/auth.js` answers every `/api/auth/support` endpoint with a 404, and `middleware/auth.js` refuses any support session. `docs/support-access.md` describes the upstream feature, which doesn't apply here. `test/pixel-no-support-access.test.js` checks it stays off.
 
+### Screens without a player
+
+A screen can exist with no player behind it, so its playlists and schedules can be set up before the hardware arrives or while a player is replaced.
+
+- **Add screen** (the Advanced dialog in `index.html` and `dashboard.js`, and the Simple guide in `views/onboarding.js`) offers "I have a 6-digit code" or "Don't have a code yet? Create without a player" (`POST /api/devices/without-player` in `server.js`), plus a button to the downloads page.
+- **Reset or replace player** on a screen's page (`showPlayerModal` in `views/device-detail.js`) resets the screen, letting its player go (`POST /api/devices/:id/detach-player`), or attaches the player showing a pairing code (`POST /api/devices/:id/attach-player`; replacing a working player needs `replace: true`). Any app or the web player works.
+- `lib/device-player.js` does both. A reset drops the screen's device token, enrolment key and fingerprints, so the old player can't come back as it, and tells that player to show a new pairing code. Attaching reuses the org-import "pair into" merge (`lib/trust/import-screens.js`): the screen moves onto the new player's row id and keeps everything else.
+- API responses carry `player_attached` (`lib/device-sanitize.js`); the dashboard shows "No player" for a screen without one. `test/pixel-player-reset.test.js` covers it.
+
 ### Removed from upstream
+
+**Player rollouts page.** Platform admins' Player rollouts page is removed from the dashboard (`views/admin.js`); its place in the sidebar links to the downloads page (`/download/`, titled "Download a Pixel Content Hub player"). The server's rollout logic is unchanged.
+
 
 **Raspberry Pi player.** Upstream's native Raspberry Pi player is removed: its packaging (`native/packaging/linux/`), `scripts/raspberry-pi-setup.sh`, the `/download/pi` and `/api/pi/update/check` routes (`routes/pi-update.js`, `lib/deb-cache.js`), the Pi build steps in the Dockerfile and the release, upgrade and Debian setup scripts, the Raspberry Pi button under Add display, and `docs/pi-native-player.md`. `test/download-index.test.js` checks the download page offers no Pi player.
 

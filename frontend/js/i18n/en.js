@@ -2700,6 +2700,24 @@ export default {
   'device.form.dither_none': 'None (threshold)',
   'device.form.dither_hint': 'Choose "None" for solid black areas without error-diffusion dots.',
   // #150 re-adopt: restore a removed device's saved settings onto this one
+  'device.player.button': "Reset or replace player",
+  'device.player.title': "Reset or replace player",
+  'device.player.intro': "{name} keeps its name, groups, playlists, schedules and settings whatever you do here. Only the player behind it changes.",
+  'device.player.attach_heading': "Attach a new player",
+  'device.player.attach_help': "Type the pairing code shown on the new player. Any of the apps or the web player will do.",
+  'device.player.code_placeholder': "Pairing code",
+  'device.player.attach': "Attach",
+  'device.player.replace_confirm': "{name} already has a player. Replace it with the player showing {code}?\n\nThe current player is disconnected and shows a new pairing code.",
+  'device.player.attached': "Player attached. {name} is ready to play.",
+  'device.player.reset_heading': "Reset without a new player",
+  'device.player.reset_help': "The current player is disconnected and shows a new pairing code. This screen waits with everything set up, and you can keep changing its playlists and schedules. It starts playing as soon as you attach a player.",
+  'device.player.reset': "Reset screen",
+  'device.player.reset_confirm': "Reset {name}?\n\nThe current player is disconnected. The screen keeps its playlists, schedules and settings and waits for a new player.",
+  'device.player.reset_done': "{name} is reset and waiting for a player.",
+  'device.player.no_player': "No player",
+  'device.player.no_player_tip': "This screen has no player attached. It keeps its setup and starts playing when you attach one.",
+  'device.player.banner': "No player is attached to this screen. Its playlists, schedules and settings are kept and start playing as soon as you attach a player.",
+  'device.player.banner_button': "Attach a player",
   'device.readopt.button': 'Restore from removed device…',
   'device.readopt.button_hint': "Apply a previously-removed device's saved settings onto this one (for a re-paired screen whose fingerprint changed)",
   'device.readopt.title': 'Restore settings from a removed device',
@@ -3646,6 +3664,7 @@ export default {
   // #313: the pairing path ends with a screen that is already playing; the URL path ends with a
   // display that cannot come online until someone pastes its URL into the player.
   'onboarding.step.done.intro_url': 'Your screen is set up. Paste the URL below into the player to bring it online.',
+  'onboarding.step.done.intro_no_player': "Your screen is ready. It starts playing as soon as you attach a player: open the screen and use Reset or replace player.",
   'onboarding.step.done.intro': 'Your screen is connected and showing your content. Take a look!',
   // 2.0.1: the last step now offers the workspace's existing playlists, so a freshly paired
   // screen can leave the wizard playing something without a trip to Playlists.
@@ -4304,6 +4323,12 @@ export default {
   // Add Display modal (in index.html)
   'add_display.title': 'Add screen',
   'add_display.intro': 'Type the 6-digit code your screen is showing.',
+  'add_display.mode_code': "I have a 6-digit code",
+  'add_display.mode_no_player': "Don't have a code yet? Create without a player",
+  'add_display.intro_no_player': "Creates the screen now so you can set up its playlists and schedules. When the player is ready, open the screen and use Reset or replace player to attach it with its pairing code.",
+  'add_display.create_no_player_btn': "Create screen",
+  'add_display.created_no_player': "Screen created. Attach a player when you have one.",
+  'add_display.downloads_hint': "Need a player app? Every app and the web player, each with a setup guide.",
   'add_display.pairing_code': 'Pairing Code',
   'add_display.display_name': 'Screen name (optional)',
   'add_display.name_placeholder': 'e.g., Lobby TV',

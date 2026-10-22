@@ -86,7 +86,12 @@ function getSteps(addMode = false) {
     {
       title: t('onboarding.step.pair.title'),
       icon: '&#128279;',
-      content: `<p id="onboardPairIntro" style="color:var(--text-secondary);margin-bottom:16px">${t('onboarding.step.pair.intro')}</p>
+      // Pixel: pair with a code, or create the screen now and attach a player later from its page.
+      content: `<div class="add-display-modes" id="onboardModes" role="radiogroup">
+          <label class="add-display-mode"><input type="radio" name="onboardMode" value="code" checked><span>${t('add_display.mode_code')}</span></label>
+          <label class="add-display-mode"><input type="radio" name="onboardMode" value="noplayer"><span>${t('add_display.mode_no_player')}</span></label>
+        </div>
+        <p id="onboardPairIntro" style="color:var(--text-secondary);margin-bottom:16px">${t('onboarding.step.pair.intro')}</p>
         <div style="text-align:center;margin:20px 0">
           <input type="text" id="onboardPairingCode" maxlength="6" pattern="[0-9]{6}" placeholder="000000"
             style="max-width:240px;width:100%;padding:16px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;
@@ -115,7 +120,11 @@ function getSteps(addMode = false) {
           <div style="margin-top:8px"><button class="btn btn-secondary btn-sm" id="onboardCopyUrlBtn">${t('device.enrol.copy')}</button></div>
           <p style="font-size:11px;color:#fbbf24;margin-top:8px">${t('device.enrol.warning')}</p>
         </div>
-        <p id="onboardPairStatus" style="color:var(--text-muted);font-size:13px;text-align:center;margin-top:12px"></p>`,
+        <p id="onboardPairStatus" style="color:var(--text-muted);font-size:13px;text-align:center;margin-top:12px"></p>
+        <div class="add-display-downloads">
+          <span>${t('add_display.downloads_hint')}</span>
+          <a href="/download/" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">${t('add_display.all_downloads')}</a>
+        </div>`,
       action: 'pair'
     },
     {
@@ -201,7 +210,9 @@ function getSteps(addMode = false) {
     }
   ];
   // 3.0 Add screen (Simple view): the same guide for every later screen, without the welcome.
-  if (addMode) return steps.slice(1);
+  // Pixel: without the player step either; the pair step links to the downloads page instead.
+  // The titles are numbered for the first-run guide ("Step 2: …"); this one starts at the pairing.
+  if (addMode) return steps.slice(2).map((st) => ({ ...st, title: st.title.replace(/^\D*\d+\s*[:：]\s*/, '') }));
   /*
    * 3.0 switch to ScreenTinker: right after the welcome, a new account is asked whether it is coming
    * from another signage app. "No, start fresh" is the Next button, so the guide is exactly what it
@@ -220,6 +231,11 @@ function getSteps(addMode = false) {
   return [steps[0], importStep, ...steps.slice(1)];
 }
 
+/** Pixel: which choice the pair step's "6-digit code / create without a player" toggle is on. */
+function pairMode() {
+  return document.querySelector('input[name="onboardMode"]:checked')?.value === 'noplayer' ? 'noplayer' : 'code';
+}
+
 export function render(container, { mode = 'first' } = {}) {
   // 'add': Simple view's Add screen — the first-run guide for screen two, three... (#/add-screen).
   const addMode = mode === 'add';
@@ -227,6 +243,7 @@ export function render(container, { mode = 'first' } = {}) {
   let pairedDeviceId = null;
   let assignedPlaylistId = null;   // whatever the upload step put on this device, if anything
   let createdPlayerUrl = null;     // #313: set once a no-storage display has been created here
+  let createdWithoutPlayer = false; // Pixel: the screen was created with no player, to attach later
   let sentForReview = false;       // 3.0: the content went to the review queue, not to the screen
   // Playlists in this workspace that have NEVER been published, from the picker's own fetch.
   // Assigning one of these without publishing hands the screen an empty list (see publish()).
@@ -329,15 +346,20 @@ export function render(container, { mode = 'first' } = {}) {
       const intro = document.getElementById('onboardPairIntro');
       const sync = () => {
         const noStorage = !!box?.checked;
+        const noPlayer = !noStorage && pairMode() === 'noplayer';
         // Hidden, not merely optional: a form with two meanings for one input is how someone ends
         // up typing a code into a box that is ignoring it.
-        if (codeWrap) codeWrap.style.display = noStorage ? 'none' : '';
+        if (codeWrap) codeWrap.style.display = noStorage || noPlayer ? 'none' : '';
+        const noStorageWrap = document.getElementById('onboardNoStorageWrap');
+        if (noStorageWrap && !createdPlayerUrl) noStorageWrap.style.display = noPlayer ? 'none' : 'flex';
         // The prose and the button have to move with it. Leaving "Enter the 6-digit code" above a
         // hidden code box, under a button that says Pair, describes a step that is not happening.
-        if (intro) intro.textContent = noStorage ? t('add_display.intro_no_storage') : t('onboarding.step.pair.intro');
-        if (nextBtn) nextBtn.textContent = noStorage ? t('add_display.create_btn') : t('onboarding.pair_display');
+        if (intro) intro.textContent = noStorage ? t('add_display.intro_no_storage') : noPlayer ? t('add_display.intro_no_player') : t('onboarding.step.pair.intro');
+        if (nextBtn) nextBtn.textContent = noStorage ? t('add_display.create_btn') : noPlayer ? t('add_display.create_no_player_btn') : t('onboarding.pair_display');
       };
       box?.addEventListener('change', sync);
+      if (createdWithoutPlayer) { const r = document.querySelector('input[name="onboardMode"][value="noplayer"]'); if (r) r.checked = true; }
+      document.querySelectorAll('input[name="onboardMode"]').forEach((r) => r.addEventListener('change', sync));
       sync();
 
       // A display created earlier in this wizard: show its URL again rather than the form, so
@@ -351,6 +373,7 @@ export function render(container, { mode = 'first' } = {}) {
          */
         if (codeWrap) codeWrap.style.display = 'none';
         document.getElementById('onboardNoStorageWrap').style.display = 'none';
+        document.getElementById('onboardModes').style.display = 'none';
         const nameEl = document.getElementById('onboardDeviceName');
         if (nameEl && nameEl.parentElement) nameEl.parentElement.style.display = 'none';
         const introEl = document.getElementById('onboardPairIntro');
@@ -393,6 +416,10 @@ export function render(container, { mode = 'first' } = {}) {
       if (icon) icon.innerHTML = '&#9203;';
       const intro = document.querySelector('#onboardDonePlayerUrl')?.previousElementSibling;
       if (intro) intro.textContent = t('onboarding.step.done.intro_review');
+    }
+    if (isLast && createdWithoutPlayer && !sentForReview) {
+      const intro = document.querySelector('#onboardDonePlayerUrl')?.previousElementSibling;
+      if (intro) intro.textContent = t('onboarding.step.done.intro_no_player');
     }
     if (isLast) {
       populatePlaylistPicker();
@@ -493,6 +520,23 @@ export function render(container, { mode = 'first' } = {}) {
         return;
       }
       if (noStorage && createdPlayerUrl) { currentStep++; renderStep(); return; }
+
+      // Pixel: create the screen with no player, then carry on to its content like any other screen.
+      if (!noStorage && pairMode() === 'noplayer') {
+        if (pairedDeviceId && createdWithoutPlayer) { currentStep++; renderStep(); return; }
+        try {
+          if (status) status.textContent = '';
+          const created = await api.createScreenWithoutPlayer(name || undefined);
+          pairedDeviceId = created.id;
+          createdWithoutPlayer = true;
+          showToast(t('add_display.created_no_player'), 'success');
+          currentStep++;
+          renderStep();
+        } catch (err) {
+          if (status) status.textContent = err.message || t('onboarding.toast.pair_failed');
+        }
+        return;
+      }
 
       if (!code || code.length !== 6) {
         if (status) status.textContent = t('onboarding.toast.invalid_code');

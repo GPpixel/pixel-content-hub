@@ -222,7 +222,7 @@ async function renderHome(container) {
     <${tag} class="simple-screen" ${canChange ? `href="#/simple/change?device=${encodeURIComponent(d.id)}" title="${esc(t('simple.task.change'))}"` : ''}>
       <span class="simple-screen-shot">${d.screenshot_path ? `<img src="${screenshotUrl(d.id, d.screenshot_at || '')}" alt="">` : '&#128250;'}</span>
       <span class="simple-screen-name">${esc(d.name)}</span>
-      <span class="simple-screen-status ${online(d) ? 'on' : 'off'}" data-sv-plain="${esc(d.id)}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : t('simple.status.offline'))}</span>
+      <span class="simple-screen-status ${online(d) ? 'on' : 'off'}" data-sv-plain="${esc(d.id)}">${esc(d.plan_paused ? t('simple.status.paused') : online(d) ? t('simple.status.online') : d.player_attached === false ? t('device.player.no_player') : t('simple.status.offline'))}</span>
     </${tag}>`;
     // Screen share (an editor, on a screen that can show one) and "What's coming up" under each card.
     const share = sharing && canShareTo(d) ? `

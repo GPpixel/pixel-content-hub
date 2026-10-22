@@ -166,3 +166,19 @@ body {
   /* The menu opens over the page, so it keeps a solid base under the glass, like the modal. */
   .simple-account-menu { background: color-mix(in srgb, var(--bg-secondary) 92%, transparent); }
 }
+
+/* ── Add screen: pair with a code, or create without a player ────────────────────────────────── */
+.add-display-modes { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
+.add-display-mode {
+  flex: 1 1 200px; display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input); color: var(--text-secondary); font-size: 13px;
+}
+.add-display-mode input { accent-color: var(--accent); margin: 0; }
+.add-display-mode:has(input:checked) { border-color: var(--border-light); background: var(--bg-card-hover); color: var(--text-primary); }
+.add-display-downloads {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px;
+  font-size: 12px; color: var(--text-muted);
+}
+.add-display-downloads .btn { text-decoration: none; }
