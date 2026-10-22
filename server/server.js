@@ -3178,6 +3178,10 @@ app.post('/api/provision/pair', requireAuth, resolveTenancy, checkDeviceLimit, (
   const pairedRoom = deviceNs.adapter.rooms.get(device.id);
   if (pairedRoom && pairedRoom.size > 0) deviceNs.to(device.id).emit('device:paired', pairedMsg);
   else if (device.attached_node_id) { try { require('./lib/mesh/command-relay').relayToAttached(db, device.id, 'device:paired', pairedMsg); } catch (e) { /* the screen learns on its next register */ } }
+  // Pixel: send what the screen already plays (restored settings, a group's playlist). The player
+  // only asks for content when it registers, so without this it waits on "Waiting for content"
+  // until it is reloaded.
+  if (pairedRoom && pairedRoom.size > 0) require('./services/scheduler').pushPlaylistToDevice(device.id, deviceNs);
 
   // Time zone fallback: a display still on its image's default zone (Pi OS ships Europe/London)
   // gets the pairing admin's browser zone, when it can set its own (system.time: the native

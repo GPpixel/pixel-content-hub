@@ -42,12 +42,17 @@ function waitingPlayer(id, code) {
 }
 
 const sent = [];
+const connected = new Set();   // device rooms with a player socket in them
 const io = {
   of: (ns) => ({
     to: (room) => ({ emit: (event, payload) => sent.push({ ns, room, event, payload }) }),
     in: () => ({ disconnectSockets: () => {} }),
+    adapter: { rooms: { get: (room) => (ns === '/device' && connected.has(room) ? new Set(['sock']) : undefined) } },
   }),
 };
+
+// The device socket publishes its playlist builder when the server sets it up; this test has no server.
+require('../ws/deviceSocket').buildPlaylistPayload = (id) => ({ device_id: id });
 
 const app = express();
 app.use(express.json());
@@ -86,6 +91,7 @@ test('reset lets the player go and keeps the screen, its schedules and its setti
 
 test('a reset screen takes the player showing a pairing code, with no confirmation', async () => {
   waitingPlayer('p1', '482913');
+  connected.add('p1');
   sent.length = 0;
   const r = await post('/a/attach-player', { pairing_code: '482913' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -99,6 +105,7 @@ test('a reset screen takes the player showing a pairing code, with no confirmati
   assert.notEqual(d.status, 'provisioning', 'not swept as an unclaimed screen');
   assert.equal(db.prepare('SELECT device_id FROM schedules WHERE id = ?').get('sch-a').device_id, 'p1', 'schedule follows the screen');
   assert.ok(sent.some(s => s.room === 'p1' && s.event === 'device:paired'));
+  assert.ok(sent.some(s => s.room === 'p1' && s.event === 'device:playlist-update'), 'the new player gets the screen\'s content without a reload');
 });
 
 test('replacing a working player has to be confirmed, then the old player is let go', async () => {

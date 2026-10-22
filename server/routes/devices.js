@@ -1547,6 +1547,9 @@ router.post('/:id/attach-player', (req, res) => {
   if (hadPlayer) devicePlayer.releasePlayer(io, device.id);
   if (io) {
     io.of('/device').to(r.device.id).emit('device:paired', { device_id: r.device.id, name: r.device.name, settings_pin: r.device.settings_pin || undefined });
+    // The screen brings its playlist with it. Pairing a new screen has nothing to send yet; this
+    // one does, and the player only asks for content when it registers.
+    require('../services/scheduler').pushPlaylistToDevice(r.device.id, io.of('/device'));
     const { workspaceRoom, emitToWorkspace } = require('../lib/socket-rooms');
     const room = workspaceRoom(r.device.workspace_id);
     emitToWorkspace(io.of('/dashboard'), room, 'dashboard:device-removed', { device_id: r.previous_id });
