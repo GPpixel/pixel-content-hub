@@ -1907,7 +1907,7 @@ export default {
   'device.prompt_new_name': 'Enter new name:',
   'device.confirm_discard_draft': 'Discard all unpublished changes and revert to the last published version?',
   'device.failed_load': 'Failed to load device',
-  'device.no_screenshot': 'No screenshot available. Click "Screenshot" to capture one.',
+  'device.no_screenshot': 'No screenshot yet. Click "Refresh preview" below to capture one.',
   'device.live_badge': 'Live',
   'device.live_video.toggle': 'Enable live video for this screen',
   'device.live_video.hint': 'Shows a live WebRTC feed in Now Playing when a player is publishing. Also requires live video enabled for this workspace and configured on the server. Falls back to screenshots otherwise.',

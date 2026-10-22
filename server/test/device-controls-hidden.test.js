@@ -193,7 +193,7 @@ test('a BrightSign IS offered the screen power and reboot it genuinely has', () 
 test('an Android panel keeps the full control set', () => {
   const html = render(ANDROID_FULL);
   for (const id of ['rebootBtn', 'screenOffBtn', 'screenOnBtn', 'launchAppBtn', 'forceUpdateBtn',
-    'screenshotBtn', 'startRemoteBtn', 'sysVolume', 'sysWinBrightness']) {
+    'previewRefreshBtn', 'startRemoteBtn', 'sysVolume', 'sysWinBrightness']) {
     assert.ok(has(html, id), `${id} must survive`);
   }
 });
@@ -206,7 +206,7 @@ test('THE REGRESSION THAT MATTERS: an undeclared legacy display loses nothing', 
   const legacyAndroid = { client_type: 'apk', android_version: '9' };   // no capabilities field
   const html = render(legacyAndroid);
   for (const id of ['rebootBtn', 'screenOffBtn', 'screenOnBtn', 'launchAppBtn', 'forceUpdateBtn',
-    'screenshotBtn', 'startRemoteBtn']) {
+    'previewRefreshBtn', 'startRemoteBtn']) {
     assert.ok(has(html, id), `${id} disappeared for a display that never declared anything`);
   }
 });
@@ -866,7 +866,7 @@ const ROKU = {
 
 test('a Roku gets none of the controls a Roku app cannot honour', () => {
   const html = render(ROKU);
-  for (const id of ['screenshotBtn', 'deviceOwnerBtn', 'startTalkBtn', 'enableSystemCaptureBtn', 't2Reboot', 't2KioskOn', 'apkUrl']) {
+  for (const id of ['previewRefreshBtn', 'deviceOwnerBtn', 'startTalkBtn', 'enableSystemCaptureBtn', 't2Reboot', 't2KioskOn', 'apkUrl']) {
     assert.equal(has(html, id), false, `${id} must be hidden on a Roku`);
   }
   for (const tab of ['remote', 'controls', 'terminal']) {

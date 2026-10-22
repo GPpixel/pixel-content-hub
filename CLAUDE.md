@@ -120,7 +120,7 @@ A screen can exist with no player behind it, so its playlists and schedules can 
 
 ### Screen previews
 
-Each screenshot costs the player, so previews aren't live by default. The Screens page refreshes previews every 2 minutes (`PIXEL_PREVIEW_REFRESH_MS` in `views/dashboard.js`), and each card has a refresh button. A screen's Now Playing preview refreshes once a minute (`PIXEL_PREVIEW_IDLE_MS` in `views/device-detail.js`), with "Refresh preview" for one on request and "Start live view" for a frame every 5 seconds plus the live video tile.
+Each screenshot costs the player, so previews aren't live by default. The Screens page refreshes previews every 2 minutes (`PIXEL_PREVIEW_REFRESH_MS` in `views/dashboard.js`), and each card has a refresh button. A screen's Now Playing preview refreshes once a minute (`PIXEL_PREVIEW_IDLE_MS` in `views/device-detail.js`), with "Refresh preview" for one on request (it replaces the Screenshot button at the top of the page) and "Start live view" for a frame every 5 seconds plus the live video tile.
 
 ### Removed from upstream
 

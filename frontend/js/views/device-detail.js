@@ -774,14 +774,6 @@ async function loadDevice(deviceId, activeTab = null) {
         <div class="device-header-actions">
           <button class="btn btn-secondary btn-sm" id="devicePreviewBtn">${t('device.preview_btn')}</button>
           <button class="btn btn-secondary btn-sm" id="renameBtn">${t('device.rename')}</button>
-          ${can('remote.screenshot') ? `
-          <button class="btn btn-secondary btn-sm" id="screenshotBtn">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
-              <polyline points="21 15 16 10 5 21"/>
-            </svg>
-            ${t('device.screenshot_btn')}
-          </button>` : ''}
           ${talkAvailable && can('remote.talk') ? `
           <button data-advanced-ui class="btn btn-secondary btn-sm" id="startTalkBtn">🎙️ ${t('device.talk.start')}</button>
           ${can('remote.talk') ? `<button data-advanced-ui class="btn btn-secondary btn-sm" id="start2wayBtn">🎙️ ${t('device.talk.two_way')}</button>` : ''}
@@ -889,7 +881,7 @@ async function loadDevice(deviceId, activeTab = null) {
           }
         </div>
         ${/* Pixel: live preview is off until asked for; otherwise the preview refreshes now and then. */
-          can('remote.screenshot') && device.status === 'online' ? `
+          can('remote.screenshot') ? `
         <div class="preview-controls">
           <button class="btn btn-secondary btn-sm" id="previewLiveBtn" aria-pressed="false">${t('device.preview.live_start')}</button>
           <button class="btn btn-secondary btn-sm preview-refresh" id="previewRefreshBtn">
@@ -1769,11 +1761,19 @@ async function loadDevice(deviceId, activeTab = null) {
     if (device.status === 'online') {
       requestScreenshot(deviceId);
       setPreviewLive(deviceId, false);
+    }
+    {
       const liveBtn = document.getElementById('previewLiveBtn');
       liveBtn?.addEventListener('click', () => setPreviewLive(deviceId, liveBtn.getAttribute('aria-pressed') !== 'true'));
       const refreshBtn = document.getElementById('previewRefreshBtn');
       refreshBtn?.addEventListener('click', () => {
-        requestScreenshot(deviceId);
+        // The server's verdict surfaces only when nothing was captured (offline, or a player that can't).
+        requestScreenshot(deviceId, (ack) => {
+          if (ack?.delivered) return;
+          if (ack?.reason === 'unsupported') showToast(t('device.toast.screenshot_unsupported'), 'warning');
+          else if (ack?.reason === 'offline') showToast(t('device.toast.screenshot_offline'), 'warning');
+          else showToast(t('device.toast.screenshot_failed'), 'error');
+        });
         refreshBtn.classList.add('is-spinning');
         setTimeout(() => refreshBtn.classList.remove('is-spinning'), 1500);
       });
@@ -2782,18 +2782,6 @@ function setupActions(device) {
   });
 
   document.getElementById('devicePreviewBtn')?.addEventListener('click', () => showDevicePreview(device));
-
-  // Screenshot button — pass a callback so the server's verdict surfaces as a toast
-  // instead of the request silently going nowhere (offline device, or a player type
-  // that can't capture at all, e.g. BrightSign).
-  document.getElementById('screenshotBtn')?.addEventListener('click', () => {
-    requestScreenshot(device.id, (ack) => {
-      if (ack?.delivered) showToast(t('device.toast.screenshot_requested'), 'info');
-      else if (ack?.reason === 'unsupported') showToast(t('device.toast.screenshot_unsupported'), 'warning');
-      else if (ack?.reason === 'offline') showToast(t('device.toast.screenshot_offline'), 'warning');
-      else showToast(t('device.toast.screenshot_failed'), 'error');
-    });
-  });
 
   // Rename
   document.getElementById('renameBtn')?.addEventListener('click', async () => {

@@ -849,7 +849,7 @@ export default {
     'device.confirm_discard_draft':
         'Alle niet-gepubliceerde wijzigingen verwerpen en terugkeren naar de laatst gepubliceerde versie?',
     'device.failed_load': 'Apparaat kon niet worden geladen',
-    'device.no_screenshot': 'Geen schermafbeelding beschikbaar. Klik op "Schermafbeelding" om er een te maken.',
+    'device.no_screenshot': 'Nog geen schermafbeelding. Klik hieronder op "Voorbeeld vernieuwen" om er een te maken.',
     'device.live_badge': 'Live',
     'device.live_video.toggle': 'Livevideo voor dit scherm inschakelen',
     'device.live_video.hint':
